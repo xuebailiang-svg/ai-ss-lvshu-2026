@@ -1,0 +1,15 @@
+version: "m1-2026.1"
+weights:
+  transport: 20
+  population_proxy: 20
+  competition: 20
+  commercial: 15
+  property: 20
+  completeness: 5
+thresholds:
+  recommended: 75
+  cautious: 55
+risk_distance_m:
+  小学: 200
+  中学: 200
+

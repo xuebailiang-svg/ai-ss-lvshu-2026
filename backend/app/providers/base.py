@@ -1,0 +1,9 @@
+from abc import ABC, abstractmethod
+class DataProvider(ABC):
+    @abstractmethod
+    async def geocode(self, address: str, city: str | None = None): ...
+    @abstractmethod
+    async def search_nearby(self, longitude: float, latitude: float, radius: int, categories: list[str]): ...
+    @abstractmethod
+    async def get_place_detail(self, provider_place_id: str): ...
+

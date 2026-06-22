@@ -1,0 +1,11 @@
+.env
+*.db
+*.pyc
+__pycache__/
+.pytest_cache/
+node_modules/
+.npm-cache/
+dist/
+.coverage
+chat1.log
+ai-ss-lvshu-2026/
