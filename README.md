@@ -400,6 +400,27 @@ sudo journalctl -u esports-site-selection -n 200 --no-pager
 
 不要在终端或日志中输出完整 Key。
 
+地理编码专项诊断：
+
+```bash
+cd /opt/esports-site-selection/app
+sudo -u esports-site-selection bash -c \
+  'set -a; source /etc/esports-site-selection/backend.env; set +a; \
+   bash scripts/check-amap-geocode.sh "西安市" "雁塔区小寨西路"'
+
+sudo -u esports-site-selection bash -c \
+  'set -a; source /etc/esports-site-selection/backend.env; set +a; \
+   bash scripts/check-amap-geocode.sh "北京市" "朝阳区阜通东大街6号"'
+```
+
+Docker Compose 环境可在后端容器内执行：
+
+```bash
+docker compose exec backend bash scripts/check-amap-geocode.sh "西安市" "雁塔区小寨西路"
+```
+
+脚本会打印 `status`、`info`、`infocode`、`count` 和简要 `geocodes`，但不会输出完整 `AMAP_WEB_SERVICE_KEY`。
+
 ## 配置文件位置
 
 | 文件 | 用途 |

@@ -21,6 +21,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       AMAP_WEB_SERVICE_KEY: ${AMAP_WEB_SERVICE_KEY}
       AMAP_MOCK: ${AMAP_MOCK:-false}
+      ENABLE_DEBUG_ENDPOINTS: ${ENABLE_DEBUG_ENDPOINTS:-false}
     depends_on:
       db:
         condition: service_healthy

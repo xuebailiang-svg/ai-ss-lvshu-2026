@@ -38,10 +38,21 @@ async def geocode(id:int,db:Session=Depends(get_db)):
     ev=evaluation_or_404(db,id); ev.status=JobStatus.running; db.commit()
     try:
         data=await provider().geocode(ev.address,ev.city)
-        for k,v in data.items(): setattr(ev.site,k,v)
+        for k in ("formatted_address","district","longitude","latitude","coordinate_system","provider"):
+            if k in data: setattr(ev.site,k,data[k])
         ev.status=JobStatus.completed; ev.error_message=None; db.commit(); return data
     except ProviderError as e:
-        ev.status=JobStatus.failed; ev.error_message=str(e); db.commit(); raise HTTPException(502,str(e))
+        ev.status=JobStatus.failed; ev.error_message=e.message; db.commit(); raise HTTPException(502,e.to_dict())
+
+@router.post("/debug/amap/geocode")
+async def debug_amap_geocode(body:dict):
+    settings=get_settings()
+    if settings.app_env!="development" and not settings.enable_debug_endpoints:
+        raise HTTPException(404,"Debug endpoint is disabled")
+    try:
+        return await provider().geocode_debug(body.get("address",""),body.get("city"))
+    except ProviderError as e:
+        raise HTTPException(502,e.to_dict())
 @router.post("/evaluations/{id}/collect-pois")
 async def collect_pois(id:int,db:Session=Depends(get_db)):
     ev=evaluation_or_404(db,id)
@@ -55,7 +66,7 @@ async def collect_pois(id:int,db:Session=Depends(get_db)):
         for row in rows: db.add(PoiObservation(evaluation_id=ev.id,**row))
         ev.status=JobStatus.completed; ev.error_message=None; db.commit(); return {"status":"completed","count":len(rows)}
     except ProviderError as e:
-        ev.status=JobStatus.failed; ev.error_message=str(e); db.commit(); raise HTTPException(502,str(e))
+        ev.status=JobStatus.failed; ev.error_message=e.message; db.commit(); raise HTTPException(502,e.to_dict())
 @router.post("/evaluations/{id}/score")
 def score(id:int,db:Session=Depends(get_db)):
     ev=evaluation_or_404(db,id); path=Path(get_settings().scoring_config_path)
@@ -92,4 +103,3 @@ def property_dict(p): return {c.name:getattr(p,c.name) for c in p.__table__.colu
 def poi_dict(p): return {c.name:getattr(p,c.name) for c in p.__table__.columns if c.name not in ("raw_data",)}
 def serialize(ev):
     return {"id":ev.id,"name":ev.name,"city":ev.city,"address":ev.address,"radius":ev.radius,"status":ev.status,"error_message":ev.error_message,"created_at":ev.created_at,"site":({"id":ev.site.id,"formatted_address":ev.site.formatted_address,"district":ev.site.district,"longitude":ev.site.longitude,"latitude":ev.site.latitude,"coordinate_system":ev.site.coordinate_system,"provider":ev.site.provider,"property":property_dict(ev.site.property_survey)} if ev.site else None),"pois":[poi_dict(p) for p in ev.pois],"result":({c.name:getattr(ev.result,c.name) for c in ev.result.__table__.columns} if ev.result else None)}
-
