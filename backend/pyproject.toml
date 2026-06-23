@@ -9,6 +9,8 @@ dependencies = [
 ]
 [project.optional-dependencies]
 test = ["pytest==8.3.5"]
+[tool.setuptools]
+packages = ["app"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

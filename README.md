@@ -464,3 +464,55 @@ npm run dev
 - [API](docs/API.md)
 - [路线图](docs/ROADMAP.md)
 - [决策记录](docs/DECISIONS.md)
+## Ubuntu 直接部署补充说明
+
+本项目 M1 推荐在 Ubuntu 22.04/24.04 上直接部署，不依赖 Docker。干净服务器按下面顺序执行：
+
+```bash
+cd /opt/esports-site-selection/app
+bash scripts/bootstrap-ubuntu-direct.sh
+bash scripts/configure-secrets.sh
+bash scripts/deploy.sh
+```
+
+`scripts/configure-secrets.sh` 会安全写入：
+
+- `/etc/esports-site-selection/backend.env`：后端数据库连接、高德 Web 服务 Key、调试开关；
+- `frontend/.env.production`：允许公开到浏览器的高德 JavaScript API Key 和安全密钥。
+
+不要把 `AMAP_WEB_SERVICE_KEY` 写成 `AMAP_API_KEY`；后端只读取 `AMAP_WEB_SERVICE_KEY`。不要把高德 Web 服务 Key 写入 `frontend/.env.production`。
+
+如果刚刚把当前 SSH 用户加入了 `esports-site-selection` 组，当前会话可能还未生效。可以重新登录，或执行：
+
+```bash
+sg esports-site-selection -c 'cd /opt/esports-site-selection/app && bash scripts/deploy.sh'
+```
+
+修改 `VITE_` 前端环境变量后必须重新构建，因为 Vite 会在 build 阶段把变量写入静态包：
+
+```bash
+cd /opt/esports-site-selection/app
+bash scripts/deploy.sh
+```
+
+M1 当前报告为规则评分报告，不调用大模型。系统不会读取 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`LLM_API_KEY`、`LLM_BASE_URL` 或 `LLM_MODEL`，也不会调用 OpenAI、DeepSeek、通义千问等 LLM API。
+
+常见错误：
+
+- `Multiple top-level packages discovered in a flat-layout: ['app', 'migrations']`：已通过 `backend/pyproject.toml` 的 `[tool.setuptools] packages = ["app"]` 修复。
+- `Property 'env' does not exist on type 'ImportMeta'`：已通过 `frontend/src/vite-env.d.ts` 修复。
+- `Expected 1 arguments, but got 0`：已通过 `useRef<any>(null)` 修复。
+- `502`：部署脚本会等待 `http://127.0.0.1:8000/api/health` ready 后再检查 Nginx 反向代理。
+- `backend.env 不存在或为空`：现在会区分文件不存在、空文件和权限不足。
+
+验收命令：
+
+```bash
+cd /opt/esports-site-selection/app
+bash scripts/bootstrap-ubuntu-direct.sh
+bash scripts/deploy.sh
+curl --fail --show-error http://127.0.0.1:8000/api/health
+curl --fail --show-error http://127.0.0.1/nginx-health
+curl --fail --show-error http://127.0.0.1/api/health
+curl -I http://127.0.0.1/
+```

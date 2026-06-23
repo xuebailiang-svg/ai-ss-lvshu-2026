@@ -6,6 +6,7 @@ __pycache__/
 node_modules/
 .npm-cache/
 dist/
+*.tsbuildinfo
 .coverage
 chat1.log
 ai-ss-lvshu-2026/
