@@ -4,6 +4,363 @@
 
 > 系统结果仅用于初步筛查，最终以当地文化旅游、行政审批、消防和其他主管部门要求为准。
 
+## 最常用命令
+
+服务器默认项目目录按当前生产/测试约定写为 `/home/ubuntu/data/ai-ss-lvshu-2026-main`。如果你的实际目录是 `/opt/esports-site-selection/app`，把下面第一行替换成对应目录即可。
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+
+# 日常更新：deploy.sh 已包含 alembic upgrade head，不需要重复手工执行迁移
+git pull && bash scripts/deploy.sh
+
+# 健康检查
+bash scripts/health-check.sh
+
+# 查看日志
+bash scripts/view-logs.sh
+
+# 高德地址解析测试
+bash scripts/check-amap-geocode.sh "北京市" "朝阳区阜通东大街6号"
+
+# 数据库备份
+bash scripts/backup-db.sh
+```
+
+## 推荐部署方式
+
+当前项目推荐 Ubuntu 直接部署：
+
+```text
+Ubuntu Server
+Nginx
+Systemd
+PostgreSQL + PostGIS
+FastAPI/Uvicorn
+React/Vite 静态构建
+```
+
+Docker Compose 文件如果存在，仅作为备用或本地调试方案；当前生产/测试环境按 Ubuntu 直接部署维护，不强行改成 Docker Compose。
+
+## 部署和运维命令总览
+
+### 首次安装
+
+从空 Ubuntu 22.04/24.04 服务器开始：
+
+```bash
+sudo mkdir -p /home/ubuntu/data
+sudo chown -R "$USER":"$USER" /home/ubuntu/data
+cd /home/ubuntu/data
+
+git clone ssh://git@ssh.github.com:443/xuebailiang-svg/ai-ss-lvshu-2026.git ai-ss-lvshu-2026-main
+cd ai-ss-lvshu-2026-main
+
+cp .env.example .env
+# 编辑 .env；后端真实密钥仍以后续 scripts/configure-secrets.sh 写入 /etc/esports-site-selection/backend.env 为准
+
+bash scripts/bootstrap-ubuntu-direct.sh
+bash scripts/configure-secrets.sh
+bash scripts/deploy.sh
+curl --fail --show-error http://127.0.0.1/api/health
+```
+
+如果没有配置 GitHub SSH，也可以把 `git clone` 换成 HTTPS 或上传 zip 包；后续更新仍建议使用 Git。
+
+### 日常更新部署
+
+`scripts/deploy.sh` 已包含 `alembic upgrade head`，所以日常更新不要再重复手工执行迁移：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+git pull
+bash scripts/deploy.sh
+curl --fail --show-error http://127.0.0.1/api/health
+```
+
+如果你想在更新前确认数据库迁移状态，可以只查看，不要额外执行升级：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main/backend
+../backend/.venv/bin/alembic current || alembic current
+```
+
+### M1.5 升级部署
+
+从 M1 升级到 M1.5 时，重点是执行新增迁移：
+
+```text
+0002_m15_research_enhancements.py
+```
+
+推荐命令：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+git pull
+
+cd backend
+.venv/bin/alembic current || alembic current
+cd ..
+
+# deploy.sh 会安装依赖、构建前端、执行 alembic upgrade head、重启 systemd、reload nginx
+bash scripts/deploy.sh
+
+cd backend
+.venv/bin/alembic current || alembic current
+cd ..
+
+curl --fail --show-error http://127.0.0.1/api/health
+```
+
+### 保留数据重新部署
+
+适合日常修复、版本更新、重新安装依赖、重新构建前端、重启服务。
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+git pull
+bash scripts/deploy.sh
+sudo systemctl restart esports-site-selection
+sudo systemctl reload nginx
+curl --fail --show-error http://127.0.0.1/api/health
+```
+
+该方式：
+
+- 不会删除数据库；
+- 不会清空历史评估；
+- 不会删除上传文件；
+- 适合日常修复和版本更新。
+
+### 危险：会清空数据库，仅开发测试使用
+
+生产环境禁止执行。执行前必须备份数据库。该操作会删除所有评估记录、POI、竞品补充、物业调查和报告。
+
+下面命令默认全部注释，不能直接整段复制执行。确实要在开发测试库清空时，先手工备份，再逐行取消注释，并按提示输入确认。
+
+```bash
+# cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+# bash scripts/backup-db.sh
+#
+# read -rp '确认清空开发测试数据库？请输入 RESET_SITE_SELECTION_DB: ' confirm
+# if [ "$confirm" != "RESET_SITE_SELECTION_DB" ]; then
+#   echo "取消操作"
+#   exit 1
+# fi
+#
+# sudo -u postgres psql -c "DROP DATABASE IF EXISTS site_selection;"
+# sudo -u postgres createdb --owner=site_selection site_selection
+# sudo -u postgres psql -d site_selection -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+# bash scripts/deploy.sh
+```
+
+### 数据库备份与恢复
+
+备份：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+bash scripts/backup-db.sh
+ls -lh backups/
+```
+
+备份文件保存到：
+
+```text
+backups/site_selection_YYYYMMDD_HHMMSS.sql.gz
+```
+
+恢复会覆盖当前库数据，必须谨慎执行。建议先在测试库验证备份可用，再由熟悉 PostgreSQL 的人员执行。
+
+```bash
+# 先停止后端，避免恢复期间写入数据
+sudo systemctl stop esports-site-selection
+
+# 示例：恢复到空库。执行前确认文件名和数据库名。
+# gunzip -c backups/site_selection_YYYYMMDD_HHMMSS.sql.gz | \
+#   psql "postgresql://site_selection:密码@127.0.0.1:5432/site_selection"
+
+sudo systemctl start esports-site-selection
+bash scripts/health-check.sh
+```
+
+### 健康检查
+
+统一脚本：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+bash scripts/health-check.sh
+```
+
+等价的手工检查：
+
+```bash
+curl --fail --show-error http://127.0.0.1/api/health
+curl -I http://127.0.0.1/
+sudo systemctl status esports-site-selection --no-pager
+sudo nginx -t
+```
+
+### 日志查看
+
+统一脚本：
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+bash scripts/view-logs.sh
+bash scripts/view-logs.sh backend
+bash scripts/view-logs.sh nginx
+bash scripts/view-logs.sh backend follow
+```
+
+等价的手工命令：
+
+```bash
+sudo journalctl -u esports-site-selection -n 200 --no-pager
+sudo journalctl -u esports-site-selection -f
+sudo tail -n 200 /var/log/nginx/error.log
+sudo tail -n 200 /var/log/nginx/access.log
+```
+
+### 高德接口检查
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+
+sudo -u esports-site-selection bash -c \
+  'set -a; source /etc/esports-site-selection/backend.env; set +a; \
+   bash scripts/check-amap-geocode.sh "北京市" "朝阳区阜通东大街6号"'
+
+sudo -u esports-site-selection bash -c \
+  'set -a; source /etc/esports-site-selection/backend.env; set +a; \
+   bash scripts/check-amap-geocode.sh "西安市" "雁塔区小寨西路"'
+```
+
+说明：
+
+- `AMAP_WEB_SERVICE_KEY` 是后端 Web 服务 Key；
+- `VITE_AMAP_JS_KEY` 是前端地图 JavaScript Key；
+- 两者不能混用；
+- 脚本会脱敏 Key，不会打印完整密钥。
+
+### 常见问题排查
+
+#### 页面打不开
+
+```bash
+curl -I http://127.0.0.1/
+sudo systemctl status nginx --no-pager
+sudo nginx -t
+sudo tail -n 200 /var/log/nginx/error.log
+```
+
+处理建议：确认 Nginx 正常、端口 `80` 未被其他服务占用、安全组已开放 TCP `80`。
+
+#### `/api/health` 不通
+
+```bash
+curl --fail --show-error http://127.0.0.1:8000/api/health
+curl --fail --show-error http://127.0.0.1/api/health
+sudo systemctl status esports-site-selection --no-pager
+sudo journalctl -u esports-site-selection -n 200 --no-pager
+```
+
+处理建议：先确认后端 `127.0.0.1:8000` 是否可用，再看 Nginx `/api` 反向代理。
+
+#### Nginx 配置错误
+
+```bash
+sudo nginx -t
+sudo ls -l /etc/nginx/sites-enabled/
+sudo tail -n 200 /var/log/nginx/error.log
+```
+
+处理建议：修复 `/etc/nginx/sites-available/esports-site-selection` 后执行 `sudo systemctl reload nginx`。
+
+#### systemd 服务启动失败
+
+```bash
+sudo systemctl status esports-site-selection --no-pager
+sudo journalctl -u esports-site-selection -n 200 --no-pager
+```
+
+处理建议：重点看 `DATABASE_URL`、Python 依赖、Alembic 迁移、端口 `8000` 是否占用。
+
+#### Alembic 迁移失败
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main/backend
+.venv/bin/alembic current
+.venv/bin/alembic heads
+.venv/bin/alembic upgrade head
+```
+
+处理建议：保留英文错误原文，例如 `relation already exists`、`permission denied`，先备份数据库再处理。
+
+#### PostgreSQL 连接失败
+
+```bash
+sudo systemctl status postgresql --no-pager
+sudo -u postgres psql -d site_selection -c "SELECT 1;"
+sudo journalctl -u esports-site-selection -n 200 --no-pager
+```
+
+处理建议：检查 `/etc/esports-site-selection/backend.env` 中 `DATABASE_URL` 的用户名、密码、库名和端口。
+
+#### PostGIS 扩展缺失
+
+```bash
+sudo -u postgres psql -d site_selection -c "SELECT PostGIS_Version();"
+sudo -u postgres psql -d site_selection -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+```
+
+处理建议：如果提示扩展不存在，先安装 `postgis` 包：`sudo apt-get install -y postgis`。
+
+#### 高德 `ENGINE_RESPONSE_DATA_ERROR (30001)`
+
+```bash
+bash scripts/check-amap-geocode.sh "北京市" "朝阳区阜通东大街6号"
+```
+
+处理建议：确认使用 `AMAP_WEB_SERVICE_KEY`，不要使用前端 `VITE_AMAP_JS_KEY`；检查地址是否完整、`city` 是否传了区县/开发区、Key 类型/权限/IP 白名单/配额是否正确。
+
+#### 前端地图不显示
+
+```bash
+grep -E '^VITE_AMAP_' frontend/.env.production
+npm --prefix frontend run build
+sudo systemctl reload nginx
+```
+
+处理建议：`VITE_AMAP_JS_KEY` 是公开到浏览器的 JS Key；修改后必须重新构建前端。
+
+#### Vite chunk size warning
+
+```text
+Some chunks are larger than 500 kB after minification.
+```
+
+处理建议：这是构建体积警告，不是部署失败。只要 `npm run build` exit code 为 `0`，可以继续部署。
+
+#### `.env` 或后端配置未配置
+
+```bash
+sudo test -s /etc/esports-site-selection/backend.env && echo ok
+sudo grep -E '^(APP_ENV|AMAP_MOCK|SCORING_CONFIG_PATH)=' /etc/esports-site-selection/backend.env
+```
+
+处理建议：运行 `bash scripts/configure-secrets.sh`。不要用 `cat` 打印完整配置，避免泄露数据库密码和 Key。
+
+#### 端口 `80` / `8000` / `5432` 被占用
+
+```bash
+sudo ss -ltnp | grep -E '(:80|:8000|:5432)' || echo "相关端口当前未监听"
+```
+
+处理建议：`80` 应由 Nginx 监听，`8000` 应由后端监听，`5432` 应由 PostgreSQL 本机监听。异常进程需要先确认用途，不能盲目 kill。
+
 ## 默认部署架构
 
 本项目默认直接部署到 Ubuntu，不要求 Docker：

@@ -7,11 +7,41 @@
 - `scripts/bootstrap-ubuntu-direct.sh`：检查并安装 Python、Node.js、Nginx、PostgreSQL/PostGIS。
 - `scripts/deploy.sh`：安装依赖、构建前端、迁移数据库、安装 systemd/Nginx 配置并执行健康检查。
 - `scripts/backup-db.sh`：使用本机 `pg_dump` 生成压缩备份。
-- `scripts/health-check.sh`：轮询 `/api/health`。
+- `scripts/health-check.sh`：统一检查 systemd、Nginx、后端 API、Nginx 反向代理和首页。
+- `scripts/view-logs.sh`：查看后端 journal 和 Nginx access/error 日志。
 
 配置与密钥存储在 `/etc/esports-site-selection/backend.env`，权限必须为 `root:esports-site-selection 0640`。数据库和 Uvicorn 端口不得暴露公网。
 
 Docker Compose 文件仅作为可选部署方式保留，不是默认生产路径。
+
+## 常用运维命令
+
+`scripts/deploy.sh` 已包含 `alembic upgrade head`，日常更新不要重复手工执行迁移。
+
+```bash
+cd /home/ubuntu/data/ai-ss-lvshu-2026-main
+
+# 日常更新
+git pull && bash scripts/deploy.sh
+
+# 保留数据重新部署
+bash scripts/deploy.sh
+sudo systemctl restart esports-site-selection
+sudo systemctl reload nginx
+
+# 健康检查
+bash scripts/health-check.sh
+
+# 查看日志
+bash scripts/view-logs.sh
+bash scripts/view-logs.sh backend follow
+
+# 数据库备份
+bash scripts/backup-db.sh
+```
+
+危险操作不要放进 `deploy.sh`。清空数据库仅允许开发测试环境手工确认后执行，生产环境禁止执行。
+
 ## Ubuntu 22.04/24.04 直接部署验收流程
 
 默认生产部署方式是 Ubuntu 直接部署，不使用 Docker。推荐顺序：
