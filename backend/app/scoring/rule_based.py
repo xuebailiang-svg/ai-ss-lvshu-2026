@@ -19,7 +19,7 @@ class RuleBasedScoringEngine(ScoringEngine):
         verified_enrichments = [e for e in competitor_enrichments if e.get("is_manually_verified") or e.get("verified_at")]
 
         transport = min(weights["transport"], count("交通") * 4)
-        population = min(weights["population_proxy"], count("住宅小区", "公寓", "宿舍", "写字楼") * 3)
+        population = min(weights["population_proxy"], count("住宅小区", "公寓", "宿舍", "写字楼", "大学", "中职", "技校") * 3)
         commercial = min(weights["commercial"], count("商业配套") * 2)
         competition = self._competition_score(weights["competition"], competitors, competitor_enrichments)
         price_pressure = self._price_pressure_score(weights["competitor_price_pressure"], competitor_enrichments)

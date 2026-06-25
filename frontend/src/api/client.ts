@@ -24,6 +24,7 @@ export const getEvaluation = (id: string | number) => api.get<Evaluation>(`/eval
 export const updateProperty = (id: number, data: PropertySurvey) => api.put(`/evaluations/${id}/property`, data).then(response => response.data);
 export const geocode = (id: number) => api.post(`/evaluations/${id}/geocode`).then(response => response.data);
 export const collectPois = (id: number) => api.post(`/evaluations/${id}/collect-pois`).then(response => response.data);
+export const poiDiagnostics = (id: number) => api.get(`/evaluations/${id}/poi-diagnostics`).then(response => response.data);
 export const score = (id: number) => api.post<Score>(`/evaluations/${id}/score`).then(response => response.data);
 export const report = (id: string) => api.get(`/evaluations/${id}/report`).then(response => response.data);
 export const saveCompetitorEnrichment = (id: number, data: CompetitorEnrichment) => api.put(`/competitors/${id}/enrichment`, data).then(response => response.data);

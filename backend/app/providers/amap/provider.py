@@ -53,6 +53,13 @@ class ProviderError(RuntimeError):
 class AmapDataProvider(DataProvider):
     base_url = "https://restapi.amap.com/v3"
     geocode_endpoint = "geocode/geo"
+    poi_query_groups = [
+        ("竞品", ["网吧", "网咖", "电竞馆", "电竞酒店"]),
+        ("敏感场所", ["小学", "中学", "幼儿园", "政府机构", "医院"]),
+        ("交通", ["地铁站", "公交站", "停车场"]),
+        ("商业配套", ["餐饮", "奶茶", "便利店", "KTV", "酒吧", "台球厅", "电影院", "密室", "酒店"]),
+        ("人口代理", ["住宅小区", "公寓", "写字楼", "大学", "中职", "技校"]),
+    ]
 
     def __init__(
         self,
@@ -63,6 +70,7 @@ class AmapDataProvider(DataProvider):
         self.key = (key or "").strip()
         self.client = client
         self.mock = mock
+        self.last_poi_diagnostics: dict[str, Any] = {}
 
     async def _get(self, path: str, params: dict[str, Any]):
         if not self.key:
@@ -222,7 +230,27 @@ class AmapDataProvider(DataProvider):
 
     async def search_nearby(self, longitude, latitude, radius, categories):
         if self.mock:
-            return [
+            rows = [
+                {
+                    "source": "amap",
+                    "provider_record_id": "mock-competitor-1",
+                    "name": "示例电竞网咖",
+                    "category": "竞品",
+                    "type_code": "080000",
+                    "address": "候选点附近",
+                    "longitude": longitude + 0.0005,
+                    "latitude": latitude + 0.0005,
+                    "distance_m": 90,
+                    "phone": None,
+                    "business_hours": None,
+                    "business_area": None,
+                    "observed_at": datetime.now(timezone.utc),
+                    "fetched_at": datetime.now(timezone.utc),
+                    "confidence": 0.6,
+                    "is_estimated": True,
+                    "needs_verification": True,
+                    "raw_data": {"mock": True, "query_group": "竞品"},
+                },
                 {
                     "source": "amap",
                     "provider_record_id": "mock-school-1",
@@ -241,51 +269,181 @@ class AmapDataProvider(DataProvider):
                     "confidence": 0.6,
                     "is_estimated": True,
                     "needs_verification": True,
-                    "raw_data": {"mock": True},
-                }
-            ]
-        keywords = "|".join(categories)
-        data = await self._get(
-            "place/around",
-            {
-                "location": f"{longitude},{latitude}",
-                "radius": radius,
-                "keywords": keywords,
-                "offset": 25,
-                "extensions": "all",
-                "output": "JSON",
-            },
-        )
-        out = []
-        for poi in data.get("pois", []):
-            try:
-                lng, lat = map(float, poi["location"].split(","))
-            except (KeyError, ValueError):
-                continue
-            out.append(
+                    "raw_data": {"mock": True, "query_group": "敏感场所"},
+                },
                 {
                     "source": "amap",
-                    "provider_record_id": poi["id"],
-                    "name": poi.get("name", "未知"),
-                    "category": self._category(poi),
-                    "type_code": poi.get("typecode"),
-                    "address": self._text(poi.get("address")),
-                    "longitude": lng,
-                    "latitude": lat,
-                    "distance_m": int(poi["distance"])
-                    if str(poi.get("distance", "")).isdigit()
-                    else None,
-                    "phone": self._text(poi.get("tel")),
-                    "business_hours": (poi.get("biz_ext") or {}).get("open_time"),
-                    "business_area": self._text(poi.get("business_area")),
+                    "provider_record_id": "mock-traffic-1",
+                    "name": "示例地铁站",
+                    "category": "交通",
+                    "type_code": "150500",
+                    "address": "候选点附近",
+                    "longitude": longitude + 0.0015,
+                    "latitude": latitude + 0.0015,
+                    "distance_m": 320,
+                    "phone": None,
+                    "business_hours": None,
+                    "business_area": None,
                     "observed_at": datetime.now(timezone.utc),
                     "fetched_at": datetime.now(timezone.utc),
-                    "confidence": 0.75,
-                    "is_estimated": False,
-                    "needs_verification": False,
-                    "raw_data": poi,
+                    "confidence": 0.6,
+                    "is_estimated": True,
+                    "needs_verification": True,
+                    "raw_data": {"mock": True, "query_group": "交通"},
+                },
+                {
+                    "source": "amap",
+                    "provider_record_id": "mock-commercial-1",
+                    "name": "示例餐饮店",
+                    "category": "商业配套",
+                    "type_code": "050000",
+                    "address": "候选点附近",
+                    "longitude": longitude + 0.002,
+                    "latitude": latitude + 0.002,
+                    "distance_m": 450,
+                    "phone": None,
+                    "business_hours": None,
+                    "business_area": None,
+                    "observed_at": datetime.now(timezone.utc),
+                    "fetched_at": datetime.now(timezone.utc),
+                    "confidence": 0.6,
+                    "is_estimated": True,
+                    "needs_verification": True,
+                    "raw_data": {"mock": True, "query_group": "商业配套"},
+                },
+                {
+                    "source": "amap",
+                    "provider_record_id": "mock-population-1",
+                    "name": "示例住宅小区",
+                    "category": "住宅小区",
+                    "type_code": "120300",
+                    "address": "候选点附近",
+                    "longitude": longitude + 0.0025,
+                    "latitude": latitude + 0.0025,
+                    "distance_m": 680,
+                    "phone": None,
+                    "business_hours": None,
+                    "business_area": None,
+                    "observed_at": datetime.now(timezone.utc),
+                    "fetched_at": datetime.now(timezone.utc),
+                    "confidence": 0.6,
+                    "is_estimated": True,
+                    "needs_verification": True,
+                    "raw_data": {"mock": True, "query_group": "人口代理"},
+                },
+            ]
+            self.last_poi_diagnostics = {
+                "provider": "amap",
+                "mock": True,
+                "queries": [{"group": group, "raw_count": 1, "saved_count": 1} for group, _ in self.poi_query_groups],
+                "raw_return_count": len(rows),
+                "saved_count": len(rows),
+                "duplicate_count": 0,
+                "invalid_location_count": 0,
+                "filtered_out_count": 0,
+            }
+            return rows
+
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        raw_return_count = 0
+        duplicate_count = 0
+        invalid_location_count = 0
+        queries = []
+
+        for group, keywords_list in self._poi_query_groups(categories):
+            keywords = "|".join(keywords_list)
+            data = await self._get(
+                "place/around",
+                {
+                    "location": f"{longitude},{latitude}",
+                    "radius": radius,
+                    "keywords": keywords,
+                    "offset": 25,
+                    "page": 1,
+                    "extensions": "all",
+                    "output": "JSON",
+                    "citylimit": "false",
+                    "sortrule": "distance",
+                },
+            )
+            pois = data.get("pois", [])
+            if not isinstance(pois, list):
+                pois = []
+            group_raw = len(pois)
+            group_saved = 0
+            raw_return_count += group_raw
+            for poi in pois:
+                provider_id = str(poi.get("id") or "")
+                if not provider_id:
+                    invalid_location_count += 1
+                    continue
+                if provider_id in seen:
+                    duplicate_count += 1
+                    continue
+                try:
+                    lng, lat = map(float, poi["location"].split(","))
+                except (KeyError, ValueError):
+                    invalid_location_count += 1
+                    continue
+                seen.add(provider_id)
+                raw_data = dict(poi)
+                raw_data["_query_group"] = group
+                out.append(
+                    {
+                        "source": "amap",
+                        "provider_record_id": provider_id,
+                        "name": poi.get("name", "未知"),
+                        "category": self._category(poi),
+                        "type_code": poi.get("typecode"),
+                        "address": self._text(poi.get("address")),
+                        "longitude": lng,
+                        "latitude": lat,
+                        "distance_m": int(poi["distance"])
+                        if str(poi.get("distance", "")).isdigit()
+                        else None,
+                        "phone": self._text(poi.get("tel")),
+                        "business_hours": (poi.get("biz_ext") or {}).get("open_time"),
+                        "business_area": self._text(poi.get("business_area")),
+                        "observed_at": datetime.now(timezone.utc),
+                        "fetched_at": datetime.now(timezone.utc),
+                        "confidence": 0.75,
+                        "is_estimated": False,
+                        "needs_verification": False,
+                        "raw_data": raw_data,
+                    }
+                )
+                group_saved += 1
+            queries.append(
+                {
+                    "group": group,
+                    "keywords": keywords_list,
+                    "raw_count": group_raw,
+                    "saved_count": group_saved,
+                    "status": str(data.get("status", "")),
+                    "info": str(data.get("info", "")),
+                    "infocode": str(data.get("infocode", "")),
+                    "count": str(data.get("count", "")),
                 }
             )
+        self.last_poi_diagnostics = {
+            "provider": "amap",
+            "endpoint": "place/around",
+            "radius": radius,
+            "query_count": len(queries),
+            "queries": queries,
+            "raw_return_count": raw_return_count,
+            "saved_count": len(out),
+            "duplicate_count": duplicate_count,
+            "invalid_location_count": invalid_location_count,
+            "filtered_out_count": duplicate_count + invalid_location_count,
+            "params_policy": {
+                "request_mode": "grouped_keywords",
+                "offset": 25,
+                "citylimit": False,
+                "sortrule": "distance",
+            },
+        }
         return out
 
     async def get_place_detail(self, provider_place_id):
@@ -492,16 +650,33 @@ class AmapDataProvider(DataProvider):
     def _text(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
 
+    @classmethod
+    def _poi_query_groups(cls, categories: list[str]):
+        requested = {str(item).strip() for item in categories or [] if str(item).strip()}
+        if not requested:
+            return cls.poi_query_groups
+        selected = []
+        for group, keywords in cls.poi_query_groups:
+            if any(keyword in requested for keyword in keywords):
+                selected.append((group, keywords))
+        return selected or cls.poi_query_groups
+
     @staticmethod
     def _category(poi: dict[str, Any]):
         text = f"{poi.get('name', '')} {poi.get('type', '')}"
         groups = [
-            ("竞品", ["网吧", "网咖", "电竞"]),
+            ("竞品", ["网吧", "网咖", "电竞", "电竞酒店"]),
             ("小学", ["小学"]),
             ("中学", ["中学"]),
             ("幼儿园", ["幼儿园"]),
-            ("大学", ["大学", "学院"]),
+            ("敏感场所", ["政府机构", "政府机关", "医院"]),
             ("交通", ["地铁", "公交", "停车"]),
-            ("商业配套", ["商场", "餐饮", "便利店", "KTV", "酒吧", "酒店"]),
+            ("商业配套", ["商场", "餐饮", "美食", "奶茶", "便利店", "KTV", "酒吧", "台球", "电影院", "电影", "密室", "酒店"]),
+            ("大学", ["大学", "学院"]),
+            ("中职", ["中职", "职业中学", "职业学校"]),
+            ("技校", ["技校", "技工学校"]),
+            ("住宅小区", ["住宅小区", "小区", "居民区"]),
+            ("公寓", ["公寓"]),
+            ("写字楼", ["写字楼", "商务楼", "办公楼"]),
         ]
         return next((group for group, keys in groups if any(key in text for key in keys)), "其他")

@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {useNavigate} from 'react-router-dom';
 import {
   Alert,
@@ -54,6 +54,17 @@ const propertySwitches: [keyof PropertySurvey, string][] = [
   ['smoke_exhaust', '有排烟'],
 ];
 
+const DRAFT_KEY = 'm15:new-evaluation:draft';
+
+const poiDisplayGroups = [
+  {key: 'competitors', title: '竞品', categories: ['竞品']},
+  {key: 'sensitive', title: '敏感场所', categories: ['小学', '中学', '幼儿园', '敏感场所']},
+  {key: 'traffic', title: '交通', categories: ['交通']},
+  {key: 'commercial', title: '商业配套', categories: ['商业配套']},
+  {key: 'population', title: '人口代理', categories: ['住宅小区', '公寓', '宿舍', '写字楼', '大学', '中职', '技校']},
+  {key: 'other', title: '其他', categories: ['其他']},
+];
+
 function normalizeError(error: any): ApiErrorDetail {
   const detail = error?.response?.data?.detail;
   if (detail && typeof detail === 'object') return detail;
@@ -87,6 +98,17 @@ export default function NewEvaluation() {
   const [competitor, setCompetitor] = useState<Poi | null>(null);
   const nav = useNavigate();
 
+  useEffect(() => {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return;
+    try {
+      form.setFieldsValue(JSON.parse(raw));
+      message.info('已恢复上次未保存的新地址评估草稿');
+    } catch {
+      localStorage.removeItem(DRAFT_KEY);
+    }
+  }, [form]);
+
   const refresh = async (id: number) => {
     const data = await getEvaluation(id);
     setEv(data);
@@ -107,6 +129,7 @@ export default function NewEvaluation() {
           property: values,
         });
         setEv(data);
+        localStorage.removeItem(DRAFT_KEY);
         message.success('候选地址已保存');
       } else {
         await updateProperty(ev.id, values);
@@ -160,11 +183,42 @@ export default function NewEvaluation() {
 
   const competitorCount = ev?.pois?.filter(poi => poi.category === '竞品').length || 0;
   const verifiedCompetitorCount = ev?.pois?.filter(poi => poi.category === '竞品' && (poi.enrichment?.is_manually_verified || poi.enrichment?.verified_at)).length || 0;
+  const groupedPois = useMemo(() => {
+    const pois = ev?.pois || [];
+    return poiDisplayGroups.map(group => ({
+      ...group,
+      items: pois.filter(poi => group.categories.includes(poi.category)),
+    }));
+  }, [ev?.pois]);
+
+  const poiColumns = [
+    {title: '名称', dataIndex: 'name'},
+    {title: '分类', dataIndex: 'category', render: (value: string) => <Tag color={value === '竞品' ? 'red' : undefined}>{value}</Tag>},
+    {title: '类型码', dataIndex: 'type_code', render: (value?: string) => value || '-'},
+    {title: '距离', dataIndex: 'distance_m', render: (value?: number) => value ? `${value}m` : '待核实'},
+    {title: '可信度', dataIndex: 'confidence', render: (value?: number) => <Tag>{Math.round((value || 0) * 100)}%</Tag>},
+    {title: '人工数据', render: (_: unknown, row: Poi) => row.enrichment ? <Tag color="green">已补充</Tag> : row.category === '竞品' ? <Tag color="orange">待调研</Tag> : '-'},
+    {title: '操作', render: (_: unknown, row: Poi) => row.category === '竞品' ? <Button size="small" onClick={() => openCompetitor(row)}>竞品调研</Button> : null},
+  ];
+
+  const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    form.resetFields();
+    message.success('草稿已清空');
+  };
 
   return (
     <div className="workspace">
       <aside className="side left">
-        <Form form={form} layout="vertical" onFinish={create} initialValues={{radius: 3000, confidence: 0.5}}>
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={create}
+          initialValues={{radius: 3000, confidence: 0.5}}
+          onValuesChange={(_, values) => {
+            if (!ev) localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
+          }}
+        >
           <Collapse
             defaultActiveKey={['site', 'property']}
             ghost
@@ -259,6 +313,11 @@ export default function NewEvaluation() {
           <Button type="primary" htmlType="submit" block disabled={!!busy}>
             {ev ? '保存物业调查' : '保存候选地址'}
           </Button>
+          {!ev && (
+            <Button style={{marginTop: 8}} block onClick={clearDraft}>
+              清空草稿
+            </Button>
+          )}
         </Form>
       </aside>
 
@@ -280,19 +339,31 @@ export default function NewEvaluation() {
           />
         )}
         <Card size="small" title={`周边 POI ${ev?.pois?.length || 0} 条`} className="poi-table">
-          <Table
+          <Space wrap style={{marginBottom: 8}}>
+            {groupedPois.map(group => (
+              <Tag key={group.key} color={group.items.length ? 'blue' : undefined}>
+                {group.title}：{group.items.length ? `${group.items.length} 条` : '未采集到'}
+              </Tag>
+            ))}
+          </Space>
+          <Collapse
             size="small"
-            rowKey="id"
-            pagination={{pageSize: 6}}
-            dataSource={ev?.pois || []}
-            columns={[
-              {title: '名称', dataIndex: 'name'},
-              {title: '分类', dataIndex: 'category', render: value => <Tag color={value === '竞品' ? 'red' : undefined}>{value}</Tag>},
-              {title: '距离', dataIndex: 'distance_m', render: value => value ? `${value}m` : '待核实'},
-              {title: '可信度', dataIndex: 'confidence', render: value => <Tag>{Math.round((value || 0) * 100)}%</Tag>},
-              {title: '人工数据', render: (_, row: Poi) => row.enrichment ? <Tag color="green">已补充</Tag> : row.category === '竞品' ? <Tag color="orange">待调研</Tag> : '-'},
-              {title: '操作', render: (_, row: Poi) => row.category === '竞品' ? <Button size="small" onClick={() => openCompetitor(row)}>竞品调研</Button> : null},
-            ]}
+            defaultActiveKey={['competitors', 'traffic', 'commercial']}
+            items={groupedPois.map(group => ({
+              key: group.key,
+              label: `${group.title}（${group.items.length ? `${group.items.length} 条` : '未采集到'}）`,
+              children: group.items.length ? (
+                <Table
+                  size="small"
+                  rowKey="id"
+                  pagination={{pageSize: 5}}
+                  dataSource={group.items}
+                  columns={poiColumns}
+                />
+              ) : (
+                <Alert type="info" showIcon message={`${group.title}未采集到`} description="这不代表周边不存在该类 POI，建议扩大半径或现场复核。" />
+              ),
+            }))}
           />
         </Card>
       </main>

@@ -37,6 +37,8 @@ export default function ReportPage() {
   const score = ev.result!;
   const sections = rep.sections || {};
   const competitorItems = sections.competitors?.items || [];
+  const dimensionEntries = Object.entries(score.dimensions || {});
+  const emptyText = (name: string) => <Alert type="info" showIcon message={`${name}未采集到`} description="该结果只表示本次自动采集未返回该类 POI，建议扩大半径或现场复核。" />;
 
   return (
     <div className="page report">
@@ -58,12 +60,22 @@ export default function ReportPage() {
 
       <Card title="3. 综合评分">
         <ReactECharts
-          style={{height: 320}}
+          style={{height: Math.max(360, dimensionEntries.length * 34)}}
           option={{
-            tooltip: {},
-            xAxis: {type: 'category', data: Object.keys(score.dimensions), axisLabel: {interval: 0, rotate: 20}},
-            yAxis: {type: 'value'},
-            series: [{type: 'bar', data: Object.values(score.dimensions), itemStyle: {color: '#2563a6'}}],
+            grid: {left: 150, right: 40, top: 24, bottom: 24},
+            tooltip: {trigger: 'axis', axisPointer: {type: 'shadow'}},
+            xAxis: {type: 'value', max: 'dataMax'},
+            yAxis: {
+              type: 'category',
+              data: dimensionEntries.map(([name]) => name).reverse(),
+              axisLabel: {interval: 0, width: 130, overflow: 'break'},
+            },
+            series: [{
+              type: 'bar',
+              data: dimensionEntries.map(([, value]) => value).reverse(),
+              label: {show: true, position: 'right'},
+              itemStyle: {color: '#2563a6'},
+            }],
           }}
         />
       </Card>
@@ -96,16 +108,28 @@ export default function ReportPage() {
       </Card>
 
       <Card title="6. 交通分析">
-        <List size="small" dataSource={sections.traffic?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
+        {(sections.traffic?.items || []).length ? (
+          <List size="small" dataSource={sections.traffic?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
+        ) : emptyText('交通')}
+      </Card>
+
+      <Card title="6.1 敏感场所">
+        {(sections.sensitive_places?.items || []).length ? (
+          <List size="small" dataSource={sections.sensitive_places?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
+        ) : emptyText('敏感场所')}
       </Card>
 
       <Card title="7. 人口代理指标">
         <Alert type="warning" showIcon message="人口代理指标不是实际人口" description={sections.population_proxy?.note || rep.data_note} />
-        <List size="small" dataSource={sections.population_proxy?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
+        {(sections.population_proxy?.items || []).length ? (
+          <List size="small" dataSource={sections.population_proxy?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
+        ) : emptyText('人口代理指标')}
       </Card>
 
       <Card title="8. 商业配套">
-        <List size="small" dataSource={sections.commercial?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
+        {(sections.commercial?.items || []).length ? (
+          <List size="small" dataSource={sections.commercial?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
+        ) : emptyText('商业配套')}
       </Card>
 
       <Card title="9. 物业与成本">

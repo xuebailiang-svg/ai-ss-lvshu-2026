@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -169,7 +170,8 @@ async def collect_pois(id: int, db: Session = Depends(get_db)):
     db.commit()
     cats = ["网吧", "网咖", "电竞馆", "电竞酒店", "小学", "中学", "幼儿园", "大学", "中职", "技校", "政府机构", "医院", "地铁站", "公交站", "停车场", "住宅小区", "公寓", "宿舍", "写字楼", "商场", "餐饮", "奶茶", "便利店", "KTV", "酒吧", "台球厅", "电影院", "密室逃脱", "酒店", "夜市"]
     try:
-        rows = await provider().search_nearby(ev.site.longitude, ev.site.latitude, ev.radius, cats)
+        amap_provider = provider()
+        rows = await amap_provider.search_nearby(ev.site.longitude, ev.site.latitude, ev.radius, cats)
         existing_enrichment = {poi.provider_record_id: competitor_dict(poi.enrichment) for poi in ev.pois if poi.enrichment}
         existing_records = {poi.provider_record_id: [survey_record_dict(record) for record in poi.survey_records] for poi in ev.pois if poi.survey_records}
         for old in list(ev.pois):
@@ -192,12 +194,41 @@ async def collect_pois(id: int, db: Session = Depends(get_db)):
         ev.status = JobStatus.completed
         ev.error_message = None
         db.commit()
-        return {"status": "completed", "count": len(rows)}
+        return {
+            "status": "completed",
+            "count": len(rows),
+            "diagnostics": {
+                **amap_provider.last_poi_diagnostics,
+                "saved_by_category": dict(Counter(row.get("category") or "其他" for row in rows)),
+            },
+        }
     except ProviderError as exc:
         ev.status = JobStatus.failed
         ev.error_message = exc.message
         db.commit()
         raise HTTPException(502, exc.to_dict())
+
+
+@router.get("/evaluations/{id}/poi-diagnostics")
+def poi_diagnostics(id: int, db: Session = Depends(get_db)):
+    ev = evaluation_or_404(db, id)
+    rows = list(ev.pois or [])
+    provider_counts = Counter(row.source or "unknown" for row in rows)
+    category_counts = Counter(row.category or "其他" for row in rows)
+    type_counts = Counter(f"{row.source or 'unknown'}:{row.type_code or 'unknown'}" for row in rows)
+    query_group_counts = Counter()
+    for row in rows:
+        raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+        query_group_counts[str(raw.get("_query_group") or raw.get("query_group") or "unknown")] += 1
+    return {
+        "evaluation_id": ev.id,
+        "poi_total": len(rows),
+        "by_category": dict(category_counts),
+        "by_provider": dict(provider_counts),
+        "by_provider_typecode": dict(type_counts),
+        "by_query_group": dict(query_group_counts),
+        "note": "最近一次采集的 raw_return_count 和 filtered_out_count 会在 POST /api/evaluations/{id}/collect-pois 的 diagnostics 中返回；历史采集任务未单独落表。",
+    }
 
 
 @router.post("/evaluations/{id}/score")

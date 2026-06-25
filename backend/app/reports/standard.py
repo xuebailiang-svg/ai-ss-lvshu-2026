@@ -11,7 +11,8 @@ class StandardReportRenderer(ReportRenderer):
         competitors = [poi for poi in pois if poi.get("category") == "竞品"]
         enriched = [poi for poi in competitors if poi.get("enrichment")]
         traffic = [poi for poi in pois if poi.get("category") == "交通"]
-        population = [poi for poi in pois if poi.get("category") in {"住宅小区", "公寓", "宿舍", "写字楼"}]
+        sensitive = [poi for poi in pois if poi.get("category") in {"小学", "中学", "幼儿园", "敏感场所"}]
+        population = [poi for poi in pois if poi.get("category") in {"住宅小区", "公寓", "宿舍", "写字楼", "大学", "中职", "技校"}]
         commercial = [poi for poi in pois if poi.get("category") == "商业配套"]
 
         return {
@@ -47,10 +48,11 @@ class StandardReportRenderer(ReportRenderer):
                     "items": [self._competitor_item(poi) for poi in competitors],
                 },
                 "traffic": {"title": "交通分析", "auto_collected_count": len(traffic), "items": self._brief(traffic)},
+                "sensitive_places": {"title": "敏感场所", "auto_collected_count": len(sensitive), "items": self._brief(sensitive)},
                 "population_proxy": {
                     "title": "人口代理指标",
                     "auto_collected_count": len(population),
-                    "note": "这是基于住宅、公寓、宿舍、写字楼等 POI 的代理指标，不是真实人口。",
+                    "note": "这是基于住宅、公寓、写字楼、大学、中职、技校等 POI 的代理指标，不是真实人口。",
                     "items": self._brief(population),
                 },
                 "commercial": {"title": "商业配套", "auto_collected_count": len(commercial), "items": self._brief(commercial)},
