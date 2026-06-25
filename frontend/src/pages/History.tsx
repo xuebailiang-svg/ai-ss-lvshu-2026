@@ -63,7 +63,6 @@ export default function History() {
           {label: '创建时间', value: 'created_at'},
           {label: '综合评分', value: 'score'},
           {label: '完整度', value: 'completeness'},
-          {label: '可信度', value: 'confidence'},
           {label: '最近更新', value: 'updated_at'},
         ]} />
         <Select value={order} style={{width: 100}} onChange={setOrder} options={[{label: '降序', value: 'desc'}, {label: '升序', value: 'asc'}]} />
@@ -86,7 +85,6 @@ export default function History() {
           {title: '硬性风险', render: (_, row) => row.result?.hard_risks?.length ? <Tag color="red">{row.result.hard_risks.length}</Tag> : <Tag>0</Tag>},
           {title: '评分', render: (_, row) => row.result?.total_score ?? '-'},
           {title: '完整度', render: (_, row) => <Progress percent={row.result?.completeness || 0} size="small" />},
-          {title: '可信度', render: (_, row) => <Progress percent={row.result?.confidence || 0} size="small" />},
           {title: '最近更新', dataIndex: 'updated_at', render: value => value ? new Date(value).toLocaleString() : '-'},
           {
             title: '操作',
@@ -111,7 +109,7 @@ export default function History() {
               yAxis: {type: 'value'},
               series: [
                 {name: '综合评分', type: 'bar', data: comparison.map(item => item.total_score || 0)},
-                {name: '可信度', type: 'bar', data: comparison.map(item => item.confidence || 0)},
+                {name: '完整度', type: 'bar', data: comparison.map(item => item.completeness || 0)},
               ],
             }}
           />
@@ -134,7 +132,6 @@ export default function History() {
             {title: '商业配套', dataIndex: 'commercial_score'},
             {title: '物业', dataIndex: 'property_score'},
             {title: '完整度', dataIndex: 'completeness'},
-            {title: '可信度', dataIndex: 'confidence'},
             {title: '月租金', dataIndex: 'monthly_rent'},
             {title: '每台分摊租金', dataIndex: 'rent_per_machine_month'},
             {title: '待核实项', dataIndex: 'review_item_count'},

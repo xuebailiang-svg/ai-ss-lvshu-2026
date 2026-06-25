@@ -87,6 +87,49 @@ export type Evaluation = {
   result?: Score;
 };
 
+export type PoiTemplateField = {
+  key: string;
+  label: string;
+};
+
+export type PoiTemplate = {
+  export_key: string;
+  sub_label: string;
+  fields: PoiTemplateField[];
+  required_labels: string[];
+};
+
+export type PoiTemplates = {
+  base_columns: PoiTemplateField[];
+  categories: Record<string, PoiTemplate>;
+};
+
+export type PoiPublic = {
+  poi_id: number;
+  id: number;
+  name: string;
+  business_category: string;
+  subcategory?: string;
+  address?: string;
+  distance_m?: number;
+  walking_distance_m?: number;
+  walking_time_min?: number;
+  data_source?: string;
+  verification_status?: string;
+  missing_items?: string[];
+  missing_items_text?: string;
+  notes?: string;
+  supplement?: Record<string, any>;
+  is_manual?: boolean;
+};
+
+export type PoiListResponse = {
+  evaluation_id: number;
+  total: number;
+  counts: Record<string, number>;
+  items: PoiPublic[];
+};
+
 export type Poi = {
   id: number;
   name: string;

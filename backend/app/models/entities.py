@@ -41,9 +41,16 @@ class PoiObservation(Base):
     __tablename__="poi_observations"
     id: Mapped[int]=mapped_column(primary_key=True); evaluation_id: Mapped[int]=mapped_column(ForeignKey("site_evaluations.id"), index=True)
     source: Mapped[str]=mapped_column(String(30), default="amap"); provider_record_id: Mapped[str]=mapped_column(String(100)); name: Mapped[str]=mapped_column(String(200)); category: Mapped[str]=mapped_column(String(50)); type_code: Mapped[str|None]=mapped_column(String(30)); address: Mapped[str|None]=mapped_column(String(300))
-    longitude: Mapped[float]=mapped_column(Float); latitude: Mapped[float]=mapped_column(Float); coordinate_system: Mapped[str]=mapped_column(String(20), default="GCJ02"); distance_m: Mapped[int|None]=mapped_column(Integer); phone: Mapped[str|None]=mapped_column(String(100)); business_hours: Mapped[str|None]=mapped_column(String(200)); business_area: Mapped[str|None]=mapped_column(String(100))
+    longitude: Mapped[float|None]=mapped_column(Float); latitude: Mapped[float|None]=mapped_column(Float); coordinate_system: Mapped[str]=mapped_column(String(20), default="GCJ02"); distance_m: Mapped[int|None]=mapped_column(Integer); phone: Mapped[str|None]=mapped_column(String(100)); business_hours: Mapped[str|None]=mapped_column(String(200)); business_area: Mapped[str|None]=mapped_column(String(100))
     observed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now); fetched_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now); confidence: Mapped[float]=mapped_column(Float, default=.75); is_estimated: Mapped[bool]=mapped_column(Boolean, default=False); is_manually_verified: Mapped[bool]=mapped_column(Boolean, default=False); needs_verification: Mapped[bool]=mapped_column(Boolean, default=False); raw_data: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
-    evaluation: Mapped[SiteEvaluation]=relationship(back_populates="pois"); enrichment: Mapped["CompetitorEnrichment|None"]=relationship(cascade="all, delete-orphan", uselist=False, back_populates="poi"); survey_records: Mapped[list["CompetitorSurveyRecord"]]=relationship(cascade="all, delete-orphan", back_populates="poi", order_by="CompetitorSurveyRecord.created_at.desc()")
+    evaluation: Mapped[SiteEvaluation]=relationship(back_populates="pois"); enrichment: Mapped["CompetitorEnrichment|None"]=relationship(cascade="all, delete-orphan", uselist=False, back_populates="poi"); generic_enrichment: Mapped["PoiEnrichment|None"]=relationship(cascade="all, delete-orphan", uselist=False, back_populates="poi"); survey_records: Mapped[list["CompetitorSurveyRecord"]]=relationship(cascade="all, delete-orphan", back_populates="poi", order_by="CompetitorSurveyRecord.created_at.desc()")
+
+class PoiEnrichment(Base):
+    __tablename__="poi_enrichments"
+    id: Mapped[int]=mapped_column(primary_key=True); poi_observation_id: Mapped[int]=mapped_column(ForeignKey("poi_observations.id"), unique=True, index=True)
+    category: Mapped[str]=mapped_column(String(50)); payload: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict); data_source: Mapped[str]=mapped_column(String(50), default="manual"); verification_status: Mapped[str]=mapped_column(String(50), default="未核实")
+    is_verified: Mapped[bool]=mapped_column(Boolean, default=False); verified_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True)); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    poi: Mapped[PoiObservation]=relationship(back_populates="generic_enrichment")
 
 class CompetitorEnrichment(Base):
     __tablename__="competitor_enrichments"

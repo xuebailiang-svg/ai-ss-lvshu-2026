@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type {CompetitorEnrichment, Evaluation, PropertySurvey, Score} from '../types';
+import type {CompetitorEnrichment, Evaluation, PoiListResponse, PoiPublic, PoiTemplates, PropertySurvey, Score} from '../types';
 
 export const api = axios.create({baseURL: '/api', timeout: 20000});
 
@@ -25,6 +25,12 @@ export const updateProperty = (id: number, data: PropertySurvey) => api.put(`/ev
 export const geocode = (id: number) => api.post(`/evaluations/${id}/geocode`).then(response => response.data);
 export const collectPois = (id: number) => api.post(`/evaluations/${id}/collect-pois`).then(response => response.data);
 export const poiDiagnostics = (id: number) => api.get(`/evaluations/${id}/poi-diagnostics`).then(response => response.data);
+export const poiTemplates = () => api.get<PoiTemplates>('/poi/templates').then(response => response.data);
+export const listPois = (id: number) => api.get<PoiListResponse>(`/evaluations/${id}/pois`).then(response => response.data);
+export const createManualPoi = (id: number, data: Record<string, any>) => api.post<PoiPublic>(`/evaluations/${id}/pois`, data).then(response => response.data);
+export const savePoiEnrichment = (evaluationId: number, poiId: number, data: Record<string, any>) => api.put<PoiPublic>(`/evaluations/${evaluationId}/pois/${poiId}/enrichment`, data).then(response => response.data);
+export const importPoisCsv = (id: number, category: string, csv_text: string) => api.post(`/evaluations/${id}/pois/import`, {category, csv_text}).then(response => response.data);
+export const exportPoisUrl = (id: number, category: string) => `/api/evaluations/${id}/pois/export?category=${encodeURIComponent(category)}`;
 export const score = (id: number) => api.post<Score>(`/evaluations/${id}/score`).then(response => response.data);
 export const report = (id: string) => api.get(`/evaluations/${id}/report`).then(response => response.data);
 export const saveCompetitorEnrichment = (id: number, data: CompetitorEnrichment) => api.put(`/competitors/${id}/enrichment`, data).then(response => response.data);

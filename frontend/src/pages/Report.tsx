@@ -119,10 +119,9 @@ export default function ReportPage() {
         />
       </Card>
 
-      <Card title="数据完整度和可信度">
+      <Card title="数据完整度和核实状态">
         <Descriptions column={2} items={[
           {key: 'c', label: '完整度', children: <Progress percent={score.completeness} />},
-          {key: 'f', label: '可信度', children: <Progress percent={score.confidence} />},
           {key: 'm', label: '人工竞品调研', children: `${sections.competitors?.manual_survey_count || 0}/${sections.competitors?.auto_collected_count || 0}`},
           {key: 'v', label: '评分规则版本', children: score.model_version},
         ]} />
@@ -189,9 +188,9 @@ export default function ReportPage() {
         <ChecklistTable items={sections.infrastructure?.checklist || []} />
       </Card>
 
-      <Card title="12. 数据来源和可信度">
+      <Card title="12. 数据来源和核实状态">
         <Descriptions column={1} items={[
-          {key: 'quality', label: '数据完整度/可信度', children: `${score.completeness}% / ${score.confidence}%`},
+          {key: 'quality', label: '数据完整度', children: `${score.completeness}%`},
           {key: 'auto', label: '自动采集数据', children: (sections.data_sources?.auto || []).join('；')},
           {key: 'manual', label: '人工填写数据', children: (sections.data_sources?.manual || []).join('；')},
           {key: 'estimated', label: '估算数据', children: (sections.data_sources?.estimated || []).join('；')},

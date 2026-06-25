@@ -5,6 +5,8 @@ import App from '../App';
 
 vi.mock('../api/client', () => ({
   listEvaluations: () => Promise.resolve([]),
+  poiTemplates: () => Promise.resolve({base_columns: [], categories: {}}),
+  listPois: () => Promise.resolve({evaluation_id: 0, total: 0, counts: {}, items: []}),
   configStatus: () => Promise.resolve({backend: {}, frontend: {}}),
   amapGeocodeTest: () => Promise.resolve({ok: true, result: {formatted_address: '测试地址'}}),
 }));

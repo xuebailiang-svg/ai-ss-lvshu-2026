@@ -10,21 +10,28 @@ import {
   Input,
   InputNumber,
   Progress,
+  Select,
   Space,
   Spin,
   Switch,
   Table,
   Tag,
   Tooltip,
+  Upload,
   message,
 } from 'antd';
-import type {CompetitorEnrichment, Evaluation, Poi, PropertySurvey} from '../types';
+import type {Evaluation, PoiPublic, PoiTemplates, PropertySurvey} from '../types';
 import {
   collectPois,
+  createManualPoi,
   createEvaluation,
+  exportPoisUrl,
   geocode,
   getEvaluation,
-  saveCompetitorEnrichment,
+  importPoisCsv,
+  listPois,
+  poiTemplates,
+  savePoiEnrichment,
   score,
   updateProperty,
 } from '../api/client';
@@ -57,14 +64,7 @@ const propertySwitches: [keyof PropertySurvey, string][] = [
 
 const DRAFT_KEY = 'm15:new-evaluation:draft';
 
-const poiDisplayGroups = [
-  {key: 'competitors', title: '竞品', categories: ['竞品']},
-  {key: 'sensitive', title: '敏感场所', categories: ['小学', '中学', '幼儿园', '敏感场所']},
-  {key: 'traffic', title: '交通', categories: ['交通']},
-  {key: 'commercial', title: '商业配套', categories: ['商业配套']},
-  {key: 'population', title: '人口代理', categories: ['住宅小区', '公寓', '宿舍', '写字楼', '大学', '中职', '技校']},
-  {key: 'other', title: '其他', categories: ['其他']},
-];
+const fallbackTemplateCategories = ['竞品', '住宅', '交通', '娱乐', '餐饮', '夜间配套', '敏感场所', '物业线索', '其他'];
 
 function normalizeError(error: any): ApiErrorDetail {
   const detail = error?.response?.data?.detail;
@@ -92,12 +92,22 @@ function sanitizedDiagnostics(detail: ApiErrorDetail) {
 
 export default function NewEvaluation() {
   const [form] = Form.useForm();
-  const [competitorForm] = Form.useForm<CompetitorEnrichment>();
+  const [poiForm] = Form.useForm();
+  const [manualPoiForm] = Form.useForm();
   const [ev, setEv] = useState<Evaluation>();
+  const [poiRows, setPoiRows] = useState<PoiPublic[]>([]);
+  const [templates, setTemplates] = useState<PoiTemplates>();
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<ApiErrorDetail | null>(null);
-  const [competitor, setCompetitor] = useState<Poi | null>(null);
+  const [editingPoi, setEditingPoi] = useState<PoiPublic | null>(null);
+  const [manualPoiOpen, setManualPoiOpen] = useState(false);
   const nav = useNavigate();
+  const editCategory = Form.useWatch('business_category', poiForm) || editingPoi?.business_category;
+  const manualCategory = Form.useWatch('business_category', manualPoiForm) || '竞品';
+
+  useEffect(() => {
+    poiTemplates().then(setTemplates).catch(() => message.warning('POI 模板加载失败，分类编辑功能可能不可用'));
+  }, []);
 
   useEffect(() => {
     const raw = localStorage.getItem(DRAFT_KEY);
@@ -110,10 +120,17 @@ export default function NewEvaluation() {
     }
   }, [form]);
 
+  const loadPoiRows = async (id: number) => {
+    const data = await listPois(id);
+    setPoiRows(data.items);
+    return data.items;
+  };
+
   const refresh = async (id: number) => {
     const data = await getEvaluation(id);
     setEv(data);
     if (data.site?.property) form.setFieldsValue(data.site.property);
+    await loadPoiRows(id);
     return data;
   };
 
@@ -130,6 +147,7 @@ export default function NewEvaluation() {
           property: values,
         });
         setEv(data);
+        await loadPoiRows(data.id);
         localStorage.removeItem(DRAFT_KEY);
         message.success('候选地址已保存');
       } else {
@@ -160,20 +178,84 @@ export default function NewEvaluation() {
     }
   };
 
-  const openCompetitor = (poi: Poi) => {
-    setCompetitor(poi);
-    competitorForm.setFieldsValue({
-      ...(poi.enrichment || {}),
-      confidence: poi.enrichment?.confidence ?? 0.5,
+  const categoryOptions = Object.keys(templates?.categories || {}).length
+    ? Object.keys(templates?.categories || {})
+    : fallbackTemplateCategories;
+
+  const openPoiEditor = (poi: PoiPublic) => {
+    setEditingPoi(poi);
+    poiForm.setFieldsValue({
+      ...(poi.supplement || {}),
+      name: poi.name,
+      business_category: poi.business_category,
+      subcategory: poi.subcategory,
+      address: poi.address,
+      distance_m: poi.distance_m,
+      walking_distance_m: poi.walking_distance_m,
+      walking_time_min: poi.walking_time_min,
+      data_source: poi.data_source || '人工',
+      verification_status: poi.verification_status || '未核实',
+      notes: poi.notes,
     });
   };
 
-  const saveCompetitor = async (values: CompetitorEnrichment) => {
-    if (!competitor || !ev) return;
-    await saveCompetitorEnrichment(competitor.id, values);
-    await refresh(ev.id);
-    setCompetitor(null);
-    message.success('竞品调研已保存');
+  const collectTemplatePayload = (values: Record<string, any>, category: string) => {
+    const fields = templates?.categories?.[category]?.fields || [];
+    const payload: Record<string, any> = {};
+    fields.forEach(field => {
+      if (values[field.key] !== undefined && values[field.key] !== '') payload[field.key] = values[field.key];
+    });
+    return payload;
+  };
+
+  const savePoi = async (values: Record<string, any>) => {
+    if (!editingPoi || !ev) return;
+    const category = values.business_category || editingPoi.business_category;
+    await savePoiEnrichment(ev.id, editingPoi.poi_id, {
+      name: values.name,
+      business_category: category,
+      subcategory: values.subcategory,
+      address: values.address,
+      distance_m: values.distance_m,
+      walking_distance_m: values.walking_distance_m,
+      walking_time_min: values.walking_time_min,
+      data_source: values.data_source || '人工',
+      verification_status: values.verification_status || '未核实',
+      notes: values.notes,
+      payload: collectTemplatePayload(values, category),
+    });
+    await loadPoiRows(ev.id);
+    setEditingPoi(null);
+    message.success('POI 补充信息已保存');
+  };
+
+  const saveManualPoi = async (values: Record<string, any>) => {
+    if (!ev) return;
+    const category = values.business_category || '其他';
+    await createManualPoi(ev.id, {
+      ...values,
+      business_category: category,
+      data_source: values.data_source || '人工',
+      verification_status: values.verification_status || '未核实',
+      payload: collectTemplatePayload(values, category),
+    });
+    await loadPoiRows(ev.id);
+    setManualPoiOpen(false);
+    manualPoiForm.resetFields();
+    message.success('人工 POI 已新增');
+  };
+
+  const importCsv = async (categoryKey: string, file: File) => {
+    if (!ev) return false;
+    const text = await file.text();
+    const result = await importPoisCsv(ev.id, categoryKey, text);
+    await loadPoiRows(ev.id);
+    if (result.failed_count) {
+      message.warning(`CSV 导入完成：成功 ${result.success_count} 行，失败 ${result.failed_count} 行`);
+    } else {
+      message.success(`CSV 导入完成：成功 ${result.success_count} 行`);
+    }
+    return false;
   };
 
   const copyDiagnostics = async () => {
@@ -182,24 +264,34 @@ export default function NewEvaluation() {
     message.success('诊断信息已复制');
   };
 
-  const competitorCount = ev?.pois?.filter(poi => poi.category === '竞品').length || 0;
-  const verifiedCompetitorCount = ev?.pois?.filter(poi => poi.category === '竞品' && (poi.enrichment?.is_manually_verified || poi.enrichment?.verified_at)).length || 0;
+  const competitorCount = poiRows.filter(poi => poi.business_category === '竞品').length;
+  const verifiedCompetitorCount = poiRows.filter(poi => poi.business_category === '竞品' && poi.verification_status === '已人工核实').length;
   const groupedPois = useMemo(() => {
-    const pois = ev?.pois || [];
-    return poiDisplayGroups.map(group => ({
-      ...group,
-      items: pois.filter(poi => group.categories.includes(poi.category)),
-    }));
-  }, [ev?.pois]);
+    return categoryOptions.map(category => {
+      const cfg = templates?.categories?.[category];
+      return {
+        key: cfg?.export_key || category,
+        category,
+        title: category,
+        exportKey: cfg?.export_key || category,
+        items: poiRows.filter(poi => poi.business_category === category),
+      };
+    });
+  }, [categoryOptions, poiRows, templates]);
 
   const poiColumns = [
     {title: '名称', dataIndex: 'name'},
-    {title: '分类', dataIndex: 'category', render: (value: string) => <Tag color={value === '竞品' ? 'red' : undefined}>{value}</Tag>},
-    {title: '类型码', dataIndex: 'type_code', render: (value?: string) => value || '-'},
-    {title: '距离', dataIndex: 'distance_m', render: (value?: number) => value ? `${value}m` : '待核实'},
-    {title: '可信度', dataIndex: 'confidence', render: (value?: number) => <Tag>{Math.round((value || 0) * 100)}%</Tag>},
-    {title: '人工数据', render: (_: unknown, row: Poi) => row.enrichment ? <Tag color="green">已补充</Tag> : row.category === '竞品' ? <Tag color="orange">待调研</Tag> : '-'},
-    {title: '操作', render: (_: unknown, row: Poi) => row.category === '竞品' ? <Button size="small" onClick={() => openCompetitor(row)}>竞品调研</Button> : null},
+    {title: '业务类别', dataIndex: 'business_category', render: (value: string) => <Tag color={value === '竞品' ? 'red' : 'blue'}>{value}</Tag>},
+    {title: '细分类', dataIndex: 'subcategory', render: (value?: string) => value || '待补充'},
+    {title: '地址', dataIndex: 'address', render: (value?: string) => value || '待补充'},
+    {title: '直线距离', dataIndex: 'distance_m', render: (value?: number) => value ? `${value}m` : '待核实'},
+    {title: '步行距离', dataIndex: 'walking_distance_m', render: (value?: number) => value ? `${value}m` : '待补充'},
+    {title: '步行时间', dataIndex: 'walking_time_min', render: (value?: number) => value ? `${value}分钟` : '待补充'},
+    {title: '数据来源', dataIndex: 'data_source', render: (value?: string) => <Tag>{value || '未标注'}</Tag>},
+    {title: '核实状态', dataIndex: 'verification_status', render: (value?: string) => <Tag color={value === '已人工核实' ? 'green' : 'orange'}>{value || '未核实'}</Tag>},
+    {title: '待补充项', dataIndex: 'missing_items_text', render: (value?: string) => value || '资料较完整'},
+    {title: '备注', dataIndex: 'notes', render: (value?: string) => value || '-'},
+    {title: '操作', render: (_: unknown, row: PoiPublic) => <Button size="small" onClick={() => openPoiEditor(row)}>编辑补充</Button>},
   ];
 
   const clearDraft = () => {
@@ -208,6 +300,59 @@ export default function NewEvaluation() {
     message.success('草稿已清空');
   };
 
+  const renderPoiSupplementFields = (category?: string) => {
+    const fields = templates?.categories?.[category || '']?.fields || [];
+    if (!fields.length) {
+      return <Alert type="info" showIcon message="该分类暂无专用模板字段，可先填写基础信息和备注。" />;
+    }
+    return fields.map(field => (
+      <Form.Item key={field.key} name={field.key} label={field.label}>
+        {field.key === 'notes' ? <Input.TextArea /> : <Input />}
+      </Form.Item>
+    ));
+  };
+
+  const renderBasePoiFormItems = () => (
+    <>
+      <Form.Item name="name" label="名称" rules={[{required: true, message: '请填写名称'}]}>
+        <Input />
+      </Form.Item>
+      <div className="form-row">
+        <Form.Item name="business_category" label="业务类别" rules={[{required: true, message: '请选择业务类别'}]}>
+          <Select options={categoryOptions.map(category => ({label: category, value: category}))} />
+        </Form.Item>
+        <Form.Item name="subcategory" label="细分类">
+          <Input />
+        </Form.Item>
+      </div>
+      <Form.Item name="address" label="地址">
+        <Input.TextArea />
+      </Form.Item>
+      <div className="form-row">
+        <Form.Item name="distance_m" label="直线距离（米）">
+          <InputNumber min={0} />
+        </Form.Item>
+        <Form.Item name="walking_distance_m" label="步行距离（米）">
+          <InputNumber min={0} />
+        </Form.Item>
+      </div>
+      <div className="form-row">
+        <Form.Item name="walking_time_min" label="步行时间（分钟）">
+          <InputNumber min={0} />
+        </Form.Item>
+        <Form.Item name="data_source" label="数据来源">
+          <Input placeholder="例如：现场调研/电话核实/大众点评" />
+        </Form.Item>
+      </div>
+      <Form.Item name="verification_status" label="核实状态">
+        <Select options={[{label: '未核实', value: '未核实'}, {label: '已人工核实', value: '已人工核实'}, {label: '待复核', value: '待复核'}]} />
+      </Form.Item>
+      <Form.Item name="notes" label="备注">
+        <Input.TextArea />
+      </Form.Item>
+    </>
+  );
+
   return (
     <div className="workspace">
       <aside className="side left">
@@ -215,7 +360,7 @@ export default function NewEvaluation() {
           form={form}
           layout="vertical"
           onFinish={create}
-          initialValues={{radius: 3000, confidence: 0.5}}
+          initialValues={{radius: 3000}}
           onValuesChange={(_, values) => {
             if (!ev) localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
           }}
@@ -294,10 +439,7 @@ export default function NewEvaluation() {
                       <Form.Item name="machine_count" label="规划机器数量"><InputNumber min={0} /></Form.Item>
                       <Form.Item name="source" label="数据来源"><Input /></Form.Item>
                     </div>
-                    <div className="form-row">
-                      <Form.Item name="surveyed_at" label="调查时间"><Input placeholder="例如：2026-06-23" /></Form.Item>
-                      <Form.Item name="confidence" label="可信度（0-1）"><InputNumber min={0} max={1} step={0.05} /></Form.Item>
-                    </div>
+                    <Form.Item name="surveyed_at" label="调查时间"><Input placeholder="例如：2026-06-23" /></Form.Item>
                     <div className="switch-grid">
                       {propertySwitches.map(([key, label]) => (
                         <Form.Item key={key} name={key} label={label} valuePropName="checked">
@@ -341,7 +483,12 @@ export default function NewEvaluation() {
             description={<Space direction="vertical"><span>{friendlyError(error)}</span><Button size="small" onClick={copyDiagnostics}>复制诊断信息</Button></Space>}
           />
         )}
-        <Card size="small" title={`周边 POI ${ev?.pois?.length || 0} 条`} className="poi-table">
+        <Card
+          size="small"
+          title={`周边 POI ${poiRows.length} 条`}
+          extra={<Button size="small" disabled={!ev} onClick={() => { manualPoiForm.resetFields(); manualPoiForm.setFieldsValue({business_category: '竞品', data_source: '人工', verification_status: '未核实'}); setManualPoiOpen(true); }}>新增人工 POI</Button>}
+          className="poi-table"
+        >
           <Space wrap style={{marginBottom: 8}}>
             {groupedPois.map(group => (
               <Tag key={group.key} color={group.items.length ? 'blue' : undefined}>
@@ -351,20 +498,40 @@ export default function NewEvaluation() {
           </Space>
           <Collapse
             size="small"
-            defaultActiveKey={['competitors', 'traffic', 'commercial']}
+            defaultActiveKey={['competitor', 'traffic', 'food', 'residential']}
             items={groupedPois.map(group => ({
               key: group.key,
               label: `${group.title}（${group.items.length ? `${group.items.length} 条` : '未采集到'}）`,
-              children: group.items.length ? (
-                <Table
-                  size="small"
-                  rowKey="id"
-                  pagination={{pageSize: 5}}
-                  dataSource={group.items}
-                  columns={poiColumns}
-                />
-              ) : (
-                <Alert type="info" showIcon message={`${group.title}未采集到`} description="这不代表周边不存在该类 POI，建议扩大半径或现场复核。" />
+              children: (
+                <Space direction="vertical" style={{width: '100%'}}>
+                  <Space wrap>
+                    <Button size="small" disabled={!ev} onClick={() => ev && window.open(exportPoisUrl(ev.id, group.exportKey), '_blank')}>
+                      导出 CSV
+                    </Button>
+                    <Upload
+                      accept=".csv,text/csv"
+                      showUploadList={false}
+                      beforeUpload={file => {
+                        void importCsv(group.exportKey, file);
+                        return false;
+                      }}
+                    >
+                      <Button size="small" disabled={!ev}>导入 CSV</Button>
+                    </Upload>
+                  </Space>
+                  {group.items.length ? (
+                    <Table
+                      size="small"
+                      rowKey="poi_id"
+                      pagination={{pageSize: 5}}
+                      dataSource={group.items}
+                      columns={poiColumns}
+                      scroll={{x: 1200}}
+                    />
+                  ) : (
+                    <Alert type="info" showIcon message={`${group.title}未采集到`} description="这不代表周边不存在该类 POI，建议扩大半径或现场复核。" />
+                  )}
+                </Space>
               ),
             }))}
           />
@@ -386,55 +553,25 @@ export default function NewEvaluation() {
         <Card title="数据质量" size="small">
           <span>完整度</span>
           <Progress percent={ev?.result?.completeness || 0} />
-          <span>整体可信度</span>
-          <Progress percent={ev?.result?.confidence || 0} />
           <p>竞品人工核实：{verifiedCompetitorCount}/{competitorCount}</p>
         </Card>
       </aside>
 
-      <Drawer title={competitor?.name ? `竞品调研：${competitor.name}` : '竞品调研'} open={!!competitor} width={520} onClose={() => setCompetitor(null)}>
-        <Alert type="info" showIcon message="高德基础 POI 与人工调研数据分层保存" description="上座率为人工估算时，报告会标注为估算值。" />
-        <Form form={competitorForm} layout="vertical" onFinish={saveCompetitor} initialValues={{confidence: 0.5}}>
-          <div className="form-row">
-            <Form.Item name="machine_count" label="机器数量"><InputNumber min={0} /></Form.Item>
-            <Form.Item name="area_sqm" label="营业面积（㎡）"><InputNumber min={0} /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="cpu" label="CPU"><Input /></Form.Item>
-            <Form.Item name="gpu" label="显卡"><Input /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="monitor_size_inch" label="显示器尺寸"><InputNumber min={0} /></Form.Item>
-            <Form.Item name="monitor_refresh_rate" label="刷新率"><InputNumber min={0} /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="normal_price" label="普通区价格"><InputNumber min={0} /></Form.Item>
-            <Form.Item name="premium_price" label="高配区价格"><InputNumber min={0} /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="private_room_price" label="包间价格"><InputNumber min={0} /></Form.Item>
-            <Form.Item name="member_price" label="会员价格"><InputNumber min={0} /></Form.Item>
-          </div>
-          <Form.Item name="recharge_promotion" label="充值优惠"><Input /></Form.Item>
-          <div className="form-row">
-            <Form.Item name="opened_at_estimate" label="推测开业时间"><Input /></Form.Item>
-            <Form.Item name="opening_basis" label="开业时间依据"><Input /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="peak_occupancy_rate" label="高峰上座率（0-1）"><InputNumber min={0} max={1} step={0.05} /></Form.Item>
-            <Form.Item name="offpeak_occupancy_rate" label="平峰上座率（0-1）"><InputNumber min={0} max={1} step={0.05} /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="surveyed_at" label="调查时间"><Input placeholder="例如：2026-06-23" /></Form.Item>
-            <Form.Item name="survey_method" label="调查方式"><Input /></Form.Item>
-          </div>
-          <div className="form-row">
-            <Form.Item name="source" label="数据来源"><Input /></Form.Item>
-            <Form.Item name="confidence" label="可信度（0-1）"><InputNumber min={0} max={1} step={0.05} /></Form.Item>
-          </div>
-          <Form.Item name="is_manually_verified" label="是否人工核实" valuePropName="checked"><Switch /></Form.Item>
-          <Form.Item name="notes" label="备注"><Input.TextArea /></Form.Item>
-          <Button type="primary" htmlType="submit" block>保存竞品调研</Button>
+      <Drawer title={editingPoi?.name ? `编辑 POI：${editingPoi.name}` : '编辑 POI'} open={!!editingPoi} width={560} onClose={() => setEditingPoi(null)}>
+        <Alert type="info" showIcon message="基础 POI 与人工补充数据分层保存" description="本表单不会修改高德原始数据，也不会展示经纬度、类型码、平台内部编号等技术字段。" />
+        <Form form={poiForm} layout="vertical" onFinish={savePoi} initialValues={{data_source: '人工', verification_status: '未核实'}}>
+          {renderBasePoiFormItems()}
+          {renderPoiSupplementFields(editCategory)}
+          <Button type="primary" htmlType="submit" block>保存 POI 补充信息</Button>
+        </Form>
+      </Drawer>
+
+      <Drawer title="新增人工 POI" open={manualPoiOpen} width={560} onClose={() => setManualPoiOpen(false)}>
+        <Alert type="info" showIcon message="人工新增 POI 可不填写经纬度" description="新增后会保存到当前评估，刷新页面和历史记录中仍可查看。" />
+        <Form form={manualPoiForm} layout="vertical" onFinish={saveManualPoi} initialValues={{business_category: '竞品', data_source: '人工', verification_status: '未核实'}}>
+          {renderBasePoiFormItems()}
+          {renderPoiSupplementFields(manualCategory)}
+          <Button type="primary" htmlType="submit" block>新增人工 POI</Button>
         </Form>
       </Drawer>
     </div>

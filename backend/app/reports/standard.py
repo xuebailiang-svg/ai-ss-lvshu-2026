@@ -6,14 +6,15 @@ class StandardReportRenderer(ReportRenderer):
 
     def render(self, result, ctx=None):
         evaluation = (ctx or {}).get("evaluation", {})
-        pois = evaluation.get("pois", [])
+        pois = [self._public_poi(poi) for poi in evaluation.get("pois", [])]
         prop = ((evaluation.get("site") or {}).get("property") or {})
-        competitors = [poi for poi in pois if poi.get("category") == "竞品"]
-        enriched = [poi for poi in competitors if poi.get("enrichment")]
-        traffic = [poi for poi in pois if poi.get("category") == "交通"]
-        sensitive = [poi for poi in pois if poi.get("category") in {"小学", "中学", "幼儿园", "敏感场所"}]
-        population = [poi for poi in pois if poi.get("category") in {"住宅小区", "公寓", "宿舍", "写字楼", "大学", "中职", "技校", "敏感场所"}]
-        commercial = [poi for poi in pois if poi.get("category") == "商业配套"]
+        competitors = [poi for poi in pois if poi.get("business_category") == "竞品"]
+        enriched = [poi for poi in competitors if self._has_supplement(poi)]
+        traffic = [poi for poi in pois if poi.get("business_category") == "交通"]
+        sensitive = [poi for poi in pois if poi.get("business_category") == "敏感场所"]
+        population = [poi for poi in pois if poi.get("business_category") == "住宅"]
+        commercial = [poi for poi in pois if poi.get("business_category") in {"餐饮", "娱乐", "夜间配套"}]
+        category_summary = self._category_summary(pois)
         competitor_checklist = self._competitor_checklist(competitors)
         surroundings = self._poi_checklist(
             commercial,
@@ -80,7 +81,6 @@ class StandardReportRenderer(ReportRenderer):
             "hard_risk": bool(result.get("hard_risks")),
             "conclusion": result.get("recommendation"),
             "score": result.get("total_score"),
-            "confidence": result.get("confidence"),
             "dimensions": result.get("dimensions"),
             "positive_evidence": result.get("positive_evidence"),
             "risk_factors": result.get("hard_risks", []) + result.get("negative_evidence", []),
@@ -97,11 +97,11 @@ class StandardReportRenderer(ReportRenderer):
                 "score": {"title": "综合评分", "dimensions": result.get("dimensions", {})},
                 "dimension_scores": {"title": "各维度得分", "items": [{"name": k, "score": v} for k, v in (result.get("dimensions") or {}).items()]},
                 "quality": {
-                    "title": "数据完整度和可信度",
+                    "title": "数据完整度和核实状态",
                     "completeness": result.get("completeness"),
-                    "confidence": result.get("confidence"),
                     "manual_competitor_records": len(enriched),
                 },
+                "poi_category_summary": {"title": "POI 分类补充统计", "items": category_summary},
                 "competitors": {
                     "title": "竞品分析",
                     "auto_collected_count": len(competitors),
@@ -161,36 +161,56 @@ class StandardReportRenderer(ReportRenderer):
 
     @staticmethod
     def _brief(rows):
-        return [{"id": row.get("id"), "name": row.get("name"), "distance_m": row.get("distance_m"), "source": row.get("source"), "confidence": row.get("confidence"), "needs_verification": row.get("needs_verification")} for row in rows[:20]]
+        return [
+            {
+                "poi_id": row.get("poi_id") or row.get("id"),
+                "name": row.get("name"),
+                "business_category": row.get("business_category"),
+                "subcategory": row.get("subcategory"),
+                "address": row.get("address"),
+                "distance_m": row.get("distance_m"),
+                "walking_distance_m": row.get("walking_distance_m"),
+                "walking_time_min": row.get("walking_time_min"),
+                "data_source": row.get("data_source"),
+                "verification_status": row.get("verification_status"),
+                "missing_items": row.get("missing_items"),
+                "notes": row.get("notes"),
+            }
+            for row in rows[:20]
+        ]
 
     @staticmethod
     def _competitor_item(poi):
-        enrichment = poi.get("enrichment") or {}
+        enrichment = poi.get("supplement") or {}
         occupancy = {
             "peak_occupancy_rate": enrichment.get("peak_occupancy_rate"),
             "offpeak_occupancy_rate": enrichment.get("offpeak_occupancy_rate"),
+            "weekday_daytime_occupancy": enrichment.get("weekday_daytime_occupancy"),
+            "weekday_evening_occupancy": enrichment.get("weekday_evening_occupancy"),
+            "weekend_daytime_occupancy": enrichment.get("weekend_daytime_occupancy"),
+            "weekend_evening_occupancy": enrichment.get("weekend_evening_occupancy"),
             "label": "估算值" if enrichment.get("peak_occupancy_rate") is not None or enrichment.get("offpeak_occupancy_rate") is not None else None,
         }
         return {
-            "id": poi.get("id"),
+            "poi_id": poi.get("poi_id") or poi.get("id"),
             "name": poi.get("name"),
             "distance_m": poi.get("distance_m"),
-            "amap_data": {"address": poi.get("address"), "business_hours": poi.get("business_hours"), "phone": poi.get("phone")},
+            "amap_data": {"address": poi.get("address"), "business_category": poi.get("business_category"), "subcategory": poi.get("subcategory")},
             "manual_data": enrichment or None,
             "occupancy": occupancy,
-            "verified": bool(enrichment.get("is_manually_verified") or enrichment.get("verified_at")),
+            "verified": poi.get("verification_status") == "已人工核实",
         }
 
     @classmethod
     def _competitor_checklist(cls, competitors):
         return [
             cls._check_item("已采集竞品", bool(competitors), "自动采集", cls._brief(competitors), "未采集到竞品，建议扩大半径或现场核查周边门店。"),
-            cls._check_item("待补充竞品价格", all((poi.get("enrichment") or {}).get("normal_price") is not None for poi in competitors) if competitors else False, "人工填写", [], "补充普通区/高配区/包间/会员价格。"),
-            cls._check_item("待补充机器配置", all((poi.get("enrichment") or {}).get("cpu") or (poi.get("enrichment") or {}).get("gpu") for poi in competitors) if competitors else False, "人工填写", [], "补充 CPU、显卡、显示器尺寸和刷新率。"),
-            cls._check_item("待补充机器数量", all((poi.get("enrichment") or {}).get("machine_count") is not None for poi in competitors) if competitors else False, "人工填写", [], "补充机器数量，用于判断竞品强度。"),
-            cls._check_item("待补充上座率", all((poi.get("enrichment") or {}).get("peak_occupancy_rate") is not None for poi in competitors) if competitors else False, "估算", [], "现场观察高峰/平峰上座率，并标注为估算值。"),
-            cls._check_item("待补充充值活动", all((poi.get("enrichment") or {}).get("recharge_promotion") for poi in competitors) if competitors else False, "人工填写", [], "补充会员充值和促销活动。"),
-            cls._check_item("待补充开业年限", all((poi.get("enrichment") or {}).get("opened_at_estimate") for poi in competitors) if competitors else False, "估算", [], "通过点评记录、招牌、访谈等估算开业时间。"),
+            cls._check_item("待补充竞品价格", all((poi.get("supplement") or {}).get("normal_price") is not None for poi in competitors) if competitors else False, "人工填写", [], "补充普通区/高配区/包间/会员价格。"),
+            cls._check_item("待补充机器配置", all((poi.get("supplement") or {}).get("cpu") or (poi.get("supplement") or {}).get("gpu") for poi in competitors) if competitors else False, "人工填写", [], "补充 CPU、显卡、显示器尺寸和刷新率。"),
+            cls._check_item("待补充机器数量", all((poi.get("supplement") or {}).get("machine_count") is not None for poi in competitors) if competitors else False, "人工填写", [], "补充机器数量，用于判断竞品强度。"),
+            cls._check_item("待补充上座率", all((poi.get("supplement") or {}).get("peak_occupancy_rate") is not None or (poi.get("supplement") or {}).get("weekday_evening_occupancy") for poi in competitors) if competitors else False, "估算", [], "现场观察高峰/平峰上座率，并标注为估算值。"),
+            cls._check_item("待补充充值活动", all((poi.get("supplement") or {}).get("recharge_promotion") for poi in competitors) if competitors else False, "人工填写", [], "补充会员充值和促销活动。"),
+            cls._check_item("待补充开业年限", all((poi.get("supplement") or {}).get("opened_at_estimate") or (poi.get("supplement") or {}).get("opening_years") for poi in competitors) if competitors else False, "估算", [], "通过点评记录、招牌、访谈等估算开业时间。"),
         ]
 
     @classmethod
@@ -246,10 +266,66 @@ class StandardReportRenderer(ReportRenderer):
     def _match_pois(rows, keywords):
         matches = []
         for row in rows:
-            text = f"{row.get('name', '')} {row.get('category', '')} {row.get('type_code', '')}"
+            text = f"{row.get('name', '')} {row.get('business_category', '')} {row.get('subcategory', '')} {row.get('address', '')}"
             if any(keyword in text for keyword in keywords):
                 matches.append(row)
         return matches
+
+    @staticmethod
+    def _public_poi(poi):
+        public = poi.get("public") or {}
+        if public:
+            return public
+        return {
+            "poi_id": poi.get("id"),
+            "id": poi.get("id"),
+            "name": poi.get("name"),
+            "business_category": poi.get("category"),
+            "subcategory": poi.get("category"),
+            "address": poi.get("address"),
+            "distance_m": poi.get("distance_m"),
+            "data_source": "高德" if poi.get("source") == "amap" else "人工",
+            "verification_status": "已人工核实" if poi.get("is_manually_verified") else "未核实",
+            "missing_items": [],
+            "missing_items_text": "",
+            "supplement": poi.get("enrichment") or {},
+            "is_manual": poi.get("source") == "manual",
+        }
+
+    @staticmethod
+    def _has_supplement(poi):
+        supplement = poi.get("supplement") or {}
+        useful = {key: value for key, value in supplement.items() if key not in {"subcategory"} and value not in (None, "", [], {})}
+        return bool(useful)
+
+    @classmethod
+    def _category_summary(cls, pois):
+        categories = ["竞品", "住宅", "交通", "娱乐", "餐饮", "夜间配套", "敏感场所", "物业线索", "其他"]
+        items = []
+        for category in categories:
+            rows = [poi for poi in pois if poi.get("business_category") == category]
+            if not rows:
+                items.append({
+                    "category": category,
+                    "auto_count": 0,
+                    "manual_count": 0,
+                    "enriched_count": 0,
+                    "verified_count": 0,
+                    "missing_fields": ["未采集到，建议现场确认"],
+                })
+                continue
+            missing = []
+            for row in rows:
+                missing.extend(row.get("missing_items") or [])
+            items.append({
+                "category": category,
+                "auto_count": sum(1 for row in rows if row.get("data_source") == "高德"),
+                "manual_count": sum(1 for row in rows if row.get("is_manual") or row.get("data_source") != "高德"),
+                "enriched_count": sum(1 for row in rows if cls._has_supplement(row)),
+                "verified_count": sum(1 for row in rows if row.get("verification_status") == "已人工核实"),
+                "missing_fields": sorted(set(missing))[:20],
+            })
+        return items
 
     @staticmethod
     def _check_item(name, complete, data_type, value, note):
