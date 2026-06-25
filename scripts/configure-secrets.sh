@@ -4,7 +4,7 @@ set -Eeuo pipefail
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_DIR=/etc/esports-site-selection
 BACKEND_ENV="${ENV_DIR}/backend.env"
-FRONTEND_ENV="${APP_ROOT}/frontend/.env.production"
+FRONTEND_RUNTIME="${ENV_DIR}/frontend-runtime.json"
 APP_GROUP=esports-site-selection
 
 if [[ "${EUID}" -eq 0 ]]; then
@@ -40,6 +40,22 @@ get_existing() {
   local name="$1"
   if "${SUDO[@]}" test -r "${BACKEND_ENV}" 2>/dev/null; then
     "${SUDO[@]}" bash -c "set -a; source '${BACKEND_ENV}' 2>/dev/null; set +a; printf '%s' \"\${${name}:-}\""
+  fi
+}
+
+get_existing_runtime() {
+  local name="$1"
+  if "${SUDO[@]}" test -r "${FRONTEND_RUNTIME}" 2>/dev/null; then
+    "${SUDO[@]}" python3 - "${FRONTEND_RUNTIME}" "${name}" <<'PY'
+import json
+import sys
+path, key = sys.argv[1:3]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except Exception:
+    data = {}
+print(data.get(key, ""), end="")
+PY
   fi
 }
 
@@ -85,9 +101,12 @@ existing_amap_key="$(get_existing AMAP_WEB_SERVICE_KEY || true)"
 existing_amap_mock="$(get_existing AMAP_MOCK || true)"
 existing_scoring_path="$(get_existing SCORING_CONFIG_PATH || true)"
 existing_debug="$(get_existing ENABLE_DEBUG_ENDPOINTS || true)"
+existing_js_key="$(get_existing_runtime amapJsKey || true)"
+existing_js_security="$(get_existing_runtime amapSecurityJsCode || true)"
+existing_map_provider="$(get_existing_runtime mapProvider || true)"
 
 echo "将安全写入后端配置：${BACKEND_ENV}"
-echo "将写入前端构建配置：${FRONTEND_ENV}"
+echo "将写入前端公开运行配置：${FRONTEND_RUNTIME}"
 echo "注意：输入内容不会回显，脚本不会打印完整 Key。"
 echo
 
@@ -103,12 +122,13 @@ echo "M1 当前报告为规则评分报告，不调用大模型。"
 echo "因此本脚本不会收集 OPENAI_API_KEY、DEEPSEEK_API_KEY 或 LLM_API_KEY。"
 echo
 
-js_key="$(prompt_secret "高德 JavaScript API Key VITE_AMAP_JS_KEY" "")"
-js_security="$(prompt_secret "高德 JS 安全密钥 VITE_AMAP_SECURITY_JS_CODE" "")"
+js_key="$(prompt_secret "高德 JavaScript API Key amapJsKey" "${existing_js_key}")"
+js_security="$(prompt_secret "高德 JS 安全密钥 amapSecurityJsCode" "${existing_js_security}")"
+map_provider="$(prompt_visible "mapProvider" "${existing_map_provider:-amap}")"
 
 backend_tmp="$(mktemp)"
-frontend_tmp="$(mktemp)"
-trap 'rm -f "${backend_tmp}" "${frontend_tmp}"' EXIT
+runtime_tmp="$(mktemp)"
+trap 'rm -f "${backend_tmp}" "${runtime_tmp}"' EXIT
 
 cat >"${backend_tmp}" <<EOF
 APP_ENV=$(quote_env "${app_env:-production}")
@@ -119,13 +139,22 @@ SCORING_CONFIG_PATH=$(quote_env "${scoring_path:-app/scoring/default.yaml}")
 ENABLE_DEBUG_ENDPOINTS=$(quote_env "${debug_enabled:-false}")
 EOF
 
-cat >"${frontend_tmp}" <<EOF
-VITE_AMAP_JS_KEY=${js_key}
-VITE_AMAP_SECURITY_JS_CODE=${js_security}
-EOF
+python3 - "${runtime_tmp}" "${js_key}" "${js_security}" "${map_provider:-amap}" <<'PY'
+import json
+import sys
+path, key, security, provider = sys.argv[1:5]
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(
+        {"amapJsKey": key, "amapSecurityJsCode": security, "mapProvider": provider or "amap"},
+        f,
+        ensure_ascii=False,
+        indent=2,
+    )
+    f.write("\n")
+PY
 
 "${SUDO[@]}" install -m 0640 -o root -g "${APP_GROUP}" "${backend_tmp}" "${BACKEND_ENV}"
-install -m 0600 "${frontend_tmp}" "${FRONTEND_ENV}"
+"${SUDO[@]}" install -m 0644 -o root -g "${APP_GROUP}" "${runtime_tmp}" "${FRONTEND_RUNTIME}"
 
 echo
 echo "配置已写入。摘要："
@@ -134,10 +163,9 @@ echo "  DATABASE_URL=$(mask_secret "${database_url}")"
 echo "  AMAP_WEB_SERVICE_KEY=$(mask_secret "${amap_key}")"
 echo "  AMAP_MOCK=${amap_mock:-false}"
 echo "  ENABLE_DEBUG_ENDPOINTS=${debug_enabled:-false}"
-echo "  VITE_AMAP_JS_KEY=$(mask_secret "${js_key}")"
-echo "  VITE_AMAP_SECURITY_JS_CODE=$(mask_secret "${js_security}")"
+echo "  frontend-runtime.json.amapJsKey=$(mask_secret "${js_key}")"
+echo "  frontend-runtime.json.amapSecurityJsCode=$(mask_secret "${js_security}")"
+echo "  frontend-runtime.json.mapProvider=${map_provider:-amap}"
 echo
-echo "如果修改了 VITE_ 前端变量，必须重新执行："
-echo "  bash scripts/deploy.sh"
-echo "或至少执行："
-echo "  cd frontend && npm run build"
+echo "前端地图配置现在是运行时配置，修改 ${FRONTEND_RUNTIME} 后只需："
+echo "  sudo systemctl reload nginx"

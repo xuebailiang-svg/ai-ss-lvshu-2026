@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE=/etc/esports-site-selection/backend.env
+FRONTEND_RUNTIME_FILE=/etc/esports-site-selection/frontend-runtime.json
 SERVICE_NAME=esports-site-selection
 
 if [[ "${EUID}" -eq 0 ]]; then
@@ -73,6 +74,59 @@ check_env_file() {
   fi
 }
 
+ensure_frontend_runtime_config() {
+  if "${SUDO[@]}" test -s "${FRONTEND_RUNTIME_FILE}"; then
+    echo "OK: 前端运行时配置已存在：${FRONTEND_RUNTIME_FILE}"
+    return 0
+  fi
+  local legacy_env="${APP_ROOT}/frontend/.env.production"
+  if [[ -s "${legacy_env}" ]] && grep -Eq '^VITE_AMAP_JS_KEY=.+$' "${legacy_env}"; then
+    echo "WARNING: 检测到旧前端构建配置 ${legacy_env}，开始迁移到 ${FRONTEND_RUNTIME_FILE}。"
+    local runtime_tmp
+    runtime_tmp="$(mktemp)"
+    (
+      set -a
+      # shellcheck disable=SC1090
+      source "${legacy_env}"
+      set +a
+      python3 - "${runtime_tmp}" "${VITE_AMAP_JS_KEY:-}" "${VITE_AMAP_SECURITY_JS_CODE:-}" <<'PY'
+import json
+import sys
+path, key, security = sys.argv[1:4]
+with open(path, "w", encoding="utf-8") as f:
+    json.dump({"amapJsKey": key, "amapSecurityJsCode": security, "mapProvider": "amap"}, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+    )
+    "${SUDO[@]}" install -m 0644 -o root -g esports-site-selection "${runtime_tmp}" "${FRONTEND_RUNTIME_FILE}"
+    rm -f "${runtime_tmp}"
+    return 0
+  fi
+  echo "WARNING: ${FRONTEND_RUNTIME_FILE} 不存在，开始从示例创建。"
+  echo "         地图 Key 为空时页面会提示“前端高德地图 JS Key 未配置”。"
+  "${SUDO[@]}" install -m 0644 -o root -g esports-site-selection \
+    "${APP_ROOT}/deploy/frontend-runtime.example.json" "${FRONTEND_RUNTIME_FILE}"
+}
+
+check_frontend_runtime_config() {
+  ensure_frontend_runtime_config
+  if "${SUDO[@]}" python3 - "${FRONTEND_RUNTIME_FILE}" <<'PY'
+import json
+import sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(2)
+sys.exit(0 if data.get("amapJsKey") else 1)
+PY
+  then
+    echo "OK: 前端高德地图运行时 Key 已配置（不会打印完整 Key）。"
+  else
+    echo "WARNING: ${FRONTEND_RUNTIME_FILE} 缺少 amapJsKey，地图无法加载在线高德底图。"
+    echo "         修改该文件后只需 reload nginx，不需要重新 build。"
+  fi
+}
+
 command -v python3 >/dev/null 2>&1 || fail "缺少 python3，请先运行 scripts/bootstrap-ubuntu-direct.sh。"
 command -v nginx >/dev/null 2>&1 || fail "缺少 nginx，请先运行 scripts/bootstrap-ubuntu-direct.sh。"
 command -v curl >/dev/null 2>&1 || fail "缺少 curl，请先运行 scripts/bootstrap-ubuntu-direct.sh。"
@@ -85,6 +139,7 @@ python3 -m venv "${APP_ROOT}/backend/.venv"
 "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
 
 echo "[2/6] 安装前端依赖并构建"
+check_frontend_runtime_config
 if command -v npm >/dev/null 2>&1; then
   npm --prefix "${APP_ROOT}/frontend" install --no-audit --no-fund
   npm --prefix "${APP_ROOT}/frontend" run build

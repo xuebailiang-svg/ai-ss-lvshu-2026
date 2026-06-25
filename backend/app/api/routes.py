@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,73 @@ def health_config():
         "model": None,
         "note": "M1/M1.5 当前报告为规则评分报告，不调用大模型。",
     }
+
+
+def mask_secret(value: str | None) -> str | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}****{value[-4:]}"
+
+
+def read_frontend_runtime_config() -> dict[str, Any]:
+    path = Path(get_settings().frontend_runtime_config_path)
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"_invalid": True}
+    return data if isinstance(data, dict) else {"_invalid": True}
+
+
+@router.get("/system/runtime-config")
+def runtime_config():
+    data = read_frontend_runtime_config()
+    if data.get("_invalid"):
+        return {"amapJsKey": "", "amapSecurityJsCode": "", "mapProvider": "amap", "invalid": True}
+    return {
+        "amapJsKey": str(data.get("amapJsKey") or ""),
+        "amapSecurityJsCode": str(data.get("amapSecurityJsCode") or ""),
+        "mapProvider": str(data.get("mapProvider") or "amap"),
+    }
+
+
+@router.get("/system/config-status")
+def system_config_status():
+    settings = get_settings()
+    runtime = read_frontend_runtime_config()
+    js_key = "" if runtime.get("_invalid") else str(runtime.get("amapJsKey") or "")
+    js_code = "" if runtime.get("_invalid") else str(runtime.get("amapSecurityJsCode") or "")
+    return {
+        "backend": {
+            "amapWebServiceKeyConfigured": bool(settings.amap_web_service_key),
+            "amapMock": settings.amap_mock,
+            "databaseConfigured": bool(settings.database_url),
+        },
+        "frontend": {
+            "runtimeConfigPath": settings.frontend_runtime_config_path,
+            "runtimeConfigExists": bool(runtime) and not runtime.get("_invalid"),
+            "runtimeConfigInvalid": bool(runtime.get("_invalid")),
+            "amapJsKeyConfigured": bool(js_key),
+            "amapSecurityJsCodeConfigured": bool(js_code),
+            "amapJsKeyMasked": mask_secret(js_key),
+            "mapProvider": str(runtime.get("mapProvider") or "amap") if not runtime.get("_invalid") else "amap",
+        },
+    }
+
+
+@router.get("/system/amap/geocode-test")
+async def system_amap_geocode_test(city: str = "", address: str = ""):
+    if not address.strip():
+        raise HTTPException(400, "address is required")
+    try:
+        data = await provider().geocode(address, city or None)
+        return {"ok": True, "result": data}
+    except ProviderError as exc:
+        raise HTTPException(502, exc.to_dict())
 
 
 @router.post("/evaluations", response_model=EvaluationOut, status_code=201)

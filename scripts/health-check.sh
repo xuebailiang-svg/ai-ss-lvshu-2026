@@ -60,6 +60,12 @@ check_command "backend API health ${BACKEND_URL}/api/health" \
 check_command "nginx API proxy ${BASE_URL}/api/health" \
   curl --fail --silent --show-error --max-time 8 "${BASE_URL}/api/health"
 
+check_command "system config status ${BASE_URL}/api/system/config-status" \
+  curl --fail --silent --show-error --max-time 8 "${BASE_URL}/api/system/config-status"
+
+check_command "frontend runtime config ${BASE_URL}/runtime-config.json" \
+  curl --fail --silent --show-error --max-time 8 "${BASE_URL}/runtime-config.json"
+
 check_command "frontend home page ${BASE_URL}/" \
   curl --fail --silent --show-error --head --max-time 8 "${BASE_URL}/"
 

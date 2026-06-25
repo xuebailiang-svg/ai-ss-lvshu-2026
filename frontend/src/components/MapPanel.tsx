@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {EnvironmentOutlined} from '@ant-design/icons';
+import {loadRuntimeConfig} from '../runtimeConfig';
 
 declare global {
   interface Window {
@@ -9,19 +10,34 @@ declare global {
 }
 
 let loader: Promise<void> | undefined;
+let loadedKey = '';
 
-function loadAmap() {
-  const key = import.meta.env.VITE_AMAP_JS_KEY as string | undefined;
-  if (!key) return Promise.reject(new Error('未配置 VITE_AMAP_JS_KEY'));
-  if (window.AMap) return Promise.resolve();
-  if (!loader) {
-    const code = import.meta.env.VITE_AMAP_SECURITY_JS_CODE as string | undefined;
+async function loadAmap() {
+  const config = await loadRuntimeConfig();
+  const key = config.amapJsKey;
+  if (!key) return Promise.reject(new Error('前端高德地图 JS Key 未配置，请在服务器配置 /etc/esports-site-selection/frontend-runtime.json'));
+  if (window.AMap && loadedKey === key) return Promise.resolve();
+  if (!loader || loadedKey !== key) {
+    const code = config.amapSecurityJsCode;
     if (code) window._AMapSecurityConfig = {securityJsCode: code};
     loader = new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('高德地图 JavaScript API 加载失败'));
+      script.async = true;
+      script.onload = () => {
+        if (window.AMap) {
+          loadedKey = key;
+          resolve();
+        }
+        else {
+          loader = undefined;
+          reject(new Error('高德地图 JavaScript SDK 已加载但 AMap 未初始化，请检查 Key、securityJsCode、域名白名单或浏览器 console。'));
+        }
+      };
+      script.onerror = () => {
+        loader = undefined;
+        reject(new Error('高德地图 JavaScript API 加载失败，请检查网络、Key、域名白名单或安全密钥配置。'));
+      };
       document.head.appendChild(script);
     });
   }
@@ -37,8 +53,11 @@ export default function MapPanel({
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
+    setError('');
     loadAmap()
       .then(() => {
         if (!container.current) return;
@@ -61,19 +80,23 @@ export default function MapPanel({
           }
           map.current.setZoomAndCenter(15, position);
         }
+        setLoading(false);
       })
-      .catch(error => setError(error.message));
+      .catch(error => {
+        setLoading(false);
+        setError(error.message);
+      });
   }, [site?.longitude, site?.latitude, site?.formatted_address]);
 
   return (
     <section className="map-panel">
       <div ref={container} className="amap-container" />
-      {error && (
+      {(error || loading) && (
         <>
           <div className="map-grid" />
           <div className="map-center">
             <EnvironmentOutlined />
-            <strong>{site?.formatted_address || '定位后将在地图中显示候选点'}</strong>
+            <strong>{error || (site?.formatted_address || '正在加载高德地图')}</strong>
             {site?.longitude && (
               <span>
                 {site.longitude.toFixed(6)}, {site.latitude?.toFixed(6)} · GCJ-02
@@ -83,7 +106,7 @@ export default function MapPanel({
         </>
       )}
       <div className="map-note">
-        {error || '高德地图 · GCJ-02'}；Web Service Key 仅由后端使用
+        {error || (loading ? '正在加载高德地图' : '高德地图 · GCJ-02')}；Web Service Key 仅由后端使用
       </div>
     </section>
   );

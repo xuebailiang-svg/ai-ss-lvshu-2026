@@ -30,3 +30,5 @@ export const report = (id: string) => api.get(`/evaluations/${id}/report`).then(
 export const saveCompetitorEnrichment = (id: number, data: CompetitorEnrichment) => api.put(`/competitors/${id}/enrichment`, data).then(response => response.data);
 export const competitorHistory = (id: number) => api.get(`/competitors/${id}/enrichments`).then(response => response.data);
 export const compareEvaluations = (evaluation_ids: number[]) => api.post('/evaluations/compare', {evaluation_ids}).then(response => response.data);
+export const configStatus = () => api.get('/system/config-status').then(response => response.data);
+export const amapGeocodeTest = (params: {city: string; address: string}) => api.get('/system/amap/geocode-test', {params}).then(response => response.data);

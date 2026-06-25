@@ -69,9 +69,9 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 ### 高德 Key
 
 - 后端：`AMAP_WEB_SERVICE_KEY`，只放在 `/etc/esports-site-selection/backend.env`。
-- 前端：`VITE_AMAP_JS_KEY` 和 `VITE_AMAP_SECURITY_JS_CODE`，写入 `frontend/.env.production`，会被打包到浏览器静态资源。
+- 前端：`amapJsKey` 和 `amapSecurityJsCode`，写入 `/etc/esports-site-selection/frontend-runtime.json`，通过 `/runtime-config.json` 运行时读取。
 
-修改任何 `VITE_` 变量后必须重新执行 `bash scripts/deploy.sh` 或 `cd frontend && npm run build`。
+修改前端 runtime 配置后只需执行 `sudo systemctl reload nginx`，不需要重新执行 `npm run build`。
 
 ### 大模型说明
 

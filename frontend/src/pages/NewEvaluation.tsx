@@ -15,6 +15,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   message,
 } from 'antd';
 import type {CompetitorEnrichment, Evaluation, Poi, PropertySurvey} from '../types';
@@ -326,8 +327,10 @@ export default function NewEvaluation() {
         <div className="actionbar">
           <Button onClick={() => run('geo')} disabled={!ev || !!busy}>1 定位地址</Button>
           <Button onClick={() => run('poi')} disabled={!ev?.site?.longitude || !!busy}>2 采集 POI</Button>
-          <Button type="primary" onClick={() => run('score')} disabled={!ev || !!busy}>3 生成评分</Button>
-          {ev?.result && <Button onClick={() => nav(`/reports/${ev.id}`)}>查看报告</Button>}
+          <Button type="primary" onClick={() => run('score')} disabled={!ev || !!busy}>3 生成评分/报告</Button>
+          <Tooltip title={ev?.result ? '打开本次评估报告' : '请先点击“3 生成评分/报告”'}>
+            <Button onClick={() => ev && nav(`/reports/${ev.id}`)} disabled={!ev?.result || !!busy}>4 查看报告</Button>
+          </Tooltip>
         </div>
         {busy && <div className="loading"><Spin /> {busy}</div>}
         {error && (

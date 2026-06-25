@@ -1,5 +1,15 @@
 def payload(**prop): return {"name":"北京测试点","city":"北京","address":"东长安街1号","radius":3000,"property":{"area_sqm":800,"monthly_rent":80000,"floor":"1F","street_facing":True,"night_entrance":True,"use_allowed":True,"power_sufficient":True,"fire_confirmed":True,**prop}}
 def test_health(client): assert client.get("/api/health").json()["status"]=="ok"
+def test_system_config_status_and_geocode_test(client):
+    status=client.get("/api/system/config-status").json()
+    assert "DATABASE_URL" not in str(status)
+    assert "AMAP_WEB_SERVICE_KEY" not in str(status)
+    assert "backend" in status and "frontend" in status
+    runtime=client.get("/api/system/runtime-config").json()
+    assert runtime["mapProvider"]=="amap"
+    result=client.get("/api/system/amap/geocode-test",params={"city":"西安市","address":"雁塔区小寨西路"}).json()
+    assert result["ok"] is True
+    assert result["result"]["coordinate_system"]=="GCJ02"
 def test_create_query_and_workflow(client):
     r=client.post("/api/evaluations",json=payload()); assert r.status_code==201; id=r.json()["id"]
     assert client.get(f"/api/evaluations/{id}").status_code==200

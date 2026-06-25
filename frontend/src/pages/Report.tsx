@@ -15,6 +15,35 @@ type CompetitorReportItem = {
   verified?: boolean;
 };
 
+function dataTypeTag(type?: string) {
+  if (type === '自动采集') return <Tag color="blue">自动采集</Tag>;
+  if (type === '人工填写') return <Tag color="green">人工填写</Tag>;
+  if (type === '估算') return <Tag color="purple">估算</Tag>;
+  return <Tag color="orange">未核实</Tag>;
+}
+
+function ChecklistTable({items}: {items?: any[]}) {
+  return (
+    <Table
+      size="small"
+      rowKey={(row, index) => `${row.name}-${index}`}
+      pagination={false}
+      dataSource={items || []}
+      columns={[
+        {title: '核查项', dataIndex: 'name'},
+        {title: '状态', dataIndex: 'status', render: (value: string) => value === '已确认' ? <Tag color="green">已确认</Tag> : <Tag color="orange">待人工核实</Tag>},
+        {title: '数据属性', dataIndex: 'data_type', render: dataTypeTag},
+        {title: '结果', dataIndex: 'value', render: (value: any) => {
+          if (Array.isArray(value)) return value.length ? value.map(item => item.name || item).join('；') : '未采集到';
+          if (value && typeof value === 'object') return Object.entries(value).map(([key, val]) => `${key}: ${val}`).join('；') || '-';
+          return value ?? '未采集到';
+        }},
+        {title: '说明', dataIndex: 'note', render: (value?: string) => value || '-'},
+      ]}
+    />
+  );
+}
+
 export default function ReportPage() {
   const {id} = useParams();
   const [ev, setEv] = useState<Evaluation>();
@@ -28,7 +57,12 @@ export default function ReportPage() {
         setEv(evaluation);
         setRep(reportData);
       })
-      .catch(error => setError(error.response?.data?.detail || error.message));
+      .catch(error => {
+        const status = error.response?.status;
+        const detail = error.response?.data?.detail;
+        if (status === 409) setError('请先生成评分。');
+        else setError(typeof detail === 'string' ? detail : error.message);
+      });
   }, [id]);
 
   if (error) return <Result status="warning" title="报告暂不可用" subTitle={error} />;
@@ -59,6 +93,11 @@ export default function ReportPage() {
       </Card>
 
       <Card title="3. 综合评分">
+        <div className="score">{score.total_score}<small>/100</small></div>
+        <h3>{score.recommendation}</h3>
+      </Card>
+
+      <Card title="4. 各维度得分">
         <ReactECharts
           style={{height: Math.max(360, dimensionEntries.length * 34)}}
           option={{
@@ -80,7 +119,7 @@ export default function ReportPage() {
         />
       </Card>
 
-      <Card title="4. 数据完整度和可信度">
+      <Card title="数据完整度和可信度">
         <Descriptions column={2} items={[
           {key: 'c', label: '完整度', children: <Progress percent={score.completeness} />},
           {key: 'f', label: '可信度', children: <Progress percent={score.confidence} />},
@@ -90,6 +129,7 @@ export default function ReportPage() {
       </Card>
 
       <Card title="5. 竞品分析">
+        <Alert type="info" showIcon message="竞品数据分层展示" description="已采集竞品来自高德 POI；价格、机器配置、机器数量、上座率、充值活动、开业年限需要人工调研补充。" />
         <Table
           size="small"
           rowKey="id"
@@ -105,34 +145,36 @@ export default function ReportPage() {
             {title: '核实', render: (_, row: CompetitorReportItem) => row.verified ? <Tag color="green">人工核实</Tag> : <Tag color="orange">未核实</Tag>},
           ]}
         />
+        <ChecklistTable items={sections.competitors?.checklist || []} />
       </Card>
 
-      <Card title="6. 交通分析">
+      <Card title="6. 周边配套">
+        <ChecklistTable items={sections.surroundings?.checklist || sections.commercial?.checklist || []} />
+      </Card>
+
+      <Card title="7. 交通与可达性">
         {(sections.traffic?.items || []).length ? (
           <List size="small" dataSource={sections.traffic?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
         ) : emptyText('交通')}
+        <ChecklistTable items={sections.traffic?.checklist || []} />
       </Card>
 
-      <Card title="6.1 敏感场所">
-        {(sections.sensitive_places?.items || []).length ? (
-          <List size="small" dataSource={sections.sensitive_places?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
-        ) : emptyText('敏感场所')}
-      </Card>
-
-      <Card title="7. 人口代理指标">
+      <Card title="8. 人口代理">
         <Alert type="warning" showIcon message="人口代理指标不是实际人口" description={sections.population_proxy?.note || rep.data_note} />
         {(sections.population_proxy?.items || []).length ? (
           <List size="small" dataSource={sections.population_proxy?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
         ) : emptyText('人口代理指标')}
+        <ChecklistTable items={sections.population_proxy?.checklist || []} />
       </Card>
 
-      <Card title="8. 商业配套">
-        {(sections.commercial?.items || []).length ? (
-          <List size="small" dataSource={sections.commercial?.items || []} renderItem={(item: any) => <List.Item>{item.name} · 自动采集</List.Item>} />
-        ) : emptyText('商业配套')}
+      <Card title="9. 敏感场所与合规">
+        {(sections.sensitive_places?.items || []).length ? (
+          <List size="small" dataSource={sections.sensitive_places?.items || []} renderItem={(item: any) => <List.Item>{item.name} · {item.distance_m || '-'}m · 自动采集</List.Item>} />
+        ) : emptyText('敏感场所')}
+        <ChecklistTable items={sections.sensitive_places?.checklist || []} />
       </Card>
 
-      <Card title="9. 物业与成本">
+      <Card title="10. 物业与租金">
         <Descriptions column={2} items={[
           {key: 'rent', label: '月总租金', children: sections.property_cost?.rent_summary?.monthly_rent ?? '-'},
           {key: 'sqm_month', label: '元/㎡/月', children: sections.property_cost?.rent_summary?.rent_per_sqm_month ?? '-'},
@@ -140,14 +182,16 @@ export default function ReportPage() {
           {key: 'machine', label: '每台机器分摊月租金', children: sections.property_cost?.rent_summary?.rent_per_machine_month ?? '-'},
           {key: 'source', label: '数据属性', children: <Tag color="blue">人工填写数据</Tag>},
         ]} />
+        <ChecklistTable items={sections.property_cost?.checklist || []} />
       </Card>
 
-      <Card title="10. 待人工核实事项">
-        <List dataSource={score.review_items} renderItem={item => <List.Item><Tag color="orange">待核实</Tag>{item}</List.Item>} />
+      <Card title="11. 消防、供电、网络、夜间入口">
+        <ChecklistTable items={sections.infrastructure?.checklist || []} />
       </Card>
 
-      <Card title="11. 数据来源">
+      <Card title="12. 数据来源和可信度">
         <Descriptions column={1} items={[
+          {key: 'quality', label: '数据完整度/可信度', children: `${score.completeness}% / ${score.confidence}%`},
           {key: 'auto', label: '自动采集数据', children: (sections.data_sources?.auto || []).join('；')},
           {key: 'manual', label: '人工填写数据', children: (sections.data_sources?.manual || []).join('；')},
           {key: 'estimated', label: '估算数据', children: (sections.data_sources?.estimated || []).join('；')},
@@ -155,7 +199,15 @@ export default function ReportPage() {
         ]} />
       </Card>
 
-      <Card title="12. 评分规则说明">
+      <Card title="13. 人工核实清单">
+        <List dataSource={sections.manual_checklist?.items || score.review_items} renderItem={(item: string) => <List.Item><Tag color="orange">待核实</Tag>{item}</List.Item>} />
+      </Card>
+
+      <Card title="14. 下一步调研建议">
+        <List dataSource={sections.next_steps?.items || []} renderItem={(item: string) => <List.Item>{item}</List.Item>} />
+      </Card>
+
+      <Card title="评分规则说明">
         <p>评分规则版本：{score.model_version}</p>
         <p>{sections.scoring_rules?.note || '硬性风险与普通评分分离，高分不能覆盖准入风险。'}</p>
       </Card>
