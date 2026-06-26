@@ -90,6 +90,7 @@ export default function History() {
             title: '操作',
             render: (_, row) => (
               <Space>
+                <Button onClick={() => nav(`/evaluations/${row.id}`)}>继续编辑</Button>
                 <Button onClick={() => nav(`/reports/${row.id}`)}>打开报告</Button>
                 <Button onClick={() => rescore(row.id)}>重新评分</Button>
               </Space>

@@ -37,6 +37,8 @@ def test_public_poi_list_hides_internal_fields(client):
     assert "provider_poi_id" not in row
     assert "raw_data" not in row
     assert "confidence" not in row
+    distances = [item["distance_m"] for item in data["items"] if item["distance_m"] is not None]
+    assert distances == sorted(distances)
 
 
 def test_manual_poi_persists_after_amap_recollect(client):
@@ -77,6 +79,14 @@ def test_category_csv_export_and_import(client):
     assert "latitude" not in header.lower()
     assert "confidence" not in header.lower()
     assert "raw_data" not in header.lower()
+    csv_distances = []
+    for line in text.splitlines()[1:]:
+        if not line.strip():
+            continue
+        parts = line.split(",")
+        if len(parts) > 5 and parts[5].strip().isdigit():
+            csv_distances.append(int(parts[5].strip()))
+    assert csv_distances == sorted(csv_distances)
 
     csv_text = (
         "poi_id,名称,业务类别,细分类,地址,直线距离,步行距离,步行时间,数据来源,核实状态,待补充项,备注,机器数量,CPU,显卡,普通区价格\n"
@@ -106,3 +116,43 @@ def test_csv_import_rejects_poi_outside_current_evaluation(client):
     assert result["success_count"] == 0
     assert result["failed_count"] == 1
     assert "不属于当前评估" in result["errors"][0]["reason"]
+
+
+def test_poi_keyword_diagnostics_and_statistics(client):
+    evaluation_id = prepared_evaluation(client)
+    collected = client.post(f"/api/evaluations/{evaluation_id}/collect-pois").json()
+    queries = collected["diagnostics"]["queries"]
+    keywords = [item["keywords"][0] for item in queries if item.get("keywords")]
+    assert "地铁站" in keywords
+    assert "公交站" in keywords
+    assert "停车场" in keywords
+    assert "KTV" in keywords
+    assert "台球厅" in keywords
+    assert "电影院" in keywords
+    assert "酒吧" in keywords
+
+    data = client.get(f"/api/evaluations/{evaluation_id}/pois").json()
+    assert any(item["business_category"] == "交通" and "地铁" in item["subcategory"] for item in data["items"])
+    assert any(item["business_category"] == "交通" and "公交" in item["subcategory"] for item in data["items"])
+    assert any(item["business_category"] == "娱乐" for item in data["items"])
+    assert "交通" in data["statistics"]
+    assert data["statistics"]["交通"]["500米内地铁站数量"] >= 1
+    assert data["statistics"]["交通"]["500米内公交站数量"] >= 1
+    assert data["statistics"]["娱乐"]["1公里内娱乐POI数量"] >= 1
+
+
+def test_subtype_templates_and_missing_stats_do_not_default_to_zero(client):
+    templates = client.get("/api/poi/templates").json()
+    traffic = templates["categories"]["交通"]
+    metro_fields = traffic["subtype_templates"]["地铁站"]
+    parking_fields = traffic["subtype_templates"]["停车场"]
+    assert "first_service_time" in metro_fields
+    assert "parking_fee" not in metro_fields
+    assert "parking_fee" in parking_fields
+    assert "first_service_time" not in parking_fields
+
+    evaluation_id = prepared_evaluation(client)
+    stats = client.get(f"/api/evaluations/{evaluation_id}/pois").json()["statistics"]
+    assert stats["餐饮/夜间配套"]["开业年限已补充数量"] == 0
+    assert stats["餐饮/夜间配套"]["开业年限大于5年数量"] == 0
+    assert stats["餐饮/夜间配套"]["评分已补充数量"] == 0

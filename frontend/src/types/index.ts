@@ -97,6 +97,7 @@ export type PoiTemplate = {
   sub_label: string;
   fields: PoiTemplateField[];
   required_labels: string[];
+  subtype_templates?: Record<string, string[]>;
 };
 
 export type PoiTemplates = {
@@ -127,6 +128,7 @@ export type PoiListResponse = {
   evaluation_id: number;
   total: number;
   counts: Record<string, number>;
+  statistics?: Record<string, Record<string, number | string>>;
   items: PoiPublic[];
 };
 

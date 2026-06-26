@@ -105,6 +105,10 @@ POI_TEMPLATES: dict[str, dict[str, Any]] = {
             ("last_service_time", "末班时间"),
             ("parking_space_count", "停车位数量"),
             ("parking_fee", "停车费"),
+            ("parking_fee_unit", "停车费单位"),
+            ("night_parking_supported", "是否支持夜间停车"),
+            ("easy_to_fill", "是否容易满位"),
+            ("entrance_convenient", "是否距离门店入口方便"),
             ("night_accessible", "夜间是否方便到达"),
             ("has_viaduct_barrier", "是否存在高架阻隔"),
             ("has_railway_barrier", "是否存在铁路阻隔"),
@@ -190,6 +194,15 @@ POI_TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 EXPORT_KEY_TO_CATEGORY = {cfg["export_key"]: name for name, cfg in POI_TEMPLATES.items()}
+
+POI_SUBTYPE_TEMPLATES: dict[str, dict[str, list[str]]] = {
+    "交通": {
+        "地铁站": ["foot_traffic_level", "peak_period", "first_service_time", "last_service_time", "night_accessible", "has_viaduct_barrier", "has_railway_barrier", "has_river_barrier", "has_greenbelt_barrier", "notes"],
+        "公交站": ["foot_traffic_level", "peak_period", "first_service_time", "last_service_time", "night_accessible", "has_viaduct_barrier", "has_railway_barrier", "has_river_barrier", "has_greenbelt_barrier", "notes"],
+        "停车场": ["parking_space_count", "parking_fee", "parking_fee_unit", "night_parking_supported", "easy_to_fill", "entrance_convenient", "notes"],
+        "停车库": ["parking_space_count", "parking_fee", "parking_fee_unit", "night_parking_supported", "easy_to_fill", "entrance_convenient", "notes"],
+    },
+}
 
 
 def provider():
@@ -406,7 +419,17 @@ async def collect_pois(id: int, db: Session = Depends(get_db)):
         raise HTTPException(409, "Please geocode the candidate site first")
     ev.status = JobStatus.running
     db.commit()
-    cats = ["网吧", "网咖", "电竞馆", "电竞酒店", "小学", "中学", "幼儿园", "大学", "中职", "技校", "政府机构", "医院", "地铁站", "公交站", "停车场", "住宅小区", "公寓", "宿舍", "写字楼", "商场", "餐饮", "奶茶", "便利店", "KTV", "酒吧", "台球厅", "电影院", "密室逃脱", "酒店", "夜市"]
+    cats = [
+        "网吧", "网咖", "电竞馆", "电竞酒店",
+        "小学", "中学", "幼儿园", "政府机构", "医院",
+        "地铁站", "地铁", "轨道交通", "地铁出入口",
+        "公交站", "公交车站", "公交站牌", "公交枢纽", "客运站",
+        "停车场", "停车库", "地下停车场", "路边停车", "充电站",
+        "住宅小区", "公寓", "宿舍", "写字楼", "大学", "中职", "技校",
+        "商场", "餐饮", "奶茶", "便利店", "酒店", "夜市",
+        "KTV", "量贩KTV", "歌厅", "酒吧", "台球", "台球厅",
+        "电影院", "影城", "密室逃脱", "剧本杀", "桌游", "棋牌室",
+    ]
     try:
         amap_provider = provider()
         rows = await amap_provider.search_nearby(ev.site.longitude, ev.site.latitude, ev.radius, cats)
@@ -494,6 +517,7 @@ def poi_templates():
                 "sub_label": cfg["sub_label"],
                 "fields": [{"key": key, "label": label} for key, label in cfg["fields"]],
                 "required_labels": cfg["required_labels"],
+                "subtype_templates": POI_SUBTYPE_TEMPLATES.get(category, {}),
             }
             for category, cfg in POI_TEMPLATES.items()
         },
@@ -503,11 +527,12 @@ def poi_templates():
 @router.get("/evaluations/{id}/pois")
 def evaluation_pois(id: int, db: Session = Depends(get_db)):
     ev = evaluation_or_404(db, id)
-    items = [poi_public_dict(poi) for poi in ev.pois]
+    items = sorted_poi_items([poi_public_dict(poi) for poi in ev.pois])
     return {
         "evaluation_id": id,
         "total": len(items),
         "counts": dict(Counter(item["business_category"] for item in items)),
+        "statistics": poi_statistics(items),
         "items": items,
     }
 
@@ -612,7 +637,7 @@ def update_poi_enrichment(evaluation_id: int, poi_id: int, body: dict[str, Any],
 def export_pois(id: int, category: str = "competitor", db: Session = Depends(get_db)):
     ev = evaluation_or_404(db, id)
     business_category = category_from_export_key(category)
-    rows = [poi_public_dict(poi) for poi in ev.pois if poi_public_dict(poi)["business_category"] == business_category]
+    rows = sorted_poi_items([poi_public_dict(poi) for poi in ev.pois if poi_public_dict(poi)["business_category"] == business_category])
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=export_headers(business_category), extrasaction="ignore")
     writer.writeheader()
@@ -797,7 +822,14 @@ def infer_subcategory(poi) -> str:
     if poi.generic_enrichment and (poi.generic_enrichment.payload or {}).get("subcategory"):
         return str(poi.generic_enrichment.payload["subcategory"])
     text = f"{poi.name or ''} {poi.category or ''}"
-    for key in ["电竞酒店", "网咖", "网吧", "电竞馆", "住宅小区", "公寓", "写字楼", "大学", "中职", "技校", "地铁站", "公交站", "停车场", "KTV", "酒吧", "台球厅", "电影院", "密室", "剧本杀", "夜市摊", "便利店", "奶茶", "餐馆", "餐厅", "小学", "中学", "幼儿园", "政府机构", "医院"]:
+    for key in [
+        "电竞酒店", "网咖", "网吧", "电竞馆",
+        "住宅小区", "青年公寓", "公寓", "写字楼", "大学", "中职", "技校",
+        "地铁出入口", "地铁站", "轨道交通", "公交枢纽", "公交车站", "公交站牌", "公交站", "客运站", "地下停车场", "停车库", "停车场", "充电站",
+        "量贩KTV", "KTV", "歌厅", "酒吧", "台球厅", "台球", "电影院", "影城", "密室逃脱", "密室", "剧本杀", "桌游", "棋牌室",
+        "夜市摊", "烧烤", "火锅", "便利店", "奶茶", "餐馆", "餐厅",
+        "小学", "中学", "幼儿园", "政府机构", "医院",
+    ]:
         if key in text:
             return key
     return poi.category or "其他"
@@ -815,6 +847,114 @@ def parse_int(value: Any) -> int | None:
         return int(float(str(value).replace("m", "").replace("米", "").strip()))
     except ValueError:
         return None
+
+
+def parse_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace("%", "").strip())
+    except ValueError:
+        return None
+
+
+def distance_sort_key(row: dict[str, Any]):
+    distance = parse_int(row.get("distance_m"))
+    return (distance is None, distance if distance is not None else 10**12, str(row.get("name") or ""))
+
+
+def sorted_poi_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=distance_sort_key)
+
+
+def poi_statistics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = sorted_poi_items(rows)
+
+    def by_category(category: str):
+        return [row for row in rows if row.get("business_category") == category]
+
+    def by_categories(*categories: str):
+        wanted = set(categories)
+        return [row for row in rows if row.get("business_category") in wanted]
+
+    def within(items, meters: int):
+        return sum(1 for row in items if (dist := parse_int(row.get("distance_m"))) is not None and dist <= meters)
+
+    def subtype_contains(items, *keywords: str):
+        return [row for row in items if any(keyword in f"{row.get('subcategory') or ''} {row.get('name') or ''}" for keyword in keywords)]
+
+    def supplement_value(row, key: str):
+        return (row.get("supplement") or {}).get(key)
+
+    def known_count(items, key: str):
+        return sum(1 for row in items if supplement_value(row, key) not in (None, "", [], {}))
+
+    def bool_count(items, key: str, accepted=("是", "true", "True", True)):
+        return sum(1 for row in items if supplement_value(row, key) in accepted)
+
+    competitors = by_category("竞品")
+    food = by_categories("餐饮", "夜间配套")
+    entertainment = by_category("娱乐")
+    traffic = by_category("交通")
+    sensitive = by_category("敏感场所")
+    metro = subtype_contains(traffic, "地铁", "轨道交通")
+    bus = subtype_contains(traffic, "公交", "客运")
+    parking = subtype_contains(traffic, "停车", "停车库")
+    schools = subtype_contains(sensitive, "小学", "中学", "幼儿园", "学校")
+    government = subtype_contains(sensitive, "政府", "机关", "政务")
+
+    food_opening_years = [parse_float(supplement_value(row, "opening_years")) for row in food]
+    food_opening_years = [value for value in food_opening_years if value is not None]
+    food_ratings = [parse_float(supplement_value(row, "online_rating")) for row in food]
+    food_ratings = [value for value in food_ratings if value is not None]
+
+    return {
+        "竞品": {
+            "500米内竞品数量": within(competitors, 500),
+            "1公里内竞品数量": within(competitors, 1000),
+            "2公里内竞品数量": within(competitors, 2000),
+            "3公里内竞品数量": within(competitors, 3000),
+            "已补充机器数量的竞品数量": known_count(competitors, "machine_count"),
+            "已补充上座率的竞品数量": sum(1 for row in competitors if any(supplement_value(row, key) not in (None, "", [], {}) for key in ("peak_occupancy_rate", "weekday_daytime_occupancy", "weekday_evening_occupancy", "weekend_daytime_occupancy", "weekend_evening_occupancy"))),
+            "电竞酒店数量": len(subtype_contains(competitors, "电竞酒店")),
+            "网咖/电竞馆数量": len(subtype_contains(competitors, "网咖", "电竞馆", "网吧")),
+        },
+        "餐饮/夜间配套": {
+            "500米内餐饮数量": within(food, 500),
+            "1公里内餐饮数量": within(food, 1000),
+            "夜间营业数量": bool_count(food, "night_open"),
+            "24小时营业数量": bool_count(food, "open_24h"),
+            "开业年限已补充数量": len(food_opening_years),
+            "开业年限大于5年数量": sum(1 for value in food_opening_years if value > 5),
+            "开业年限大于10年数量": sum(1 for value in food_opening_years if value > 10),
+            "评分已补充数量": len(food_ratings),
+            "评分大于等于4.5数量": sum(1 for value in food_ratings if value >= 4.5),
+            "便利店数量": len(subtype_contains(food, "便利店")),
+            "夜市摊/烧烤/火锅数量": len(subtype_contains(food, "夜市", "烧烤", "火锅")),
+        },
+        "娱乐": {
+            "1公里内娱乐POI数量": within(entertainment, 1000),
+            "KTV数量": len(subtype_contains(entertainment, "KTV", "歌厅")),
+            "台球厅数量": len(subtype_contains(entertainment, "台球")),
+            "电影院数量": len(subtype_contains(entertainment, "电影院", "影城")),
+            "酒吧数量": len(subtype_contains(entertainment, "酒吧")),
+            "夜间营业数量": bool_count(entertainment, "night_open"),
+            "评论数量已补充的数量": known_count(entertainment, "review_count"),
+        },
+        "交通": {
+            "500米内地铁站数量": within(metro, 500),
+            "500米内公交站数量": within(bus, 500),
+            "1公里内公交站数量": within(bus, 1000),
+            "500米内停车场数量": within(parking, 500),
+            "已补充步行距离的交通POI数量": known_count(traffic, "walking_distance_m"),
+        },
+        "敏感场所": {
+            "200米内学校/幼儿园数量": within(schools, 200),
+            "500米内学校/幼儿园数量": within(schools, 500),
+            "200米内政府机构数量": within(government, 200),
+            "需要现场复核数量": sum(1 for row in sensitive if row.get("verification_status") != "已人工核实" or supplement_value(row, "needs_onsite_review") in ("是", True)),
+        },
+    }
 
 
 def merge_poi_payload(poi) -> dict[str, Any]:
@@ -1074,6 +1214,7 @@ def evaluation_payload(ev):
 
 
 def serialize(ev):
+    public_pois = sorted_poi_items([poi_public_dict(poi) for poi in ev.pois])
     return {
         "id": ev.id,
         "name": ev.name,
@@ -1095,6 +1236,7 @@ def serialize(ev):
             "property": property_dict(ev.site.property_survey),
         } if ev.site else None),
         "pois": [poi_dict(poi) for poi in ev.pois],
+        "poi_statistics": poi_statistics(public_pois),
         "result": ({column.name: getattr(ev.result, column.name) for column in ev.result.__table__.columns} if ev.result else None),
     }
 

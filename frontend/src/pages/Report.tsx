@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
-import {Alert, Card, Descriptions, List, Progress, Result, Spin, Table, Tag} from 'antd';
-import {useParams} from 'react-router-dom';
+import {Alert, Button, Card, Descriptions, List, Progress, Result, Space, Spin, Table, Tag} from 'antd';
+import {useNavigate, useParams} from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import {getEvaluation, report} from '../api/client';
 import type {Evaluation} from '../types';
@@ -46,6 +46,7 @@ function ChecklistTable({items}: {items?: any[]}) {
 
 export default function ReportPage() {
   const {id} = useParams();
+  const nav = useNavigate();
   const [ev, setEv] = useState<Evaluation>();
   const [rep, setRep] = useState<any>();
   const [error, setError] = useState('');
@@ -73,10 +74,14 @@ export default function ReportPage() {
   const competitorItems = sections.competitors?.items || [];
   const dimensionEntries = Object.entries(score.dimensions || {});
   const emptyText = (name: string) => <Alert type="info" showIcon message={`${name}未采集到`} description="该结果只表示本次自动采集未返回该类 POI，建议扩大半径或现场复核。" />;
+  const poiStatistics = sections.poi_statistics?.items || {};
 
   return (
     <div className="page report">
       <h2>{ev.name} · 选址评估报告</h2>
+      <Space style={{marginBottom: 12}}>
+        <Button onClick={() => id && nav(`/evaluations/${id}`)}>返回评估页继续编辑</Button>
+      </Space>
       <Alert type={rep.hard_risk ? 'error' : 'info'} showIcon message={rep.hard_risk ? '存在硬性风险' : '未发现已知硬性风险'} description={rep.disclaimer} />
       <Alert type="info" showIcon message="M1.5 当前报告为规则评分报告，不调用大模型" description="报告只展示自动采集数据、人工填写数据和规则评分依据，不会凭空生成经营数据。" />
 
@@ -125,6 +130,21 @@ export default function ReportPage() {
           {key: 'm', label: '人工竞品调研', children: `${sections.competitors?.manual_survey_count || 0}/${sections.competitors?.auto_collected_count || 0}`},
           {key: 'v', label: '评分规则版本', children: score.model_version},
         ]} />
+      </Card>
+
+      <Card title="POI 分类统计">
+        <Alert type="info" showIcon message="统计基于已采集和已补充数据" description="开业年限、评分、营业时间等未补充字段不会按 0 处理。" />
+        <Space direction="vertical" style={{width: '100%'}}>
+          {Object.entries(poiStatistics).map(([category, stats]: [string, any]) => (
+            <Card key={category} size="small" title={category}>
+              <Space wrap>
+                {Object.entries(stats || {}).map(([label, value]) => (
+                  <Tag key={label} color="geekblue">{label}：{value as any}</Tag>
+                ))}
+              </Space>
+            </Card>
+          ))}
+        </Space>
       </Card>
 
       <Card title="5. 竞品分析">

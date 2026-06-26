@@ -7,7 +7,9 @@ class StandardReportRenderer(ReportRenderer):
     def render(self, result, ctx=None):
         evaluation = (ctx or {}).get("evaluation", {})
         pois = [self._public_poi(poi) for poi in evaluation.get("pois", [])]
+        pois = self._sort_by_distance(pois)
         prop = ((evaluation.get("site") or {}).get("property") or {})
+        poi_statistics = evaluation.get("poi_statistics") or {}
         competitors = [poi for poi in pois if poi.get("business_category") == "竞品"]
         enriched = [poi for poi in competitors if self._has_supplement(poi)]
         traffic = [poi for poi in pois if poi.get("business_category") == "交通"]
@@ -102,6 +104,7 @@ class StandardReportRenderer(ReportRenderer):
                     "manual_competitor_records": len(enriched),
                 },
                 "poi_category_summary": {"title": "POI 分类补充统计", "items": category_summary},
+                "poi_statistics": {"title": "POI 分类统计", "items": poi_statistics},
                 "competitors": {
                     "title": "竞品分析",
                     "auto_collected_count": len(competitors),
@@ -161,6 +164,7 @@ class StandardReportRenderer(ReportRenderer):
 
     @staticmethod
     def _brief(rows):
+        rows = StandardReportRenderer._sort_by_distance(rows)
         return [
             {
                 "poi_id": row.get("poi_id") or row.get("id"),
@@ -270,6 +274,18 @@ class StandardReportRenderer(ReportRenderer):
             if any(keyword in text for keyword in keywords):
                 matches.append(row)
         return matches
+
+    @staticmethod
+    def _sort_by_distance(rows):
+        def key(row):
+            distance = row.get("distance_m")
+            try:
+                distance = int(float(distance))
+            except (TypeError, ValueError):
+                distance = None
+            return (distance is None, distance if distance is not None else 10**12, str(row.get("name") or ""))
+
+        return sorted(rows, key=key)
 
     @staticmethod
     def _public_poi(poi):

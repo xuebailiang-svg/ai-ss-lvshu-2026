@@ -27,6 +27,7 @@ export default function App() {
       <Layout.Content>
         <Routes>
           <Route path="/" element={<NewEvaluation />} />
+          <Route path="/evaluations/:id" element={<NewEvaluation />} />
           <Route path="/history" element={<History />} />
           <Route path="/reports/:id" element={<ReportPage />} />
           <Route path="/system-config" element={<SystemConfig />} />

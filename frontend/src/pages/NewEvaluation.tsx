@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useState} from 'react';
-import {useNavigate} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -63,8 +63,67 @@ const propertySwitches: [keyof PropertySurvey, string][] = [
 ];
 
 const DRAFT_KEY = 'm15:new-evaluation:draft';
+const CURRENT_EVALUATION_KEY = 'm2a:current-evaluation-id';
 
 const fallbackTemplateCategories = ['竞品', '住宅', '交通', '娱乐', '餐饮', '夜间配套', '敏感场所', '物业线索', '其他'];
+
+const fieldUnits: Record<string, string> = {
+  distance_m: '米',
+  walking_distance_m: '米',
+  walking_time_min: '分钟',
+  normal_price: '元/小时',
+  premium_price: '元/小时',
+  private_room_price: '元/小时',
+  member_price: '元/小时',
+  night_package_price: '元/包时',
+  avg_spend: '元/人',
+  area_sqm: '㎡',
+  machine_count: '台',
+  parking_space_count: '个/位',
+  review_count: '条',
+  monthly_sales: '单/月',
+  annual_sales: '单/年',
+};
+
+const numericFields = new Set([
+  'distance_m', 'walking_distance_m', 'walking_time_min', 'normal_price', 'premium_price',
+  'private_room_price', 'member_price', 'night_package_price', 'avg_spend', 'area_sqm',
+  'machine_count', 'parking_space_count', 'review_count', 'monthly_sales', 'annual_sales',
+  'opening_years', 'monitor_size_inch', 'monitor_refresh_rate', 'online_rating',
+  'reservation_rate', 'weekday_daytime_occupancy', 'weekday_evening_occupancy',
+  'weekend_daytime_occupancy', 'weekend_evening_occupancy', 'estimated_population',
+  'young_population_18_35',
+]);
+
+const enumOptions: Record<string, string[]> = {
+  street_facing: ['是', '否', '未知'],
+  visible_signboard: ['醒目', '一般', '不醒目', '未知'],
+  is_chain: ['是', '否', '未知'],
+  decoration_level: ['高', '中', '低', '未知'],
+  foot_traffic_level: ['高', '中', '低', '未知'],
+  consumption_level: ['高', '中', '低', '未知'],
+  night_open: ['是', '否', '未知'],
+  open_24h: ['是', '否', '未知'],
+  matches_esports_users: ['匹配', '一般', '不匹配', '未知'],
+  suitable_for_esports_users: ['匹配', '一般', '不匹配', '未知'],
+  night_accessible: ['方便', '一般', '不方便', '未知'],
+  has_viaduct_barrier: ['是', '否', '未知'],
+  has_railway_barrier: ['是', '否', '未知'],
+  has_river_barrier: ['是', '否', '未知'],
+  has_greenbelt_barrier: ['是', '否', '未知'],
+  parking_fee_unit: ['元/小时', '元/次', '免费', '未知'],
+  night_parking_supported: ['是', '否', '未知'],
+  easy_to_fill: ['是', '否', '未知'],
+  entrance_convenient: ['方便', '一般', '不方便', '未知'],
+  within_200m: ['是', '否', '未知'],
+  needs_onsite_review: ['是', '否', '未知'],
+  young_renters_main: ['是', '否', '未知'],
+  relocation_housing: ['是', '否', '未知'],
+  is_apartment: ['是', '否', '未知'],
+  urban_village: ['是', '否', '未知'],
+};
+
+const timeLikeFields = new Set(['business_hours', 'first_service_time', 'last_service_time', 'opened_at', 'peak_period']);
 
 function normalizeError(error: any): ApiErrorDetail {
   const detail = error?.response?.data?.detail;
@@ -91,12 +150,14 @@ function sanitizedDiagnostics(detail: ApiErrorDetail) {
 }
 
 export default function NewEvaluation() {
+  const {id: routeEvaluationId} = useParams();
   const [form] = Form.useForm();
   const [poiForm] = Form.useForm();
   const [manualPoiForm] = Form.useForm();
   const [ev, setEv] = useState<Evaluation>();
   const [poiRows, setPoiRows] = useState<PoiPublic[]>([]);
   const [templates, setTemplates] = useState<PoiTemplates>();
+  const [poiStats, setPoiStats] = useState<Record<string, Record<string, number | string>>>({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<ApiErrorDetail | null>(null);
   const [editingPoi, setEditingPoi] = useState<PoiPublic | null>(null);
@@ -108,6 +169,15 @@ export default function NewEvaluation() {
   useEffect(() => {
     poiTemplates().then(setTemplates).catch(() => message.warning('POI 模板加载失败，分类编辑功能可能不可用'));
   }, []);
+
+  useEffect(() => {
+    const idFromRoute = routeEvaluationId ? Number(routeEvaluationId) : undefined;
+    const idFromStorage = Number(localStorage.getItem(CURRENT_EVALUATION_KEY) || '');
+    const targetId = idFromRoute || idFromStorage;
+    if (targetId && Number.isFinite(targetId)) {
+      void refresh(targetId);
+    }
+  }, [routeEvaluationId]);
 
   useEffect(() => {
     const raw = localStorage.getItem(DRAFT_KEY);
@@ -123,12 +193,14 @@ export default function NewEvaluation() {
   const loadPoiRows = async (id: number) => {
     const data = await listPois(id);
     setPoiRows(data.items);
+    setPoiStats(data.statistics || {});
     return data.items;
   };
 
   const refresh = async (id: number) => {
     const data = await getEvaluation(id);
     setEv(data);
+    localStorage.setItem(CURRENT_EVALUATION_KEY, String(data.id));
     if (data.site?.property) form.setFieldsValue(data.site.property);
     await loadPoiRows(id);
     return data;
@@ -147,6 +219,8 @@ export default function NewEvaluation() {
           property: values,
         });
         setEv(data);
+        localStorage.setItem(CURRENT_EVALUATION_KEY, String(data.id));
+        nav(`/evaluations/${data.id}`, {replace: true});
         await loadPoiRows(data.id);
         localStorage.removeItem(DRAFT_KEY);
         message.success('候选地址已保存');
@@ -267,6 +341,11 @@ export default function NewEvaluation() {
   const competitorCount = poiRows.filter(poi => poi.business_category === '竞品').length;
   const verifiedCompetitorCount = poiRows.filter(poi => poi.business_category === '竞品' && poi.verification_status === '已人工核实').length;
   const groupedPois = useMemo(() => {
+    const sortByDistance = (items: PoiPublic[]) => [...items].sort((a, b) => {
+      const da = typeof a.distance_m === 'number' ? a.distance_m : Number.MAX_SAFE_INTEGER;
+      const db = typeof b.distance_m === 'number' ? b.distance_m : Number.MAX_SAFE_INTEGER;
+      return da - db || a.name.localeCompare(b.name);
+    });
     return categoryOptions.map(category => {
       const cfg = templates?.categories?.[category];
       return {
@@ -274,7 +353,7 @@ export default function NewEvaluation() {
         category,
         title: category,
         exportKey: cfg?.export_key || category,
-        items: poiRows.filter(poi => poi.business_category === category),
+        items: sortByDistance(poiRows.filter(poi => poi.business_category === category)),
       };
     });
   }, [categoryOptions, poiRows, templates]);
@@ -296,20 +375,42 @@ export default function NewEvaluation() {
 
   const clearDraft = () => {
     localStorage.removeItem(DRAFT_KEY);
+    localStorage.removeItem(CURRENT_EVALUATION_KEY);
+    setEv(undefined);
+    setPoiRows([]);
+    setPoiStats({});
     form.resetFields();
+    nav('/', {replace: true});
     message.success('草稿已清空');
   };
 
-  const renderPoiSupplementFields = (category?: string) => {
-    const fields = templates?.categories?.[category || '']?.fields || [];
+  const renderPoiSupplementFields = (category?: string, formInstance = poiForm) => {
+    const subcategory = formInstance.getFieldValue('subcategory') || editingPoi?.subcategory;
+    const cfg = templates?.categories?.[category || ''];
+    const subtypeKeys = Object.entries(cfg?.subtype_templates || {}).find(([name]) => String(subcategory || '').includes(name) || name.includes(String(subcategory || '')))?.[1];
+    const fields = (cfg?.fields || []).filter(field => !subtypeKeys || field.key === 'notes' || subtypeKeys.includes(field.key));
     if (!fields.length) {
       return <Alert type="info" showIcon message="该分类暂无专用模板字段，可先填写基础信息和备注。" />;
     }
     return fields.map(field => (
       <Form.Item key={field.key} name={field.key} label={field.label}>
-        {field.key === 'notes' ? <Input.TextArea /> : <Input />}
+        {renderPoiFieldControl(field.key)}
       </Form.Item>
     ));
+  };
+
+  const renderPoiFieldControl = (key: string) => {
+    if (key === 'notes') return <Input.TextArea />;
+    if (enumOptions[key]) {
+      return <Select options={enumOptions[key].map(value => ({label: value, value}))} />;
+    }
+    if (numericFields.has(key)) {
+      return <InputNumber min={0} step={key.includes('rate') || key.includes('rating') ? 0.1 : 1} addonAfter={fieldUnits[key]} style={{width: '100%'}} />;
+    }
+    if (timeLikeFields.has(key)) {
+      return <Input placeholder={key === 'opened_at' ? '例如：2023-05 或 2023' : '例如：10:00-02:00，支持跨天'} />;
+    }
+    return <Input />;
   };
 
   const renderBasePoiFormItems = () => (
@@ -330,15 +431,15 @@ export default function NewEvaluation() {
       </Form.Item>
       <div className="form-row">
         <Form.Item name="distance_m" label="直线距离（米）">
-          <InputNumber min={0} />
+          <InputNumber min={0} addonAfter="米" style={{width: '100%'}} />
         </Form.Item>
         <Form.Item name="walking_distance_m" label="步行距离（米）">
-          <InputNumber min={0} />
+          <InputNumber min={0} addonAfter="米" style={{width: '100%'}} />
         </Form.Item>
       </div>
       <div className="form-row">
         <Form.Item name="walking_time_min" label="步行时间（分钟）">
-          <InputNumber min={0} />
+          <InputNumber min={0} addonAfter="分钟" style={{width: '100%'}} />
         </Form.Item>
         <Form.Item name="data_source" label="数据来源">
           <Input placeholder="例如：现场调研/电话核实/大众点评" />
@@ -352,6 +453,18 @@ export default function NewEvaluation() {
       </Form.Item>
     </>
   );
+
+  const renderStats = (category: string) => {
+    const stats = poiStats[category] || (category === '餐饮' ? poiStats['餐饮/夜间配套'] : undefined);
+    if (!stats) return <Alert type="info" showIcon message="该分类暂无统计数据" description="未采集或未补充的数据不会参与统计。" />;
+    return (
+      <Space wrap>
+        {Object.entries(stats).map(([label, value]) => (
+          <Tag key={label} color="geekblue">{label}：{value ?? '未补充'}</Tag>
+        ))}
+      </Space>
+    );
+  };
 
   return (
     <div className="workspace">
@@ -456,11 +569,9 @@ export default function NewEvaluation() {
           <Button type="primary" htmlType="submit" block disabled={!!busy}>
             {ev ? '保存物业调查' : '保存候选地址'}
           </Button>
-          {!ev && (
-            <Button style={{marginTop: 8}} block onClick={clearDraft}>
-              清空草稿
-            </Button>
-          )}
+          <Button style={{marginTop: 8}} block onClick={clearDraft}>
+            {ev ? '新建评估 / 清空当前' : '清空草稿'}
+          </Button>
         </Form>
       </aside>
 
@@ -504,6 +615,7 @@ export default function NewEvaluation() {
               label: `${group.title}（${group.items.length ? `${group.items.length} 条` : '未采集到'}）`,
               children: (
                 <Space direction="vertical" style={{width: '100%'}}>
+                  {renderStats(group.category)}
                   <Space wrap>
                     <Button size="small" disabled={!ev} onClick={() => ev && window.open(exportPoisUrl(ev.id, group.exportKey), '_blank')}>
                       导出 CSV
@@ -558,19 +670,19 @@ export default function NewEvaluation() {
       </aside>
 
       <Drawer title={editingPoi?.name ? `编辑 POI：${editingPoi.name}` : '编辑 POI'} open={!!editingPoi} width={560} onClose={() => setEditingPoi(null)}>
-        <Alert type="info" showIcon message="基础 POI 与人工补充数据分层保存" description="本表单不会修改高德原始数据，也不会展示经纬度、类型码、平台内部编号等技术字段。" />
+        <Alert type="info" showIcon message="基础 POI 与人工补充数据分层保存" description="本表单只展示客户可理解、可补充的业务字段，不展示技术字段。" />
         <Form form={poiForm} layout="vertical" onFinish={savePoi} initialValues={{data_source: '人工', verification_status: '未核实'}}>
           {renderBasePoiFormItems()}
-          {renderPoiSupplementFields(editCategory)}
+          {renderPoiSupplementFields(editCategory, poiForm)}
           <Button type="primary" htmlType="submit" block>保存 POI 补充信息</Button>
         </Form>
       </Drawer>
 
       <Drawer title="新增人工 POI" open={manualPoiOpen} width={560} onClose={() => setManualPoiOpen(false)}>
-        <Alert type="info" showIcon message="人工新增 POI 可不填写经纬度" description="新增后会保存到当前评估，刷新页面和历史记录中仍可查看。" />
+        <Alert type="info" showIcon message="人工新增 POI 可只填写业务字段" description="新增后会保存到当前评估，刷新页面和历史记录中仍可查看。" />
         <Form form={manualPoiForm} layout="vertical" onFinish={saveManualPoi} initialValues={{business_category: '竞品', data_source: '人工', verification_status: '未核实'}}>
           {renderBasePoiFormItems()}
-          {renderPoiSupplementFields(manualCategory)}
+          {renderPoiSupplementFields(manualCategory, manualPoiForm)}
           <Button type="primary" htmlType="submit" block>新增人工 POI</Button>
         </Form>
       </Drawer>
