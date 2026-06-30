@@ -5,6 +5,7 @@ import NewEvaluation from './pages/NewEvaluation';
 import History from './pages/History';
 import ReportPage from './pages/Report';
 import SystemConfig from './pages/SystemConfig';
+import AgentAnalysis from './pages/AgentAnalysis';
 import './styles/app.css';
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
           selectedKeys={[location.pathname]}
           items={[
             {key: '/', label: <Link to="/">新地址评估</Link>},
+            {key: '/agent', label: <Link to="/agent">Agent 分析</Link>},
             {key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">历史评估</Link>},
             {key: '/system-config', icon: <SettingOutlined />, label: <Link to="/system-config">系统配置</Link>},
           ]}
@@ -27,6 +29,7 @@ export default function App() {
       <Layout.Content>
         <Routes>
           <Route path="/" element={<NewEvaluation />} />
+          <Route path="/agent" element={<AgentAnalysis />} />
           <Route path="/evaluations/:id" element={<NewEvaluation />} />
           <Route path="/history" element={<History />} />
           <Route path="/reports/:id" element={<ReportPage />} />

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -254,6 +255,13 @@ class AmapDataProvider(DataProvider):
         return {"provider": "amap", "endpoint": self.geocode_endpoint, "attempts": results}
 
     async def search_nearby(self, longitude, latitude, radius, categories):
+        if not self.key and not self.mock:
+            raise ProviderError(
+                "后端未配置高德 Web 服务 Key，请检查 AMAP_WEB_SERVICE_KEY。",
+                error_code="AMAP_KEY_MISSING",
+                endpoint="place/around",
+                sanitized_params={"location": f"{longitude},{latitude}", "radius": radius},
+            )
         if self.mock:
             rows = [
                 {
@@ -415,23 +423,34 @@ class AmapDataProvider(DataProvider):
         duplicate_count = 0
         invalid_location_count = 0
         queries = []
+        failed_keywords = []
 
         for group, keywords_list in self._poi_query_groups(categories):
             keywords = keywords_list[0] if len(keywords_list) == 1 else "|".join(keywords_list)
-            data = await self._get(
-                "place/around",
-                {
-                    "location": f"{longitude},{latitude}",
-                    "radius": radius,
-                    "keywords": keywords,
-                    "offset": 25,
-                    "page": 1,
-                    "extensions": "all",
-                    "output": "JSON",
-                    "citylimit": "false",
-                    "sortrule": "distance",
-                },
-            )
+            params = {
+                "location": f"{longitude},{latitude}",
+                "radius": radius,
+                "keywords": keywords,
+                "offset": 20,
+                "page": 1,
+                "extensions": "all",
+                "output": "JSON",
+                "citylimit": "false",
+                "sortrule": "distance",
+            }
+            data, query_diag = await self._get_place_around_with_retry(group, keywords, params)
+            if data is None:
+                queries.append(query_diag)
+                failed_keywords.append({
+                    "category": group,
+                    "keyword": keywords,
+                    "infocode": query_diag.get("infocode"),
+                    "info": query_diag.get("info"),
+                    "error_code": query_diag.get("error_code"),
+                    "message": query_diag.get("message"),
+                })
+                await asyncio.sleep(0.3)
+                continue
             pois = data.get("pois", [])
             if not isinstance(pois, list):
                 pois = []
@@ -481,22 +500,27 @@ class AmapDataProvider(DataProvider):
                 group_saved += 1
             queries.append(
                 {
+                    "category": group,
+                    "keyword": keywords,
                     "group": group,
                     "keywords": keywords_list,
+                    "status": "success",
                     "raw_count": group_raw,
                     "saved_count": group_saved,
-                    "status": str(data.get("status", "")),
+                    "api_status": str(data.get("status", "")),
                     "info": str(data.get("info", "")),
                     "infocode": str(data.get("infocode", "")),
                     "count": str(data.get("count", "")),
                 }
             )
+            await asyncio.sleep(0.3)
         self.last_poi_diagnostics = {
             "provider": "amap",
             "endpoint": "place/around",
             "radius": radius,
-                "query_count": len(queries),
-                "queries": queries,
+            "query_count": len(queries),
+            "queries": queries,
+            "failed_keywords": failed_keywords,
             "raw_return_count": raw_return_count,
             "saved_count": len(out),
             "duplicate_count": duplicate_count,
@@ -504,12 +528,72 @@ class AmapDataProvider(DataProvider):
             "filtered_out_count": duplicate_count + invalid_location_count,
             "params_policy": {
                 "request_mode": "keyword_per_request",
-                "offset": 25,
+                "offset": 20,
                 "citylimit": False,
                 "sortrule": "distance",
+                "serial": True,
+                "sleep_seconds_between_requests": 0.3,
+                "rate_limit_retry_count": 2,
             },
         }
         return out
+
+    async def _get_place_around_with_retry(self, group: str, keyword: str, params: dict[str, Any]):
+        attempts = []
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                data = await self._get_raw("place/around", params)
+            except ProviderError as exc:
+                attempts.append({"attempt": attempt, "error_code": exc.error_code, "message": exc.message})
+                if attempt < max_attempts and exc.error_code in {"AMAP_RATE_LIMIT", "AMAP_NETWORK_ERROR"}:
+                    await asyncio.sleep(1.2)
+                    continue
+                return None, self._failed_query_diag(group, keyword, exc, attempts)
+
+            if data.get("status") == "1":
+                return data, {}
+
+            error = self._api_error("place/around", params, data, retry_attempts=attempts)
+            attempts.append({
+                "attempt": attempt,
+                "error_code": error.error_code,
+                "info": error.info,
+                "infocode": error.infocode,
+                "message": error.message,
+            })
+            if error.error_code == "AMAP_RATE_LIMIT" and attempt < max_attempts:
+                await asyncio.sleep(1.2)
+                continue
+            return None, self._failed_query_diag(group, keyword, error, attempts)
+
+        return None, {
+            "category": group,
+            "keyword": keyword,
+            "group": group,
+            "keywords": [keyword],
+            "status": "failed",
+            "error_code": "AMAP_PROVIDER_ERROR",
+            "message": "高德 POI 采集失败。",
+            "attempts": attempts,
+        }
+
+    def _failed_query_diag(self, group: str, keyword: str, error: ProviderError, attempts: list[dict[str, Any]]):
+        return {
+            "category": group,
+            "keyword": keyword,
+            "group": group,
+            "keywords": [keyword],
+            "status": "failed",
+            "api_status": error.status,
+            "infocode": error.infocode,
+            "info": error.info,
+            "error_code": error.error_code,
+            "message": error.message,
+            "raw_count": 0,
+            "saved_count": 0,
+            "attempts": attempts,
+        }
 
     async def get_place_detail(self, provider_place_id):
         return await self._get(
@@ -530,6 +614,10 @@ class AmapDataProvider(DataProvider):
         code = self._error_code(info, infocode)
         if infocode == "30001":
             message = "高德服务响应失败，可能与地址格式、城市参数或高德服务侧响应有关。系统已尝试备用解析方式，请检查地址是否完整。"
+        elif code == "AMAP_RATE_LIMIT":
+            message = "高德接口请求过快，已触发限流。系统已保留已成功采集的数据，请稍后重试未完成的关键词。"
+        elif code == "AMAP_QUOTA_EXCEEDED":
+            message = "高德接口配额可能已用尽，请检查高德控制台配额。"
         elif code == "AMAP_KEY_PERMISSION":
             message = "高德 Key 类型或接口权限可能不正确，请确认使用的是 Web 服务 API Key。"
         else:
@@ -548,31 +636,17 @@ class AmapDataProvider(DataProvider):
 
     @staticmethod
     def _error_code(info: str, infocode: str) -> str:
+        info_upper = info.upper()
+        if infocode == "10021" or info_upper == "CUQPS_HAS_EXCEEDED_THE_LIMIT":
+            return "AMAP_RATE_LIMIT"
+        if "DAILY" in info_upper or "QUOTA" in info_upper or "BALANCE" in info_upper:
+            return "AMAP_QUOTA_EXCEEDED"
         key_indicators = {
-            "10001",
-            "10002",
-            "10003",
-            "10008",
-            "10009",
-            "10010",
-            "10011",
-            "10012",
-            "10013",
-            "10014",
-            "10015",
-            "10016",
-            "10017",
-            "10019",
-            "10020",
-            "10021",
-            "10022",
-            "10023",
-            "10026",
-            "10027",
-            "10028",
-            "10029",
+            "INVALID_USER_KEY",
+            "USERKEY_PLAT_NOMATCH",
+            "INVALID_USER_SCODE",
         }
-        if infocode in key_indicators or "KEY" in info.upper() or "USERKEY" in info.upper():
+        if info_upper in key_indicators:
             return "AMAP_KEY_PERMISSION"
         if infocode == "30001" or info == "ENGINE_RESPONSE_DATA_ERROR":
             return "AMAP_ENGINE_RESPONSE_DATA_ERROR"
@@ -648,12 +722,23 @@ class AmapDataProvider(DataProvider):
         return {
             "formatted_address": AmapDataProvider._text(row.get("formatted_address"))
             or fallback_address,
+            "province": AmapDataProvider._text(row.get("province")),
+            "city": AmapDataProvider._text(row.get("city")),
             "district": AmapDataProvider._text(row.get("district"))
             or AmapDataProvider._text(row.get("adcode")),
             "longitude": lng,
             "latitude": lat,
             "coordinate_system": "GCJ02",
             "provider": "amap",
+            "raw": {
+                "formatted_address": row.get("formatted_address"),
+                "province": row.get("province"),
+                "city": row.get("city"),
+                "district": row.get("district"),
+                "adcode": row.get("adcode"),
+                "location": row.get("location"),
+                "level": row.get("level"),
+            },
         }
 
     @classmethod

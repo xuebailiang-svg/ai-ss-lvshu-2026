@@ -181,6 +181,69 @@ def test_missing_key_returns_configuration_error():
     run(scenario())
 
 
+def test_rate_limit_error_is_not_key_permission():
+    assert AmapDataProvider._error_code("CUQPS_HAS_EXCEEDED_THE_LIMIT", "10021") == "AMAP_RATE_LIMIT"
+    error = AmapDataProvider("secret")._api_error(
+        "place/around",
+        {"keywords": "公交车站"},
+        {"status": "0", "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT", "infocode": "10021"},
+    )
+    assert error.error_code == "AMAP_RATE_LIMIT"
+    assert "Key 类型" not in error.message
+    assert "限流" in error.message
+
+
+def test_search_nearby_records_rate_limited_keyword(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.providers.amap.provider.asyncio.sleep", no_sleep)
+    calls = []
+
+    def handler(req):
+        params = dict(req.url.params)
+        calls.append(params)
+        if params.get("keywords") == "地铁站":
+            return httpx.Response(200, json={
+                "status": "1",
+                "info": "OK",
+                "infocode": "10000",
+                "count": "1",
+                "pois": [{
+                    "id": "metro-1",
+                    "name": "测试地铁站",
+                    "type": "地铁站",
+                    "typecode": "150500",
+                    "address": "测试地址",
+                    "location": "108.1,34.1",
+                    "distance": "120",
+                }],
+            })
+        return httpx.Response(200, json={
+            "status": "0",
+            "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT",
+            "infocode": "10021",
+            "count": "0",
+            "pois": [],
+        })
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = AmapDataProvider("secret", client=client)
+            rows = await provider.search_nearby(108.0, 34.0, 3000, ["地铁站", "公交车站"])
+        assert len(rows) == 1
+        assert rows[0]["name"] == "测试地铁站"
+        assert len([call for call in calls if call.get("keywords") == "公交车站"]) == 3
+        diagnostics = provider.last_poi_diagnostics
+        assert diagnostics["saved_count"] == 1
+        assert diagnostics["failed_keywords"][0]["keyword"] == "公交车站"
+        assert diagnostics["failed_keywords"][0]["error_code"] == "AMAP_RATE_LIMIT"
+        assert any(item["status"] == "success" and item["keyword"] == "地铁站" for item in diagnostics["queries"])
+        assert any(item["status"] == "failed" and item["keyword"] == "公交车站" for item in diagnostics["queries"])
+
+    run(scenario())
+
+
 def test_error_payload_never_contains_real_key():
     def handler(req):
         return response(

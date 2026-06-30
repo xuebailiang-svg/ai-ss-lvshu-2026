@@ -14,15 +14,19 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.agents import SiteSelectionAgent
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.feedback import SiteFeedbackStore
 from app.models import *
 from app.providers.amap import AmapDataProvider, ProviderError
 from app.reports.standard import StandardReportRenderer
 from app.schemas import ComparisonIn, CompetitorEnrichmentIn, EvaluationCreate, EvaluationOut, PropertyIn
 from app.scoring.rule_based import RuleBasedScoringEngine
+from app.trace import AgentTraceStore
 
 router = APIRouter(prefix="/api")
+LAST_POI_DIAGNOSTICS: dict[int, dict[str, Any]] = {}
 
 BASE_POI_COLUMNS = [
     {"key": "name", "label": "名称"},
@@ -210,6 +214,77 @@ def provider():
     return AmapDataProvider(settings.amap_web_service_key, mock=settings.amap_mock)
 
 
+@router.post("/agent/site-selection/run")
+async def run_site_selection_agent(body: dict[str, Any]):
+    address = str(body.get("address") or "").strip()
+    city = str(body.get("city") or "").strip()
+    if not address:
+        raise HTTPException(400, "address 不能为空")
+    if not city:
+        raise HTTPException(400, "city 不能为空")
+    radius = body.get("radius_meters") or 1000
+    try:
+        radius = int(radius)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "radius_meters 必须是数字")
+    if radius <= 0:
+        raise HTTPException(400, "radius_meters 必须大于 0")
+    return await SiteSelectionAgent().run({
+        "address": address,
+        "city": city,
+        "radius_meters": radius,
+        "business_type": body.get("business_type") or "电竞馆",
+    })
+
+
+@router.post("/feedback/site-result")
+def save_site_feedback(body: dict[str, Any]):
+    if not get_settings().enable_feedback:
+        raise HTTPException(403, "Feedback is disabled by config")
+    task_id = str(body.get("task_id") or "").strip()
+    if not task_id:
+        raise HTTPException(400, "task_id 不能为空")
+    try:
+        record = SiteFeedbackStore().update_feedback(
+            task_id,
+            actual_result=str(body.get("actual_result") or "unknown"),
+            notes=str(body.get("notes") or ""),
+            monthly_revenue_range=body.get("monthly_revenue_range"),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "record": record}
+
+
+@router.get("/agent/site-selection/trace/{task_id}")
+def get_site_selection_trace(task_id: str):
+    if not get_settings().enable_debug_api:
+        raise HTTPException(403, {"message": "Debug API is disabled. Set ENABLE_DEBUG_API=true to enable trace replay."})
+    trace_store = AgentTraceStore()
+    trace_record = trace_store.get_trace(task_id)
+    if not trace_record:
+        raise HTTPException(404, "Agent trace not found")
+    trace = trace_record.get("trace") or []
+    reflection = next(
+        ((step.get("output") or {}).get("data") for step in trace if step.get("step_name") == "reflection"),
+        {},
+    )
+    similar_cases = next(
+        (((step.get("output") or {}).get("data") or {}).get("similar_cases") for step in trace if step.get("step_name") == "similar_case_search"),
+        [],
+    )
+    feedback_store = SiteFeedbackStore()
+    return {
+        "task_id": task_id,
+        "trace": trace,
+        "summary": trace_store.summary(task_id),
+        "reflection": reflection,
+        "feedback": feedback_store.get_record(task_id) or {},
+        "feedback_events": feedback_store.events_for_task(task_id),
+        "similar_cases": similar_cases or [],
+    }
+
+
 def evaluation_options():
     return (
         selectinload(SiteEvaluation.site).selectinload(CandidateSite.property_survey),
@@ -258,6 +333,62 @@ def health_config():
     }
 
 
+@router.get("/system/health")
+def system_health():
+    settings = get_settings()
+    warnings: list[str] = []
+    feedback_ok, feedback_error = SiteFeedbackStore().can_write()
+    trace_ok, trace_error = AgentTraceStore().can_write()
+    if not feedback_ok and feedback_error:
+        warnings.append(f"feedback store not writable: {feedback_error}")
+    if not trace_ok and trace_error:
+        warnings.append(f"trace store not writable: {trace_error}")
+
+    expected_tools = {
+        "geocode",
+        "poi_search",
+        "redline_check",
+        "competitor_search",
+        "traffic_analysis",
+        "supporting_analysis",
+        "rent_estimate",
+        "population_estimate",
+        "scoring",
+        "similar_case_search",
+        "report_generate",
+    }
+    agent = SiteSelectionAgent()
+    registered_tools = set(agent.tool_registry)
+    missing_tools = sorted(expected_tools - registered_tools)
+    if missing_tools:
+        warnings.append("tools registry missing: " + ", ".join(missing_tools))
+
+    amap_ok = settings.amap_mock or bool(settings.amap_web_service_key)
+    if not amap_ok:
+        warnings.append("AMAP_WEB_SERVICE_KEY is missing and AMAP_MOCK=false")
+
+    return {
+        "status": "ok" if not warnings else "warning",
+        "modules": {
+            "tools": not missing_tools,
+            "trace": trace_ok and settings.enable_trace,
+            "feedback": feedback_ok and settings.enable_feedback,
+            "amap": amap_ok,
+            "planner": True,
+        },
+        "config": {
+            "ENABLE_TRACE": settings.enable_trace,
+            "ENABLE_REFLECTION": settings.enable_reflection,
+            "ENABLE_FEEDBACK": settings.enable_feedback,
+            "ENABLE_SIMILAR_CASES": settings.enable_similar_cases,
+            "ENABLE_DEBUG_API": settings.enable_debug_api,
+            "AMAP_MOCK": settings.amap_mock,
+        },
+        "warnings": warnings,
+        "version": settings.app_version,
+    }
+
+
 def mask_secret(value: str | None) -> str | None:
     value = (value or "").strip()
     if not value:
@@ -301,6 +432,11 @@ def system_config_status():
             "amapWebServiceKeyConfigured": bool(settings.amap_web_service_key),
             "amapMock": settings.amap_mock,
             "databaseConfigured": bool(settings.database_url),
+            "enableTrace": settings.enable_trace,
+            "enableReflection": settings.enable_reflection,
+            "enableFeedback": settings.enable_feedback,
+            "enableSimilarCases": settings.enable_similar_cases,
+            "enableDebugApi": settings.enable_debug_api,
         },
         "frontend": {
             "runtimeConfigPath": settings.frontend_runtime_config_path,
@@ -433,50 +569,59 @@ async def collect_pois(id: int, db: Session = Depends(get_db)):
     try:
         amap_provider = provider()
         rows = await amap_provider.search_nearby(ev.site.longitude, ev.site.latitude, ev.radius, cats)
+        diagnostics = dict(amap_provider.last_poi_diagnostics or {})
+        failed_keywords = diagnostics.get("failed_keywords") or []
         manual_poi_count = sum(1 for poi in ev.pois if poi.source == "manual")
         existing_enrichment = {poi.provider_record_id: competitor_dict(poi.enrichment) for poi in ev.pois if poi.source == "amap" and poi.enrichment}
         existing_generic = {poi.provider_record_id: poi_enrichment_dict(poi.generic_enrichment) for poi in ev.pois if poi.source == "amap" and poi.generic_enrichment}
         existing_records = {poi.provider_record_id: [survey_record_dict(record) for record in poi.survey_records] for poi in ev.pois if poi.source == "amap" and poi.survey_records}
-        for old in list(ev.pois):
-            if old.source == "amap":
-                db.delete(old)
-        db.flush()
-        for row in rows:
-            poi = PoiObservation(evaluation_id=ev.id, **row)
-            db.add(poi)
+        if rows:
+            for old in list(ev.pois):
+                if old.source == "amap":
+                    db.delete(old)
             db.flush()
-            if row.get("provider_record_id") in existing_enrichment:
-                db.add(CompetitorEnrichment(poi_observation_id=poi.id, **existing_enrichment[row["provider_record_id"]]))
-            if row.get("provider_record_id") in existing_generic:
-                generic = existing_generic[row["provider_record_id"]]
-                db.add(PoiEnrichment(
-                    poi_observation_id=poi.id,
-                    category=generic["category"],
-                    payload=generic["payload"],
-                    data_source=generic["data_source"],
-                    verification_status=generic["verification_status"],
-                    is_verified=generic["is_verified"],
-                    verified_at=generic["verified_at"],
-                ))
-            for record in existing_records.get(row.get("provider_record_id"), []):
-                db.add(CompetitorSurveyRecord(
-                    poi_observation_id=poi.id,
-                    payload=record["payload"],
-                    source=record["source"],
-                    confidence=record["confidence"],
-                    verified_at=record["verified_at"],
-                ))
-        ev.status = JobStatus.completed
-        ev.error_message = None
+            for row in rows:
+                poi = PoiObservation(evaluation_id=ev.id, **row)
+                db.add(poi)
+                db.flush()
+                if row.get("provider_record_id") in existing_enrichment:
+                    db.add(CompetitorEnrichment(poi_observation_id=poi.id, **existing_enrichment[row["provider_record_id"]]))
+                if row.get("provider_record_id") in existing_generic:
+                    generic = existing_generic[row["provider_record_id"]]
+                    db.add(PoiEnrichment(
+                        poi_observation_id=poi.id,
+                        category=generic["category"],
+                        payload=generic["payload"],
+                        data_source=generic["data_source"],
+                        verification_status=generic["verification_status"],
+                        is_verified=generic["is_verified"],
+                        verified_at=generic["verified_at"],
+                    ))
+                for record in existing_records.get(row.get("provider_record_id"), []):
+                    db.add(CompetitorSurveyRecord(
+                        poi_observation_id=poi.id,
+                        payload=record["payload"],
+                        source=record["source"],
+                        confidence=record["confidence"],
+                        verified_at=record["verified_at"],
+                    ))
+        ev.status = JobStatus.completed if rows else JobStatus.failed
+        ev.error_message = None if rows else "POI 采集未获得可保存结果，请查看 diagnostics。"
         db.commit()
+        response_status = "partial_success" if rows and failed_keywords else "completed" if rows else "failed"
+        diagnostics = {
+            **diagnostics,
+            "saved_by_category": dict(Counter(row.get("category") or "其他" for row in rows)),
+            "manual_poi_preserved": manual_poi_count,
+        }
+        LAST_POI_DIAGNOSTICS[ev.id] = diagnostics
         return {
-            "status": "completed",
+            "status": response_status,
             "count": len(rows),
-            "diagnostics": {
-                **amap_provider.last_poi_diagnostics,
-                "saved_by_category": dict(Counter(row.get("category") or "其他" for row in rows)),
-                "manual_poi_preserved": manual_poi_count,
-            },
+            "saved_count": len(rows),
+            "failed_keyword_count": len(failed_keywords),
+            "failed_keywords": failed_keywords,
+            "diagnostics": diagnostics,
         }
     except ProviderError as exc:
         ev.status = JobStatus.failed
@@ -496,6 +641,7 @@ def poi_diagnostics(id: int, db: Session = Depends(get_db)):
     for row in rows:
         raw = row.raw_data if isinstance(row.raw_data, dict) else {}
         query_group_counts[str(raw.get("_query_group") or raw.get("query_group") or "unknown")] += 1
+    latest = LAST_POI_DIAGNOSTICS.get(id, {})
     return {
         "evaluation_id": ev.id,
         "poi_total": len(rows),
@@ -503,7 +649,10 @@ def poi_diagnostics(id: int, db: Session = Depends(get_db)):
         "by_provider": dict(provider_counts),
         "by_provider_typecode": dict(type_counts),
         "by_query_group": dict(query_group_counts),
-        "note": "最近一次采集的 raw_return_count 和 filtered_out_count 会在 POST /api/evaluations/{id}/collect-pois 的 diagnostics 中返回；历史采集任务未单独落表。",
+        "keyword_diagnostics": latest.get("queries", []),
+        "failed_keywords": latest.get("failed_keywords", []),
+        "last_collect": latest,
+        "note": "keyword_diagnostics 保存当前服务进程内最近一次采集的关键词级诊断；服务重启后该缓存会清空。",
     }
 
 

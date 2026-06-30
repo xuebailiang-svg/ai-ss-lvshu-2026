@@ -37,4 +37,18 @@ export const saveCompetitorEnrichment = (id: number, data: CompetitorEnrichment)
 export const competitorHistory = (id: number) => api.get(`/competitors/${id}/enrichments`).then(response => response.data);
 export const compareEvaluations = (evaluation_ids: number[]) => api.post('/evaluations/compare', {evaluation_ids}).then(response => response.data);
 export const configStatus = () => api.get('/system/config-status').then(response => response.data);
+export const systemHealth = () => api.get('/system/health').then(response => response.data);
 export const amapGeocodeTest = (params: {city: string; address: string}) => api.get('/system/amap/geocode-test', {params}).then(response => response.data);
+export const runSiteSelectionAgent = (data: {
+  address: string;
+  city: string;
+  radius_meters: number;
+  business_type: string;
+}) => api.post('/agent/site-selection/run', data, {timeout: 60000}).then(response => response.data);
+export const saveSiteFeedback = (data: {
+  task_id: string;
+  actual_result: 'profit' | 'loss' | 'unknown';
+  notes?: string;
+  monthly_revenue_range?: string;
+}) => api.post('/feedback/site-result', data).then(response => response.data);
+export const getAgentTrace = (taskId: string) => api.get(`/agent/site-selection/trace/${taskId}`).then(response => response.data);

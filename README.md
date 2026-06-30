@@ -65,6 +65,11 @@ DATABASE_URL=...
 AMAP_WEB_SERVICE_KEY=...
 AMAP_MOCK=false
 SCORING_CONFIG_PATH=app/scoring/default.yaml
+ENABLE_TRACE=true
+ENABLE_REFLECTION=true
+ENABLE_FEEDBACK=true
+ENABLE_SIMILAR_CASES=true
+ENABLE_DEBUG_API=false
 ```
 
 前端公开运行配置示例：
@@ -84,6 +89,45 @@ SCORING_CONFIG_PATH=app/scoring/default.yaml
 - 前端地图 Key 不再写入 `frontend/.env.production`，也不再依赖 Vite build 固化；
 - 修改 `/etc/esports-site-selection/frontend-runtime.json` 后只需 `sudo systemctl reload nginx`；
 - 修改 `/etc/esports-site-selection/backend.env` 后需要 `sudo systemctl restart esports-site-selection`。
+
+### v1.0 baseline 模块分类
+
+当前系统按稳定性分为三类：
+
+| 分类 | 模块 | 说明 |
+| --- | --- | --- |
+| CORE | `backend/app/agents/`、`backend/app/tools/`、`backend/app/trace/`、`backend/app/feedback/`、`POST /api/agent/site-selection/run`、`POST /api/feedback/site-result` | v1.0 稳定核心，负责 Agent 编排、工具执行、trace、feedback event log 和反馈回填。 |
+| EXPERIMENTAL | `similar_case_search`、Reflection 中的 `risk_of_overestimate` / `adjusted_score_suggestion` 等校准逻辑 | 实验性决策校准，不作为最终投资建议。可通过 `ENABLE_SIMILAR_CASES=false` 关闭相似案例。 |
+| LEGACY | M2-A 高德 POI 限流、`partial_success`、fallback 兼容逻辑 | 历史兼容与稳定性修复逻辑，保留不删除，后续可在独立版本中清理。 |
+
+### v1.0 baseline 配置开关
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ENABLE_TRACE` | `true` | 是否记录 Agent 执行链。关闭后不影响主流程。 |
+| `ENABLE_REFLECTION` | `true` | 是否执行 Reflection 决策校准。 |
+| `ENABLE_FEEDBACK` | `true` | 是否写入 feedback event log 和允许反馈回填。 |
+| `ENABLE_SIMILAR_CASES` | `true` | 是否启用相似案例检索。该模块仍标记为 experimental。 |
+| `ENABLE_DEBUG_API` | `false` | 是否开放 trace debug API。生产默认关闭。 |
+| `AMAP_MOCK` | `false` | 是否使用高德 mock 数据。演示环境可设为 `true`。 |
+
+健康检查：
+
+```bash
+curl http://127.0.0.1/api/system/health
+```
+
+Trace Debug API 仅开发/调试时开启：
+
+```bash
+# /etc/esports-site-selection/backend.env
+ENABLE_DEBUG_API=true
+
+sudo systemctl restart esports-site-selection
+curl http://127.0.0.1/api/agent/site-selection/trace/<task_id>
+```
+
+生产环境默认返回 `403`，这是预期行为。
 
 常用配置命令：
 

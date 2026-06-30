@@ -132,13 +132,15 @@ function normalizeError(error: any): ApiErrorDetail {
   return {message: error?.message || '未知错误'};
 }
 
-function friendlyError(detail: ApiErrorDetail) {
+export function friendlyError(detail: ApiErrorDetail) {
   const code = detail.error_code || '';
   const infocode = detail.infocode || '';
   const info = detail.info || '';
   const text = detail.message || '';
   if (code === 'AMAP_KEY_MISSING' || text.includes('AMAP_WEB_SERVICE_KEY')) return '后端未配置高德 Web 服务 Key，请检查 AMAP_WEB_SERVICE_KEY。';
+  if (code === 'AMAP_RATE_LIMIT' || infocode === '10021' || info === 'CUQPS_HAS_EXCEEDED_THE_LIMIT') return '高德接口请求过快，已触发限流。系统已保留已成功采集的数据，请稍后重试未完成的关键词。';
   if (code === 'AMAP_KEY_PERMISSION' || /KEY|USERKEY|INVALID/i.test(info)) return '高德 Key 类型或接口权限可能不正确，请确认使用的是 Web 服务 API Key。';
+  if (code === 'AMAP_QUOTA_EXCEEDED') return '高德接口配额可能已用尽，请检查高德控制台配额。';
   if (code === 'AMAP_INVALID_ADDRESS' || code === 'AMAP_GEOCODE_EMPTY') return '高德未能解析该地址，请补充省、市、区、街道或门牌号后重试。';
   if (code === 'AMAP_ENGINE_RESPONSE_DATA_ERROR' || infocode === '30001') return '高德服务响应失败，可能与地址格式、城市参数或高德服务侧响应有关。系统已尝试备用解析方式，请检查地址是否完整。';
   if (code === 'AMAP_NETWORK_ERROR') return '服务器无法访问高德接口，请检查服务器网络、防火墙或 DNS。';
@@ -160,6 +162,7 @@ export default function NewEvaluation() {
   const [poiStats, setPoiStats] = useState<Record<string, Record<string, number | string>>>({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<ApiErrorDetail | null>(null);
+  const [collectWarning, setCollectWarning] = useState<any>(null);
   const [editingPoi, setEditingPoi] = useState<PoiPublic | null>(null);
   const [manualPoiOpen, setManualPoiOpen] = useState(false);
   const nav = useNavigate();
@@ -240,9 +243,21 @@ export default function NewEvaluation() {
     if (!ev) return;
     setBusy(type === 'geo' ? '正在定位地址' : type === 'poi' ? '正在采集周边 POI' : '正在计算评分');
     setError(null);
+    setCollectWarning(null);
     try {
       if (type === 'geo') await geocode(ev.id);
-      if (type === 'poi') await collectPois(ev.id);
+      if (type === 'poi') {
+        const result = await collectPois(ev.id);
+        if (result.status === 'partial_success') {
+          setCollectWarning(result);
+          message.warning(`POI 部分采集成功：已保存 ${result.saved_count || result.count || 0} 条，失败关键词 ${result.failed_keyword_count || 0} 个`);
+        } else if (result.status === 'failed') {
+          setCollectWarning(result);
+          message.error(`POI 采集未获得结果：失败关键词 ${result.failed_keyword_count || 0} 个`);
+        } else {
+          message.success(`POI 采集完成：已保存 ${result.saved_count || result.count || 0} 条`);
+        }
+      }
       if (type === 'score') await score(ev.id);
       await refresh(ev.id);
     } catch (e: any) {
@@ -592,6 +607,23 @@ export default function NewEvaluation() {
             showIcon
             message="操作失败"
             description={<Space direction="vertical"><span>{friendlyError(error)}</span><Button size="small" onClick={copyDiagnostics}>复制诊断信息</Button></Space>}
+          />
+        )}
+        {collectWarning && (
+          <Alert
+            type={collectWarning.status === 'failed' ? 'error' : 'warning'}
+            showIcon
+            message={collectWarning.status === 'failed' ? 'POI 采集未获得结果' : 'POI 部分采集成功'}
+            description={(
+              <Space direction="vertical">
+                <span>已成功采集 {collectWarning.saved_count || collectWarning.count || 0} 条；失败关键词 {collectWarning.failed_keyword_count || 0} 个。</span>
+                {(collectWarning.failed_keywords || []).slice(0, 8).map((item: any) => (
+                  <span key={`${item.category}-${item.keyword}`}>
+                    {item.category} / {item.keyword}：{item.error_code === 'AMAP_RATE_LIMIT' ? '高德接口请求过快，触发限流' : item.message || item.info || '采集失败'}
+                  </span>
+                ))}
+              </Space>
+            )}
           />
         )}
         <Card

@@ -156,3 +156,69 @@ def test_subtype_templates_and_missing_stats_do_not_default_to_zero(client):
     assert stats["餐饮/夜间配套"]["开业年限已补充数量"] == 0
     assert stats["餐饮/夜间配套"]["开业年限大于5年数量"] == 0
     assert stats["餐饮/夜间配套"]["评分已补充数量"] == 0
+
+
+def test_collect_pois_partial_success_when_one_keyword_rate_limited(client, monkeypatch):
+    import app.api.routes as routes
+
+    class PartialProvider:
+        last_poi_diagnostics = {
+            "provider": "amap",
+            "endpoint": "place/around",
+            "queries": [
+                {"category": "交通", "keyword": "地铁站", "status": "success", "count": "1", "raw_count": 1, "saved_count": 1},
+                {
+                    "category": "交通",
+                    "keyword": "公交车站",
+                    "status": "failed",
+                    "infocode": "10021",
+                    "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT",
+                    "error_code": "AMAP_RATE_LIMIT",
+                    "message": "高德接口请求过快，已触发限流。",
+                    "raw_count": 0,
+                    "saved_count": 0,
+                },
+            ],
+            "failed_keywords": [
+                {
+                    "category": "交通",
+                    "keyword": "公交车站",
+                    "infocode": "10021",
+                    "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT",
+                    "error_code": "AMAP_RATE_LIMIT",
+                    "message": "高德接口请求过快，已触发限流。",
+                }
+            ],
+            "raw_return_count": 1,
+            "saved_count": 1,
+            "duplicate_count": 0,
+            "invalid_location_count": 0,
+            "filtered_out_count": 0,
+        }
+
+        async def search_nearby(self, *_args, **_kwargs):
+            return [{
+                "source": "amap",
+                "provider_record_id": "partial-metro-1",
+                "name": "部分成功地铁站",
+                "category": "交通",
+                "type_code": "150500",
+                "address": "测试地址",
+                "longitude": 108.1,
+                "latitude": 34.1,
+                "distance_m": 120,
+                "raw_data": {"query_group": "交通"},
+            }]
+
+    evaluation_id = client.post("/api/evaluations", json=payload()).json()["id"]
+    client.post(f"/api/evaluations/{evaluation_id}/geocode")
+    monkeypatch.setattr(routes, "provider", lambda: PartialProvider())
+    result = client.post(f"/api/evaluations/{evaluation_id}/collect-pois").json()
+    assert result["status"] == "partial_success"
+    assert result["saved_count"] == 1
+    assert result["failed_keywords"][0]["error_code"] == "AMAP_RATE_LIMIT"
+    rows = client.get(f"/api/evaluations/{evaluation_id}/pois").json()["items"]
+    assert any(row["name"] == "部分成功地铁站" for row in rows)
+    diag = client.get(f"/api/evaluations/{evaluation_id}/poi-diagnostics").json()
+    assert diag["failed_keywords"][0]["keyword"] == "公交车站"
+    assert any(item["status"] == "success" for item in diag["keyword_diagnostics"])
