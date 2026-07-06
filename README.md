@@ -11,6 +11,9 @@
 ```bash
 cd /home/ubuntu/data/ai-ss-lvshu-2026-main
 
+# 首次一键安装 / 重新部署
+bash install.sh
+
 # 日常更新：deploy.sh 已包含 alembic upgrade head，不需要重复手工执行迁移
 git pull && bash scripts/deploy.sh
 
@@ -19,6 +22,10 @@ bash scripts/health-check.sh
 
 # 查看日志
 bash scripts/view-logs.sh
+
+# 启停服务
+bash scripts/start.sh
+bash scripts/stop.sh
 
 # 高德地址解析测试
 bash scripts/check-amap-geocode.sh "北京市" "朝阳区阜通东大街6号"

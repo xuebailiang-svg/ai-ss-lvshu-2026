@@ -10,6 +10,8 @@ Group=esports-site-selection
 WorkingDirectory=__APP_ROOT__/backend
 EnvironmentFile=/etc/esports-site-selection/backend.env
 Environment=PYTHONUNBUFFERED=1
+Environment=SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
+Environment=AGENT_TRACE_STORE_PATH=/var/lib/esports-site-selection/agent_traces.json
 ExecStart=__APP_ROOT__/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=on-failure
 RestartSec=5
