@@ -69,7 +69,8 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 ### 高德 Key
 
 - 后端：`AMAP_WEB_SERVICE_KEY`，只放在 `/etc/esports-site-selection/backend.env`。
-- 前端：`amapJsKey` 和 `amapSecurityJsCode`，写入 `/etc/esports-site-selection/frontend-runtime.json`，通过 `/runtime-config.json` 运行时读取。
+- 前端：`apiBaseUrl`、`amapJsKey` 和 `amapSecurityJsCode`，写入 `/etc/esports-site-selection/frontend-runtime.json`，通过 `/runtime-config.json` 运行时读取；`frontend/dist/config.json` 通过 `/config.json` 暴露 API 基础路径。
+- `/config.json` 和 `/runtime-config.json` 必须由 Nginx 明确 `location = ...` 返回 `200 application/json`，不能被 SPA fallback 返回 `index.html`。
 
 修改前端 runtime 配置后只需执行 `sudo systemctl reload nginx`，不需要重新执行 `npm run build`。
 

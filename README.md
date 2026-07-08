@@ -64,6 +64,52 @@ Docker Compose 文件如果存在，仅作为备用或本地调试方案；当�
 | --- | --- | --- |
 | `/etc/esports-site-selection/backend.env` | 后端私密配置 | 数据库连接、后端高德 Web 服务 Key、评分配置。该文件不允许浏览器访问。 |
 | `/etc/esports-site-selection/frontend-runtime.json` | 前端公开运行配置 | 浏览器需要读取的地图 JS Key、安全密钥和地图 provider。该文件会通过 `/runtime-config.json` 暴露给浏览器。 |
+| `frontend/dist/config.json` | 前端公开运行配置 | 浏览器读取的 API 基础路径配置。该文件会通过 `/config.json` 暴露给浏览器。 |
+
+生产环境 trace / feedback 数据持久化路径固定为：
+
+```text
+/var/lib/esports-site-selection/site_feedback.json
+/var/lib/esports-site-selection/agent_traces.json
+```
+
+systemd 服务启用了 `ProtectSystem=strict`，只通过 `ReadWritePaths=/var/lib/esports-site-selection` 授权生产数据写入。`/opt/esports-site-selection/app/data` 或项目目录下的 `data/` 只作为本地开发兼容目录，生产环境不使用。
+
+验证生产数据文件：
+
+```bash
+sudo ls -lh /var/lib/esports-site-selection/site_feedback.json /var/lib/esports-site-selection/agent_traces.json
+curl -s http://127.0.0.1/api/system/health
+```
+
+验证前端运行配置：
+
+```bash
+curl -i http://127.0.0.1/config.json
+curl -i http://127.0.0.1/runtime-config.json
+curl -s http://127.0.0.1/api/system/health
+curl -I http://127.0.0.1/
+```
+
+正确结果：
+
+```text
+/config.json                200 application/json
+/runtime-config.json        200 application/json
+/api/system/health          status=ok, warnings=[]
+/                            200 text/html
+```
+
+如果公网页面一直转圈，优先检查：
+
+```bash
+curl -i http://127.0.0.1/config.json
+curl -i http://127.0.0.1/runtime-config.json
+```
+
+`/config.json` 不能返回 `index.html`；`/runtime-config.json` 不能返回 `403 Forbidden`。
+
+如果 `/etc/esports-site-selection/backend.env` 里也配置了 `SITE_FEEDBACK_STORE_PATH` / `AGENT_TRACE_STORE_PATH`，systemd service 中的 `Environment=` 会覆盖 `EnvironmentFile=` 中同名变量，生产环境以 systemd service 为准。
 
 后端私密配置示例：
 
@@ -900,8 +946,11 @@ docker compose exec backend bash scripts/check-amap-geocode.sh "西安市" "雁�
 | --- | --- |
 | `/etc/esports-site-selection/backend.env` | 后端密钥和数据库连接 |
 | `/etc/esports-site-selection/frontend-runtime.json` | 前端公开运行配置，通过 `/runtime-config.json` 暴露给浏览器 |
+| `frontend/dist/config.json` | 前端 API 基础路径配置，通过 `/config.json` 暴露给浏览器 |
 | `/etc/systemd/system/esports-site-selection.service` | 后端 systemd 服务 |
 | `/etc/nginx/sites-available/esports-site-selection` | Nginx 配置 |
+| `/var/lib/esports-site-selection/site_feedback.json` | 生产 feedback event log |
+| `/var/lib/esports-site-selection/agent_traces.json` | 生产 Agent trace |
 | `frontend/dist/` | 前端静态文件 |
 | `backend/.venv/` | Python 虚拟环境 |
 

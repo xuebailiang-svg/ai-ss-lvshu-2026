@@ -145,7 +145,12 @@ import sys
 path, key, security, provider = sys.argv[1:5]
 with open(path, "w", encoding="utf-8") as f:
     json.dump(
-        {"amapJsKey": key, "amapSecurityJsCode": security, "mapProvider": provider or "amap"},
+        {
+            "apiBaseUrl": "/api",
+            "amapJsKey": key,
+            "amapSecurityJsCode": security,
+            "mapProvider": provider or "amap",
+        },
         f,
         ensure_ascii=False,
         indent=2,
@@ -154,7 +159,8 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 
 "${SUDO[@]}" install -m 0640 -o root -g "${APP_GROUP}" "${backend_tmp}" "${BACKEND_ENV}"
-"${SUDO[@]}" install -m 0644 -o root -g "${APP_GROUP}" "${runtime_tmp}" "${FRONTEND_RUNTIME}"
+"${SUDO[@]}" install -d -m 0755 -o root -g root "${ENV_DIR}"
+"${SUDO[@]}" install -m 0644 -o root -g root "${runtime_tmp}" "${FRONTEND_RUNTIME}"
 
 echo
 echo "配置已写入。摘要："

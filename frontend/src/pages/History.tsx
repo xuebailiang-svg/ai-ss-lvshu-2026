@@ -2,7 +2,7 @@ import {useEffect, useState} from 'react';
 import {Button, Card, Empty, Input, Modal, Progress, Select, Space, Table, Tag, message} from 'antd';
 import {useNavigate} from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import {compareEvaluations, listEvaluations, score} from '../api/client';
+import {compareEvaluations, deleteEvaluation, listEvaluations, score} from '../api/client';
 import type {Evaluation} from '../types';
 
 export default function History() {
@@ -31,6 +31,23 @@ export default function History() {
     await score(id);
     message.success('已重新评分，原始采集数据已保留');
     load();
+  };
+
+  const confirmDelete = (row: Evaluation) => {
+    Modal.confirm({
+      title: '确认删除该评估？',
+      content: `将删除“${row.name}”及其地址、POI、评分和报告数据。该操作不可恢复。`,
+      okText: '确认删除',
+      okButtonProps: {danger: true},
+      cancelText: '取消',
+      async onOk() {
+        await deleteEvaluation(row.id);
+        message.success('评估已删除');
+        setSelectedRowKeys(keys => keys.filter(key => Number(key) !== row.id));
+        setComparison(items => items.filter(item => item.id !== row.id));
+        load();
+      },
+    });
   };
 
   const compare = async () => {
@@ -93,6 +110,7 @@ export default function History() {
                 <Button onClick={() => nav(`/evaluations/${row.id}`)}>继续编辑</Button>
                 <Button onClick={() => nav(`/reports/${row.id}`)}>打开报告</Button>
                 <Button onClick={() => rescore(row.id)}>重新评分</Button>
+                <Button danger onClick={() => confirmDelete(row)}>删除</Button>
               </Space>
             ),
           },

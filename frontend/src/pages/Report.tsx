@@ -1,8 +1,8 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import {Alert, Button, Card, Descriptions, List, Progress, Result, Space, Spin, Table, Tag} from 'antd';
 import {useNavigate, useParams} from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import {getEvaluation, report} from '../api/client';
+import {friendlyTimeoutMessage, getEvaluation, isTimeoutError, report} from '../api/client';
 import type {Evaluation} from '../types';
 
 type CompetitorReportItem = {
@@ -50,24 +50,123 @@ export default function ReportPage() {
   const [ev, setEv] = useState<Evaluation>();
   const [rep, setRep] = useState<any>();
   const [error, setError] = useState('');
+  const [errorTitle, setErrorTitle] = useState('报告暂不可用');
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const safeFilename = (value?: string) => (value || 'site-selection-report')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+
+  const exportHtml = () => {
+    const reportElement = document.querySelector('.report-export-root') as HTMLElement | null;
+    if (!reportElement) return;
+    const cloned = reportElement.cloneNode(true) as HTMLElement;
+    cloned.querySelectorAll('.report-actions').forEach(node => node.remove());
+    const title = `${ev?.name || '选址评估'} - 电竞馆智能选址报告`;
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#f4f6f8;color:#1f2937;font-family:"Microsoft YaHei",Arial,sans-serif;line-height:1.6}
+    .export-shell{max-width:1120px;margin:24px auto;padding:28px;background:#fff}
+    h1{font-size:28px;margin:0 0 8px;color:#102033}
+    .export-meta{font-size:13px;color:#64748b;margin-bottom:22px;border-bottom:2px solid #e5e7eb;padding-bottom:14px}
+    .page.report{display:block;max-width:none;margin:0;padding:0;background:#fff;min-height:auto}
+    .ant-card{border:1px solid #d9dee6;border-radius:10px;margin:0 0 16px;background:#fff;break-inside:avoid}
+    .ant-card-head{padding:12px 16px;border-bottom:1px solid #edf0f4;font-weight:700;background:#f8fafc}
+    .ant-card-body{padding:16px}
+    .ant-alert{border:1px solid #d9dee6;border-radius:8px;margin:0 0 14px;padding:12px 14px;background:#f8fafc}
+    .score{font-size:42px;font-weight:700;color:#1d4f7a}
+    .score small{font-size:14px;color:#64748b;margin-left:4px}
+    table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+    th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;vertical-align:top}
+    th{background:#f3f6fa;font-weight:700}
+    .ant-tag{display:inline-block;border:1px solid #cbd5e1;border-radius:4px;padding:1px 7px;margin:2px;background:#f8fafc}
+    ul{padding-left:20px}
+    @page{size:A4;margin:14mm}
+    @media print{body{background:#fff}.export-shell{max-width:none;margin:0;padding:0}.ant-card{page-break-inside:avoid}}
+  </style>
+</head>
+<body>
+  <div class="export-shell">
+    <h1>${title}</h1>
+    <div class="export-meta">导出时间：${new Date().toLocaleString()}；系统：电竞馆智能选址系统</div>
+    ${cloned.outerHTML}
+  </div>
+</body>
+</html>`;
+    const blob = new Blob([html], {type: 'text/html;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeFilename(ev?.name)}_选址报告.html`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const printPdf = () => {
+    const oldTitle = document.title;
+    document.title = `${ev?.name || '选址评估'} - 电竞馆智能选址报告`;
+    window.setTimeout(() => {
+      window.print();
+      document.title = oldTitle;
+    }, 50);
+  };
+
+  const loadReport = useCallback(async () => {
     if (!id) return;
-    Promise.all([getEvaluation(id), report(id)])
-      .then(([evaluation, reportData]) => {
-        setEv(evaluation);
-        setRep(reportData);
-      })
-      .catch(error => {
-        const status = error.response?.status;
-        const detail = error.response?.data?.detail;
-        if (status === 409) setError('请先生成评分。');
-        else setError(typeof detail === 'string' ? detail : error.message);
-      });
+    setLoading(true);
+    setError('');
+    setErrorTitle('报告暂不可用');
+    try {
+      const evaluation = await getEvaluation(id);
+      setEv(evaluation);
+      const reportData = await report(id);
+      setRep(reportData);
+    } catch (error: any) {
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail;
+      if (status === 409) {
+        setErrorTitle('请先生成评分/报告');
+        setError('请先回到新地址评估页，点击“3 生成评分/报告”。');
+      } else if (isTimeoutError(error)) {
+        setErrorTitle('报告加载超时');
+        setError('报告生成或加载超过预期时间，可能仍在处理中，请稍后重试。');
+      } else {
+        setErrorTitle('报告暂不可用');
+        setError(typeof detail === 'string' ? detail : (error.message || friendlyTimeoutMessage()));
+      }
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
-  if (error) return <Result status="warning" title="报告暂不可用" subTitle={error} />;
-  if (!ev || !rep) return <div className="loading"><Spin /> 正在加载报告</div>;
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  if (error) {
+    return (
+      <Result
+        status="warning"
+        title={errorTitle}
+        subTitle={error}
+        extra={[
+          <Button type="primary" key="retry" onClick={() => void loadReport()} loading={loading}>重试加载报告</Button>,
+          <Button key="evaluation" onClick={() => id && nav(`/evaluations/${id}`)}>返回评估页面</Button>,
+          <Button key="history" onClick={() => nav('/history')}>返回历史评估</Button>,
+        ]}
+      />
+    );
+  }
+  if (loading || !ev || !rep) return <div className="loading"><Spin /> 正在加载报告</div>;
 
   const score = ev.result!;
   const sections = rep.sections || {};
@@ -77,10 +176,12 @@ export default function ReportPage() {
   const poiStatistics = sections.poi_statistics?.items || {};
 
   return (
-    <div className="page report">
+    <div className="page report report-export-root">
       <h2>{ev.name} · 选址评估报告</h2>
-      <Space style={{marginBottom: 12}}>
+      <Space className="report-actions" style={{marginBottom: 12}}>
         <Button onClick={() => id && nav(`/evaluations/${id}`)}>返回评估页继续编辑</Button>
+        <Button onClick={exportHtml}>导出 HTML</Button>
+        <Button type="primary" onClick={printPdf}>打印 / 另存 PDF</Button>
       </Space>
       <Alert type={rep.hard_risk ? 'error' : 'info'} showIcon message={rep.hard_risk ? '存在硬性风险' : '未发现已知硬性风险'} description={rep.disclaimer} />
       <Alert type="info" showIcon message="M1.5 当前报告为规则评分报告，不调用大模型" description="报告只展示自动采集数据、人工填写数据和规则评分依据，不会凭空生成经营数据。" />

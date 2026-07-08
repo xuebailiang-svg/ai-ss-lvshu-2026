@@ -40,6 +40,20 @@ GET /api/system/health
 - 返回版本号和配置开关状态；
 - 作为部署和运维验收入口。
 
+### Frontend runtime config
+
+```http
+GET /config.json
+GET /runtime-config.json
+```
+
+用途：
+
+- `/config.json` 返回前端 API 基础路径，例如 `{"apiBaseUrl":"/api"}`；
+- `/runtime-config.json` 返回前端公开运行配置；
+- 两者均为公开配置，不允许放入后端私密 Key、数据库连接、Token 或密码；
+- 生产部署必须返回 `200 application/json`，不能被 SPA fallback 返回 `index.html`。
+
 ## 2. 内部能力（默认不对外暴露）
 
 ### Trace Debug API

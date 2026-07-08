@@ -10,6 +10,7 @@ FRONTEND_RUNTIME_FILE="${CONFIG_DIR}/frontend-runtime.json"
 DATA_DIR="/var/lib/esports-site-selection"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 NGINX_SITE="/etc/nginx/sites-available/esports-site-selection"
+FRONTEND_DIST_CONFIG="${APP_ROOT}/frontend/dist/config.json"
 
 if [[ "${EUID}" -eq 0 ]]; then
   SUDO=()
@@ -46,6 +47,37 @@ wait_for_url() {
   return 1
 }
 
+write_frontend_runtime_config() {
+  local runtime_tmp
+  runtime_tmp="$(mktemp)"
+  cat >"${runtime_tmp}" <<'EOF'
+{"apiBaseUrl":"/api","amapJsKey":"","amapSecurityJsCode":"","mapProvider":"amap"}
+EOF
+  "${SUDO[@]}" install -m 0644 -o root -g root "${runtime_tmp}" "${FRONTEND_RUNTIME_FILE}"
+  rm -f "${runtime_tmp}"
+}
+
+write_frontend_dist_config() {
+  mkdir -p "${APP_ROOT}/frontend/dist"
+  printf '{"apiBaseUrl":"/api"}\n' >"${FRONTEND_DIST_CONFIG}"
+  chmod 0644 "${FRONTEND_DIST_CONFIG}"
+}
+
+check_json_endpoint() {
+  local name="$1"
+  local url="$2"
+  local result
+  if ! result="$(curl --silent --show-error --output /dev/null --write-out '%{http_code} %{content_type}' --max-time 8 "${url}" 2>&1)"; then
+    fail "${name} 请求失败：${url} -> ${result}"
+  fi
+  local status="${result%% *}"
+  local content_type="${result#* }"
+  if [[ "${status}" != "200" || "${content_type}" != application/json* ]]; then
+    fail "${name} 返回异常：${url} -> HTTP ${status}, Content-Type ${content_type}。期望 200 application/json。"
+  fi
+  echo "OK: ${name} (${url}) -> ${status} ${content_type}"
+}
+
 ensure_user() {
   if id "${APP_USER}" >/dev/null 2>&1; then
     return 0
@@ -56,8 +88,9 @@ ensure_user() {
 
 ensure_env_files() {
   log "初始化配置文件"
-  "${SUDO[@]}" install -d -m 0750 -o root -g "${APP_USER}" "${CONFIG_DIR}"
+  "${SUDO[@]}" install -d -m 0755 -o root -g root "${CONFIG_DIR}"
   "${SUDO[@]}" install -d -m 0750 -o "${APP_USER}" -g "${APP_USER}" "${DATA_DIR}"
+  "${SUDO[@]}" chmod 0755 "${CONFIG_DIR}"
 
   if [[ ! -f "${APP_ROOT}/.env" ]]; then
     cp "${APP_ROOT}/.env.example" "${APP_ROOT}/.env"
@@ -89,18 +122,15 @@ EOF
     echo "保留已有 ${ENV_FILE}"
   fi
 
-  if ! "${SUDO[@]}" test -s "${FRONTEND_RUNTIME_FILE}"; then
-    "${SUDO[@]}" install -m 0644 -o root -g "${APP_USER}" \
-      "${APP_ROOT}/deploy/frontend-runtime.example.json" "${FRONTEND_RUNTIME_FILE}"
-    echo "已创建 ${FRONTEND_RUNTIME_FILE}"
-  else
-    echo "保留已有 ${FRONTEND_RUNTIME_FILE}"
-  fi
+  write_frontend_runtime_config
+  "${SUDO[@]}" chmod 0644 "${FRONTEND_RUNTIME_FILE}"
+  echo "已写入 ${FRONTEND_RUNTIME_FILE}"
 }
 
 init_data_files() {
   log "初始化数据文件"
   "${SUDO[@]}" install -d -m 0750 -o "${APP_USER}" -g "${APP_USER}" "${DATA_DIR}"
+  "${SUDO[@]}" chown -R "${APP_USER}:${APP_USER}" "${DATA_DIR}"
   for file in site_feedback.json agent_traces.json; do
     if ! "${SUDO[@]}" test -f "${DATA_DIR}/${file}"; then
       if [[ "${file}" == "site_feedback.json" ]]; then
@@ -113,6 +143,8 @@ init_data_files() {
     "${SUDO[@]}" chmod 0640 "${DATA_DIR}/${file}"
   done
 
+  # Development compatibility only. Production systemd uses DATA_DIR through
+  # SITE_FEEDBACK_STORE_PATH / AGENT_TRACE_STORE_PATH and ProtectSystem=strict.
   mkdir -p "${APP_ROOT}/data"
   [[ -f "${APP_ROOT}/data/site_feedback.json" ]] || printf '{"events":[]}\n' >"${APP_ROOT}/data/site_feedback.json"
   [[ -f "${APP_ROOT}/data/agent_traces.json" ]] || printf '{"traces":{}}\n' >"${APP_ROOT}/data/agent_traces.json"
@@ -135,6 +167,7 @@ install_frontend() {
   npm --prefix "${APP_ROOT}/frontend" install --no-audit --no-fund
   npm --prefix "${APP_ROOT}/frontend" run build
   test -s "${APP_ROOT}/frontend/dist/index.html" || fail "frontend/dist/index.html 不存在，前端构建失败。"
+  write_frontend_dist_config
 }
 
 install_systemd() {
@@ -184,6 +217,9 @@ main() {
   wait_for_url "backend health" "http://127.0.0.1:8000/api/system/health" 30 || fail "后端健康检查失败"
   wait_for_url "frontend" "http://127.0.0.1/" 30 || fail "前端访问失败"
   wait_for_url "nginx api proxy" "http://127.0.0.1/api/system/health" 30 || fail "Nginx API 反向代理失败"
+  check_json_endpoint "frontend config" "http://127.0.0.1/config.json"
+  check_json_endpoint "frontend runtime config" "http://127.0.0.1/runtime-config.json"
+  "${SUDO[@]}" runuser -u "${APP_USER}" -- test -w "${DATA_DIR}" || fail "${APP_USER} 无法写入 ${DATA_DIR}"
 
   cat <<EOF
 
@@ -202,6 +238,14 @@ Health check:
 配置文件:
   ${ENV_FILE}
   ${FRONTEND_RUNTIME_FILE}
+
+Production trace / feedback path:
+  ${DATA_DIR}/site_feedback.json
+  ${DATA_DIR}/agent_traces.json
+
+Frontend runtime config:
+  ${FRONTEND_RUNTIME_FILE}
+  ${FRONTEND_DIST_CONFIG}
 
 如果要使用真实高德数据，请编辑 ${ENV_FILE}：
   AMAP_WEB_SERVICE_KEY=你的高德 Web 服务 Key

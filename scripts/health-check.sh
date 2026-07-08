@@ -40,6 +40,24 @@ check_command() {
   fi
 }
 
+check_json_endpoint() {
+  local name="$1"
+  local url="$2"
+  local result
+  if ! result="$(curl --silent --show-error --output /dev/null --write-out '%{http_code} %{content_type}' --max-time 8 "${url}" 2>&1)"; then
+    bad "${name}"
+    echo "  ${result}" >&2
+    return
+  fi
+  local status="${result%% *}"
+  local content_type="${result#* }"
+  if [[ "${status}" == "200" && "${content_type}" == application/json* ]]; then
+    ok "${name}"
+  else
+    bad "${name}: got HTTP ${status}, Content-Type ${content_type}; expected 200 application/json"
+  fi
+}
+
 echo "Health check target:"
 echo "  frontend: ${BASE_URL}"
 echo "  backend:  ${BACKEND_URL}"
@@ -63,8 +81,11 @@ check_command "nginx API proxy ${BASE_URL}/api/health" \
 check_command "system config status ${BASE_URL}/api/system/config-status" \
   curl --fail --silent --show-error --max-time 8 "${BASE_URL}/api/system/config-status"
 
-check_command "frontend runtime config ${BASE_URL}/runtime-config.json" \
-  curl --fail --silent --show-error --max-time 8 "${BASE_URL}/runtime-config.json"
+check_json_endpoint "frontend config ${BASE_URL}/config.json" \
+  "${BASE_URL}/config.json"
+
+check_json_endpoint "frontend runtime config ${BASE_URL}/runtime-config.json" \
+  "${BASE_URL}/runtime-config.json"
 
 check_command "frontend home page ${BASE_URL}/" \
   curl --fail --silent --show-error --head --max-time 8 "${BASE_URL}/"

@@ -872,6 +872,18 @@ def report(id: int, db: Session = Depends(get_db)):
     return row.content
 
 
+@router.delete("/evaluations/{id}")
+def delete_evaluation(id: int, db: Session = Depends(get_db)):
+    ev = evaluation_or_404(db, id)
+    row = db.scalar(select(EvaluationReport).where(EvaluationReport.evaluation_id == id))
+    if row:
+        db.delete(row)
+    db.delete(ev)
+    db.commit()
+    LAST_POI_DIAGNOSTICS.pop(id, None)
+    return Response(status_code=204)
+
+
 @router.put("/competitors/{id}/enrichment")
 def enrich(id: int, body: CompetitorEnrichmentIn, db: Session = Depends(get_db)):
     poi = poi_or_404(db, id)

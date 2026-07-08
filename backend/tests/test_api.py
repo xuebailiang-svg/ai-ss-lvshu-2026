@@ -44,3 +44,12 @@ def test_property_hard_risk_cannot_be_hidden(client):
 def test_missing_data_lowers_confidence(client):
     sparse={"name":"空数据","city":"北京","address":"测试路","property":{}}
     result=client.post(f"/api/evaluations/{client.post('/api/evaluations',json=sparse).json()['id']}/score").json(); assert result["confidence"]<50; assert result["completeness"]<50
+
+
+def test_delete_evaluation_removes_report_and_record(client):
+    id=client.post("/api/evaluations",json=payload()).json()["id"]
+    assert client.post(f"/api/evaluations/{id}/score").status_code==200
+    assert client.get(f"/api/evaluations/{id}/report").status_code==200
+    assert client.delete(f"/api/evaluations/{id}").status_code==204
+    assert client.get(f"/api/evaluations/{id}").status_code==404
+    assert client.get(f"/api/evaluations/{id}/report").status_code==404

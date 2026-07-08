@@ -26,9 +26,11 @@ import {
   createManualPoi,
   createEvaluation,
   exportPoisUrl,
+  friendlyTimeoutMessage,
   geocode,
   getEvaluation,
   importPoisCsv,
+  isTimeoutError,
   listPois,
   poiTemplates,
   savePoiEnrichment,
@@ -126,6 +128,7 @@ const enumOptions: Record<string, string[]> = {
 const timeLikeFields = new Set(['business_hours', 'first_service_time', 'last_service_time', 'opened_at', 'peak_period']);
 
 function normalizeError(error: any): ApiErrorDetail {
+  if (isTimeoutError(error)) return {message: friendlyTimeoutMessage(), error_code: 'CLIENT_TIMEOUT'};
   const detail = error?.response?.data?.detail;
   if (detail && typeof detail === 'object') return detail;
   if (typeof detail === 'string') return {message: detail};
@@ -144,6 +147,7 @@ export function friendlyError(detail: ApiErrorDetail) {
   if (code === 'AMAP_INVALID_ADDRESS' || code === 'AMAP_GEOCODE_EMPTY') return '高德未能解析该地址，请补充省、市、区、街道或门牌号后重试。';
   if (code === 'AMAP_ENGINE_RESPONSE_DATA_ERROR' || infocode === '30001') return '高德服务响应失败，可能与地址格式、城市参数或高德服务侧响应有关。系统已尝试备用解析方式，请检查地址是否完整。';
   if (code === 'AMAP_NETWORK_ERROR') return '服务器无法访问高德接口，请检查服务器网络、防火墙或 DNS。';
+  if (code === 'CLIENT_TIMEOUT') return text || friendlyTimeoutMessage();
   return text || '未知问题，请复制诊断信息后排查。';
 }
 
@@ -163,6 +167,7 @@ export default function NewEvaluation() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<ApiErrorDetail | null>(null);
   const [collectWarning, setCollectWarning] = useState<any>(null);
+  const [pendingRestoredEvaluationId, setPendingRestoredEvaluationId] = useState<number | null>(null);
   const [editingPoi, setEditingPoi] = useState<PoiPublic | null>(null);
   const [manualPoiOpen, setManualPoiOpen] = useState(false);
   const nav = useNavigate();
@@ -175,10 +180,14 @@ export default function NewEvaluation() {
 
   useEffect(() => {
     const idFromRoute = routeEvaluationId ? Number(routeEvaluationId) : undefined;
+    if (idFromRoute && Number.isFinite(idFromRoute)) {
+      setPendingRestoredEvaluationId(null);
+      void refresh(idFromRoute);
+      return;
+    }
     const idFromStorage = Number(localStorage.getItem(CURRENT_EVALUATION_KEY) || '');
-    const targetId = idFromRoute || idFromStorage;
-    if (targetId && Number.isFinite(targetId)) {
-      void refresh(targetId);
+    if (idFromStorage && Number.isFinite(idFromStorage)) {
+      setPendingRestoredEvaluationId(idFromStorage);
     }
   }, [routeEvaluationId]);
 
@@ -203,10 +212,27 @@ export default function NewEvaluation() {
   const refresh = async (id: number) => {
     const data = await getEvaluation(id);
     setEv(data);
+    setPendingRestoredEvaluationId(null);
     localStorage.setItem(CURRENT_EVALUATION_KEY, String(data.id));
     if (data.site?.property) form.setFieldsValue(data.site.property);
     await loadPoiRows(id);
     return data;
+  };
+
+  const continueRestoredEvaluation = async () => {
+    if (!pendingRestoredEvaluationId) return;
+    setBusy('正在恢复上次评估...');
+    setError(null);
+    try {
+      const data = await refresh(pendingRestoredEvaluationId);
+      nav(`/evaluations/${data.id}`, {replace: true});
+    } catch (e: any) {
+      setError(normalizeError(e));
+      setPendingRestoredEvaluationId(null);
+      localStorage.removeItem(CURRENT_EVALUATION_KEY);
+    } finally {
+      setBusy('');
+    }
   };
 
   const create = async (values: any) => {
@@ -222,6 +248,7 @@ export default function NewEvaluation() {
           property: values,
         });
         setEv(data);
+        setPendingRestoredEvaluationId(null);
         localStorage.setItem(CURRENT_EVALUATION_KEY, String(data.id));
         nav(`/evaluations/${data.id}`, {replace: true});
         await loadPoiRows(data.id);
@@ -241,7 +268,7 @@ export default function NewEvaluation() {
 
   const run = async (type: 'geo' | 'poi' | 'score') => {
     if (!ev) return;
-    setBusy(type === 'geo' ? '正在定位地址' : type === 'poi' ? '正在采集周边 POI' : '正在计算评分');
+    setBusy(type === 'geo' ? '正在定位地址...' : type === 'poi' ? '正在采集 POI...' : '正在生成评分/报告...');
     setError(null);
     setCollectWarning(null);
     try {
@@ -391,6 +418,7 @@ export default function NewEvaluation() {
   const clearDraft = () => {
     localStorage.removeItem(DRAFT_KEY);
     localStorage.removeItem(CURRENT_EVALUATION_KEY);
+    setPendingRestoredEvaluationId(null);
     setEv(undefined);
     setPoiRows([]);
     setPoiStats({});
@@ -493,6 +521,34 @@ export default function NewEvaluation() {
             if (!ev) localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
           }}
         >
+          {pendingRestoredEvaluationId && !ev && (
+            <Alert
+              data-testid="restore-evaluation-alert"
+              type="info"
+              showIcon
+              style={{marginBottom: 12}}
+              message="检测到上次未完成的评估，是否继续？"
+              description={(
+                <Space direction="vertical">
+                  <span>继续上次评估会加载已保存记录，名称、城市、地址将被锁定；新建评估会清空本地记录并恢复可输入状态。</span>
+                  <Space>
+                    <Button size="small" type="primary" onClick={() => void continueRestoredEvaluation()} disabled={!!busy}>继续上次评估</Button>
+                    <Button size="small" onClick={clearDraft} disabled={!!busy}>新建评估</Button>
+                  </Space>
+                </Space>
+              )}
+            />
+          )}
+          {ev && (
+            <Alert
+              data-testid="saved-evaluation-locked-alert"
+              type="warning"
+              showIcon
+              style={{marginBottom: 12}}
+              message="当前正在查看已保存评估，名称、城市、地址已锁定。"
+              description="如需测试新地址，请点击“新建评估 / 清空当前”。"
+            />
+          )}
           <Collapse
             defaultActiveKey={['site', 'property']}
             ghost
@@ -503,18 +559,18 @@ export default function NewEvaluation() {
                 children: (
                   <>
                     <Form.Item name="name" label="评估名称" rules={[{required: true}]}>
-                      <Input disabled={!!ev} />
+                      <Input data-testid="evaluation-name-input" disabled={!!ev} />
                     </Form.Item>
                     <div className="form-row">
                       <Form.Item name="city" label="城市" rules={[{required: true}]}>
-                        <Input disabled={!!ev} placeholder="例如：西安市" />
+                        <Input data-testid="evaluation-city-input" disabled={!!ev} placeholder="例如：西安市" />
                       </Form.Item>
                       <Form.Item name="radius" label="搜索半径（米）">
                         <InputNumber min={100} max={50000} disabled={!!ev} />
                       </Form.Item>
                     </div>
                     <Form.Item name="address" label="详细地址" rules={[{required: true}]}>
-                      <Input.TextArea disabled={!!ev} placeholder="例如：雁塔区小寨西路" />
+                      <Input.TextArea data-testid="evaluation-address-input" disabled={!!ev} placeholder="例如：雁塔区小寨西路" />
                     </Form.Item>
                   </>
                 ),

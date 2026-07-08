@@ -4,6 +4,7 @@ set -Eeuo pipefail
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE=/etc/esports-site-selection/backend.env
 FRONTEND_RUNTIME_FILE=/etc/esports-site-selection/frontend-runtime.json
+FRONTEND_DIST_CONFIG="${APP_ROOT}/frontend/dist/config.json"
 SERVICE_NAME=esports-site-selection
 
 if [[ "${EUID}" -eq 0 ]]; then
@@ -50,6 +51,62 @@ wait_for_url() {
   return 1
 }
 
+check_json_endpoint() {
+  local name="$1"
+  local url="$2"
+  local result
+  if ! result="$(curl --silent --show-error --output /dev/null --write-out '%{http_code} %{content_type}' --max-time 8 "${url}" 2>&1)"; then
+    fail "${name} 请求失败：${url} -> ${result}"
+  fi
+  local status="${result%% *}"
+  local content_type="${result#* }"
+  if [[ "${status}" != "200" || "${content_type}" != application/json* ]]; then
+    fail "${name} 返回异常：${url} -> HTTP ${status}, Content-Type ${content_type}。期望 200 application/json。"
+  fi
+  echo "OK: ${name} (${url}) -> ${status} ${content_type}"
+}
+
+write_frontend_dist_config() {
+  mkdir -p "${APP_ROOT}/frontend/dist"
+  printf '{"apiBaseUrl":"/api"}\n' >"${FRONTEND_DIST_CONFIG}"
+  chmod 0644 "${FRONTEND_DIST_CONFIG}"
+}
+
+normalize_frontend_runtime_config() {
+  "${SUDO[@]}" install -d -m 0755 -o root -g root "$(dirname "${FRONTEND_RUNTIME_FILE}")"
+  local runtime_tmp
+  runtime_tmp="$(mktemp)"
+  if "${SUDO[@]}" test -s "${FRONTEND_RUNTIME_FILE}"; then
+    "${SUDO[@]}" python3 - "${FRONTEND_RUNTIME_FILE}" "${runtime_tmp}" <<'PY'
+import json
+import sys
+src, dst = sys.argv[1:3]
+try:
+    with open(src, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+data.setdefault("apiBaseUrl", "/api")
+data.setdefault("amapJsKey", "")
+data.setdefault("amapSecurityJsCode", "")
+data.setdefault("mapProvider", "amap")
+with open(dst, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    f.write("\n")
+PY
+  else
+    cat >"${runtime_tmp}" <<'EOF'
+{"apiBaseUrl":"/api","amapJsKey":"","amapSecurityJsCode":"","mapProvider":"amap"}
+EOF
+  fi
+  "${SUDO[@]}" install -m 0644 -o root -g root "${runtime_tmp}" "${FRONTEND_RUNTIME_FILE}"
+  rm -f "${runtime_tmp}"
+  "${SUDO[@]}" chmod 0755 "$(dirname "${FRONTEND_RUNTIME_FILE}")"
+  "${SUDO[@]}" chmod 0644 "${FRONTEND_RUNTIME_FILE}"
+}
+
 check_env_file() {
   if ! "${SUDO[@]}" test -e "${ENV_FILE}"; then
     fail "${ENV_FILE} 不存在。请先运行 scripts/configure-secrets.sh，或按 README 创建后端配置。"
@@ -76,6 +133,7 @@ check_env_file() {
 
 ensure_frontend_runtime_config() {
   if "${SUDO[@]}" test -s "${FRONTEND_RUNTIME_FILE}"; then
+    normalize_frontend_runtime_config
     echo "OK: 前端运行时配置已存在：${FRONTEND_RUNTIME_FILE}"
     return 0
   fi
@@ -100,12 +158,14 @@ PY
     )
     "${SUDO[@]}" install -m 0644 -o root -g esports-site-selection "${runtime_tmp}" "${FRONTEND_RUNTIME_FILE}"
     rm -f "${runtime_tmp}"
+    normalize_frontend_runtime_config
     return 0
   fi
   echo "WARNING: ${FRONTEND_RUNTIME_FILE} 不存在，开始从示例创建。"
   echo "         地图 Key 为空时页面会提示“前端高德地图 JS Key 未配置”。"
   "${SUDO[@]}" install -m 0644 -o root -g esports-site-selection \
     "${APP_ROOT}/deploy/frontend-runtime.example.json" "${FRONTEND_RUNTIME_FILE}"
+  normalize_frontend_runtime_config
 }
 
 check_frontend_runtime_config() {
@@ -149,6 +209,7 @@ else
   fail "缺少 npm 且没有预构建 frontend/dist。"
 fi
 test -s "${APP_ROOT}/frontend/dist/index.html" || fail "frontend/dist/index.html 不存在，前端构建失败。"
+write_frontend_dist_config
 
 echo "[3/6] 执行数据库迁移"
 "${SUDO[@]}" runuser -u esports-site-selection -- bash -c \
@@ -178,5 +239,7 @@ sed "s|__APP_ROOT__|${APP_ROOT}|g" "${APP_ROOT}/deploy/nginx-direct.conf" >"${ng
 echo "[6/6] 检查服务"
 wait_for_url "Nginx 静态健康检查" "http://127.0.0.1/nginx-health" 30 || exit 1
 wait_for_url "Nginx API 反向代理" "http://127.0.0.1/api/health" 30 || { print_backend_diagnostics; exit 1; }
+check_json_endpoint "frontend config" "http://127.0.0.1/config.json"
+check_json_endpoint "frontend runtime config" "http://127.0.0.1/runtime-config.json"
 curl --fail --silent --show-error --head "http://127.0.0.1/" >/dev/null
 echo "直接部署完成：http://服务器公网IP/"
