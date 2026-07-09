@@ -58,6 +58,30 @@ check_json_endpoint() {
   fi
 }
 
+check_asset_endpoint() {
+  local name="$1"
+  local index_url="$2"
+  local asset_path
+  asset_path="$(curl --silent --show-error --max-time 8 "${index_url}" | python3 -c 'import re,sys; html=sys.stdin.read(); m=re.search(r"src=\"([^\"]*assets/[^\"]+\.js)\"", html); print(m.group(1) if m else "")' 2>/dev/null || true)"
+  if [[ -z "${asset_path}" ]]; then
+    bad "${name}: cannot parse JS asset from index.html"
+    return
+  fi
+  local result status content_type size
+  result="$(curl --silent --show-error --output /dev/null --write-out '%{http_code} %{content_type} %{size_download}' --max-time 20 "${BASE_URL}${asset_path}" 2>&1)" || {
+    bad "${name}: ${result}"
+    return
+  }
+  status="$(awk '{print $1}' <<<"${result}")"
+  content_type="$(awk '{print $2}' <<<"${result}")"
+  size="$(awk '{print $3}' <<<"${result}")"
+  if [[ "${status}" == "200" && "${content_type}" == application/javascript* && "${size}" -gt 100000 ]]; then
+    ok "${name}: ${asset_path}"
+  else
+    bad "${name}: ${asset_path} -> HTTP ${status}, Content-Type ${content_type}, size ${size}"
+  fi
+}
+
 echo "Health check target:"
 echo "  frontend: ${BASE_URL}"
 echo "  backend:  ${BACKEND_URL}"
@@ -89,6 +113,16 @@ check_json_endpoint "frontend runtime config ${BASE_URL}/runtime-config.json" \
 
 check_command "frontend home page ${BASE_URL}/" \
   curl --fail --silent --show-error --head --max-time 8 "${BASE_URL}/"
+
+check_asset_endpoint "frontend JS asset" "${BASE_URL}/"
+
+if "${SUDO[@]}" grep -R "__APP_ROOT__" /etc/nginx "/etc/systemd/system/${SERVICE_NAME}.service" >/tmp/esports-app-root-check 2>/dev/null; then
+  bad "__APP_ROOT__ placeholder residue"
+  cat /tmp/esports-app-root-check >&2
+else
+  ok "no __APP_ROOT__ residue"
+fi
+rm -f /tmp/esports-app-root-check
 
 echo
 echo "Summary: ${pass_count} passed, ${fail_count} failed"

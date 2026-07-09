@@ -4,6 +4,38 @@
 
 > 系统结果仅用于初步筛查，最终以当地文化旅游、行政审批、消防和其他主管部门要求为准。
 
+## v1.0-beta Ubuntu 一键部署
+
+当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。
+
+```bash
+# 全新安装 / 重复安装
+sudo ./install.sh
+
+# 只检查环境，不修改系统
+sudo ./install.sh --check
+
+# 日常升级：保留 backend.env、frontend-runtime.json、数据库和 trace/feedback
+sudo ./install.sh --upgrade
+
+# 安全卸载：默认保留数据库，删除运行数据需要二次确认
+sudo ./uninstall.sh
+```
+
+详细说明见 [docs/INSTALL.md](docs/INSTALL.md)。
+
+公网打开后一直转圈时，优先检查：
+
+```bash
+curl -i http://127.0.0.1/config.json
+curl -i http://127.0.0.1/runtime-config.json
+curl -I http://127.0.0.1/assets/index-*.js
+curl -s http://127.0.0.1/api/system/health
+grep -R "__APP_ROOT__" /etc/nginx /etc/systemd/system/esports-site-selection.service
+```
+
+`/config.json` 和 `/runtime-config.json` 必须返回 `200 application/json`，不能返回 `index.html` 或 `403`。
+
 ## 最常用命令
 
 服务器默认项目目录按当前生产/测试约定写为 `/home/ubuntu/data/ai-ss-lvshu-2026-main`。如果你的实际目录是 `/opt/esports-site-selection/app`，把下面第一行替换成对应目录即可。

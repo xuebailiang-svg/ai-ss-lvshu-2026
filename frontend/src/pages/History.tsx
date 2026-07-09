@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {Button, Card, Empty, Input, Modal, Progress, Select, Space, Table, Tag, message} from 'antd';
+import {Button, Card, Empty, Input, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message} from 'antd';
 import {useNavigate} from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import {compareEvaluations, deleteEvaluation, listEvaluations, score} from '../api/client';
@@ -16,12 +16,16 @@ export default function History() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [comparison, setComparison] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const nav = useNavigate();
 
   const load = () => {
     setLoading(true);
     listEvaluations({q, city, recommendation, has_hard_risk: hasHardRisk, sort_by: sortBy, order})
       .then(setRows)
+      .catch(error => {
+        message.error(error?.response?.data?.detail || error?.message || '历史评估加载失败');
+      })
       .finally(() => setLoading(false));
   };
 
@@ -33,21 +37,21 @@ export default function History() {
     load();
   };
 
-  const confirmDelete = (row: Evaluation) => {
-    Modal.confirm({
-      title: '确认删除该评估？',
-      content: `将删除“${row.name}”及其地址、POI、评分和报告数据。该操作不可恢复。`,
-      okText: '确认删除',
-      okButtonProps: {danger: true},
-      cancelText: '取消',
-      async onOk() {
-        await deleteEvaluation(row.id);
-        message.success('评估已删除');
-        setSelectedRowKeys(keys => keys.filter(key => Number(key) !== row.id));
-        setComparison(items => items.filter(item => item.id !== row.id));
-        load();
-      },
-    });
+  const handleDelete = async (row: Evaluation) => {
+    setDeletingId(row.id);
+    try {
+      await deleteEvaluation(row.id);
+      message.success('评估已删除');
+      setRows(items => items.filter(item => item.id !== row.id));
+      setSelectedRowKeys(keys => keys.filter(key => Number(key) !== row.id));
+      setComparison(items => items.filter(item => item.id !== row.id));
+      load();
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || error?.message || '删除失败，请稍后重试');
+      throw error;
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const compare = async () => {
@@ -70,7 +74,7 @@ export default function History() {
           {label: '推荐', value: '推荐'},
           {label: '谨慎评估', value: '谨慎评估'},
           {label: '暂不推荐', value: '暂不推荐'},
-          {label: '高风险', value: '高风险，可能不符合准入'},
+          {label: '高风险，可能不符合准入', value: '高风险，可能不符合准入'},
         ]} />
         <Select allowClear placeholder="硬性风险" style={{width: 140}} value={hasHardRisk} onChange={setHasHardRisk} options={[
           {label: '存在硬性风险', value: true},
@@ -106,57 +110,72 @@ export default function History() {
           {
             title: '操作',
             render: (_, row) => (
-              <Space>
+              <Space wrap>
                 <Button onClick={() => nav(`/evaluations/${row.id}`)}>继续编辑</Button>
                 <Button onClick={() => nav(`/reports/${row.id}`)}>打开报告</Button>
                 <Button onClick={() => rescore(row.id)}>重新评分</Button>
-                <Button danger onClick={() => confirmDelete(row)}>删除</Button>
+                <Popconfirm
+                  title="确认删除该评估？"
+                  description={`将删除“${row.name}”及其地址、POI、评分和报告数据。该操作不可恢复。`}
+                  okText="确认删除"
+                  cancelText="取消"
+                  okButtonProps={{danger: true, loading: deletingId === row.id}}
+                  onConfirm={() => handleDelete(row)}
+                >
+                  <Button danger loading={deletingId === row.id}>删除</Button>
+                </Popconfirm>
               </Space>
             ),
           },
         ]}
       />
 
-      <Modal title="候选地址对比" open={comparison.length > 0} width={1100} footer={null} onCancel={() => setComparison([])}>
-        <Card size="small">
-          <ReactECharts
-            style={{height: 260}}
-            option={{
-              tooltip: {},
-              legend: {},
-              xAxis: {type: 'category', data: comparison.map(item => item.name)},
-              yAxis: {type: 'value'},
-              series: [
-                {name: '综合评分', type: 'bar', data: comparison.map(item => item.total_score || 0)},
-                {name: '完整度', type: 'bar', data: comparison.map(item => item.completeness || 0)},
-              ],
-            }}
-          />
-        </Card>
-        <Table
-          size="small"
-          rowKey="id"
-          pagination={false}
-          dataSource={comparison}
-          columns={[
-            {title: '地址', dataIndex: 'address'},
-            {title: '城市', dataIndex: 'city'},
-            {title: '综合评分', dataIndex: 'total_score'},
-            {title: '推荐等级', dataIndex: 'recommendation'},
-            {title: '硬性风险', dataIndex: 'hard_risk_count'},
-            {title: '竞品数量', dataIndex: 'competitor_count'},
-            {title: '强竞品', dataIndex: 'strong_competitor_count'},
-            {title: '交通', dataIndex: 'transport_score'},
-            {title: '人口代理', dataIndex: 'population_score'},
-            {title: '商业配套', dataIndex: 'commercial_score'},
-            {title: '物业', dataIndex: 'property_score'},
-            {title: '完整度', dataIndex: 'completeness'},
-            {title: '月租金', dataIndex: 'monthly_rent'},
-            {title: '每台分摊租金', dataIndex: 'rent_per_machine_month'},
-            {title: '待核实项', dataIndex: 'review_item_count'},
-          ]}
-        />
-      </Modal>
+      <ModalComparison comparison={comparison} onClose={() => setComparison([])} />
     </div>
+  );
+}
+
+function ModalComparison({comparison, onClose}: {comparison: any[]; onClose: () => void}) {
+  return (
+    <Modal title="候选地址对比" open={comparison.length > 0} width={1100} footer={null} onCancel={onClose}>
+      <Card size="small">
+        <ReactECharts
+          style={{height: 260}}
+          option={{
+            tooltip: {},
+            legend: {},
+            xAxis: {type: 'category', data: comparison.map(item => item.name)},
+            yAxis: {type: 'value'},
+            series: [
+              {name: '综合评分', type: 'bar', data: comparison.map(item => item.total_score || 0)},
+              {name: '完整度', type: 'bar', data: comparison.map(item => item.completeness || 0)},
+            ],
+          }}
+        />
+      </Card>
+      <Table
+        size="small"
+        rowKey="id"
+        pagination={false}
+        dataSource={comparison}
+        columns={[
+          {title: '地址', dataIndex: 'address'},
+          {title: '城市', dataIndex: 'city'},
+          {title: '综合评分', dataIndex: 'total_score'},
+          {title: '推荐等级', dataIndex: 'recommendation'},
+          {title: '硬性风险', dataIndex: 'hard_risk_count'},
+          {title: '竞品数量', dataIndex: 'competitor_count'},
+          {title: '强竞品', dataIndex: 'strong_competitor_count'},
+          {title: '交通', dataIndex: 'transport_score'},
+          {title: '人口代理', dataIndex: 'population_score'},
+          {title: '商业配套', dataIndex: 'commercial_score'},
+          {title: '物业', dataIndex: 'property_score'},
+          {title: '完整度', dataIndex: 'completeness'},
+          {title: '月租金', dataIndex: 'monthly_rent'},
+          {title: '每台分摊租金', dataIndex: 'rent_per_machine_month'},
+          {title: '待核实项', dataIndex: 'review_item_count'},
+        ]}
+      />
+    </Modal>
   );
 }

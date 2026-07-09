@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.agents import SiteSelectionAgent
@@ -875,10 +875,20 @@ def report(id: int, db: Session = Depends(get_db)):
 @router.delete("/evaluations/{id}")
 def delete_evaluation(id: int, db: Session = Depends(get_db)):
     ev = evaluation_or_404(db, id)
-    row = db.scalar(select(EvaluationReport).where(EvaluationReport.evaluation_id == id))
-    if row:
-        db.delete(row)
-    db.delete(ev)
+    poi_ids = [row[0] for row in db.execute(select(PoiObservation.id).where(PoiObservation.evaluation_id == id)).all()]
+    site = db.scalar(select(CandidateSite).where(CandidateSite.evaluation_id == id))
+
+    db.execute(delete(EvaluationReport).where(EvaluationReport.evaluation_id == id))
+    db.execute(delete(ScoringResult).where(ScoringResult.evaluation_id == id))
+    if site:
+        db.execute(delete(PropertySurvey).where(PropertySurvey.candidate_site_id == site.id))
+    if poi_ids:
+        db.execute(delete(CompetitorSurveyRecord).where(CompetitorSurveyRecord.poi_observation_id.in_(poi_ids)))
+        db.execute(delete(CompetitorEnrichment).where(CompetitorEnrichment.poi_observation_id.in_(poi_ids)))
+        db.execute(delete(PoiEnrichment).where(PoiEnrichment.poi_observation_id.in_(poi_ids)))
+        db.execute(delete(PoiObservation).where(PoiObservation.id.in_(poi_ids)))
+    db.execute(delete(CandidateSite).where(CandidateSite.evaluation_id == id))
+    db.execute(delete(SiteEvaluation).where(SiteEvaluation.id == id).execution_options(synchronize_session=False))
     db.commit()
     LAST_POI_DIAGNOSTICS.pop(id, None)
     return Response(status_code=204)
