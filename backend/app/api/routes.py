@@ -11,12 +11,14 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.agents import SiteSelectionAgent
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.data_model import normalize_data
 from app.feedback import SiteFeedbackStore
 from app.models import *
 from app.providers.amap import AmapDataProvider, ProviderError
@@ -212,6 +214,17 @@ POI_SUBTYPE_TEMPLATES: dict[str, dict[str, list[str]]] = {
 def provider():
     settings = get_settings()
     return AmapDataProvider(settings.amap_web_service_key, mock=settings.amap_mock)
+
+
+@router.post("/data/validate")
+def validate_unified_data(body: dict[str, Any]):
+    try:
+        normalized_data, warnings = normalize_data(body)
+    except ValidationError as exc:
+        raise HTTPException(422, {"success": False, "errors": exc.errors()}) from exc
+    except ValueError as exc:
+        raise HTTPException(400, {"success": False, "errors": [str(exc)]}) from exc
+    return {"success": True, "normalized_data": normalized_data, "warnings": warnings}
 
 
 @router.post("/agent/site-selection/run")
