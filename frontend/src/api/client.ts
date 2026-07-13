@@ -65,3 +65,6 @@ export const saveSiteFeedback = (data: {
   monthly_revenue_range?: string;
 }) => api.post('/feedback/site-result', data).then(response => response.data);
 export const getAgentTrace = (taskId: string) => api.get(`/agent/site-selection/trace/${taskId}`).then(response => response.data);
+export const createProjectChatSession = (projectId: string) => api.post(`/projects/${projectId}/chat/session`).then(response => response.data);
+export const sendProjectChatMessage = (sessionId: string, message: string) => api.post(`/chat/${sessionId}/message`, {message}, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+export const listProjectChatMessages = (sessionId: string) => api.get(`/chat/${sessionId}/messages`).then(response => response.data);

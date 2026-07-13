@@ -26,6 +26,9 @@ class Settings(BaseModel):
     site_feedback_store_path: str
     agent_trace_store_path: str
     app_version: str
+    deepseek_api_key: str
+    deepseek_base_url: str
+    deepseek_model: str
 
 @lru_cache
 def get_settings() -> Settings:
@@ -46,4 +49,7 @@ def get_settings() -> Settings:
         site_feedback_store_path=os.getenv("SITE_FEEDBACK_STORE_PATH", "data/site_feedback.json"),
         agent_trace_store_path=os.getenv("AGENT_TRACE_STORE_PATH", "data/agent_traces.json"),
         app_version=os.getenv("APP_VERSION", "v1.0-beta"),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
     )

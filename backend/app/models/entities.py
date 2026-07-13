@@ -103,6 +103,7 @@ class SiteProjectRecord(Base):
     confidence: Mapped[float]=mapped_column(Float, default=.5)
     status: Mapped[str]=mapped_column(String(50), default="pending_review")
     raw_data: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
+    deleted_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True))
 
 class UnifiedPOIRecord(Base):
     __tablename__="pois"
@@ -226,3 +227,71 @@ class SupplementRecord(Base):
     status: Mapped[str]=mapped_column(String(50), default="pending_review")
     raw_data: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
     created_time: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+
+class ManualInputRecord(Base):
+    __tablename__="manual_inputs"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    project_id: Mapped[str]=mapped_column(String(80), index=True)
+    target_type: Mapped[str]=mapped_column(String(80), index=True)
+    target_id: Mapped[str|None]=mapped_column(String(120), index=True)
+    field_name: Mapped[str]=mapped_column(String(120))
+    old_value: Mapped[Any|None]=mapped_column(JSON)
+    new_value: Mapped[Any|None]=mapped_column(JSON)
+    source: Mapped[str]=mapped_column(String(50), default="manual")
+    confidence: Mapped[float]=mapped_column(Float, default=.8)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+
+class SiteScoreRecord(Base):
+    __tablename__="site_scores"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    project_id: Mapped[str]=mapped_column(String(80), index=True)
+    total_score: Mapped[float]=mapped_column(Float)
+    level: Mapped[str]=mapped_column(String(50))
+    dimension_scores: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
+    advantage_items: Mapped[list[Any]]=mapped_column(JSON, default=list)
+    risk_items: Mapped[list[Any]]=mapped_column(JSON, default=list)
+    missing_data: Mapped[list[Any]]=mapped_column(JSON, default=list)
+    confidence: Mapped[float]=mapped_column(Float, default=.5)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+
+class AIReportRecord(Base):
+    __tablename__="ai_reports"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    project_id: Mapped[str]=mapped_column(String(80), index=True)
+    input_snapshot: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
+    score_snapshot: Mapped[dict[str,Any]]=mapped_column(JSON, default=dict)
+    report_content: Mapped[str]=mapped_column(Text)
+    model_name: Mapped[str]=mapped_column(String(100))
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+
+class AICallLogRecord(Base):
+    __tablename__="ai_call_logs"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    project_id: Mapped[str]=mapped_column(String(80), index=True)
+    report_id: Mapped[int|None]=mapped_column(Integer, index=True)
+    model_name: Mapped[str]=mapped_column(String(100))
+    input_length: Mapped[int]=mapped_column(Integer, default=0)
+    output_length: Mapped[int]=mapped_column(Integer, default=0)
+    duration_ms: Mapped[int]=mapped_column(Integer, default=0)
+    status: Mapped[str]=mapped_column(String(50), default="success")
+    error_message: Mapped[str|None]=mapped_column(Text)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+
+class ChatSessionRecord(Base):
+    __tablename__="chat_sessions"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    project_id: Mapped[str]=mapped_column(String(80), index=True)
+    title: Mapped[str|None]=mapped_column(String(200))
+    conversation_summary: Mapped[str|None]=mapped_column(Text)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+class ChatMessageRecord(Base):
+    __tablename__="chat_messages"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    session_id: Mapped[int]=mapped_column(Integer, index=True)
+    role: Mapped[str]=mapped_column(String(30))
+    content: Mapped[str]=mapped_column(Text)
+    references: Mapped[list[Any]]=mapped_column(JSON, default=list)
+    simulation: Mapped[dict[str,Any]|None]=mapped_column(JSON)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now)

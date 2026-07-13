@@ -1,4 +1,4 @@
-import {cleanup, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 import {afterEach, beforeEach, expect, test, vi} from 'vitest';
 import App from '../App';
@@ -33,6 +33,20 @@ const apiMocks = vi.hoisted(() => ({
   compareEvaluations: vi.fn(),
   saveSiteFeedback: vi.fn(),
   getAgentTrace: vi.fn(),
+  listProjects: vi.fn(() => Promise.resolve({items: []})),
+  createProject: vi.fn(() => Promise.resolve({project_id: 'proj_new'})),
+  getProject: vi.fn(() => Promise.resolve({project: {project_id: 'proj_1', name: '测试项目', city: '西安市', address: '小寨地铁站', radius_meters: 1000, business_type: '电竞馆'}, stats: {}})),
+  getProjectDataset: vi.fn(() => Promise.resolve({project: {project_id: 'proj_1'}, pois: [], competitors: [], food_businesses: [], entertainments: [], rent_data: {}, population_data: {}, supplements: []})),
+  getProjectDataQuality: vi.fn(() => Promise.resolve({project_id: 'proj_1', quality_score: 60, missing: ['真实租金'], warnings: []})),
+  getProjectMissingData: vi.fn(() => Promise.resolve({project_id: 'proj_1', missing: []})),
+  collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
+  submitManualInput: vi.fn(() => Promise.resolve({success: true})),
+  listManualInputs: vi.fn(() => Promise.resolve({items: []})),
+  scoreProject: vi.fn(() => Promise.resolve({total_score: 70, level: '推荐', confidence: 0.8, dimensions: {population: {score: 20, max: 30}}})),
+  generateAiReport: vi.fn(() => Promise.resolve({success: true, content: '# 电竞馆选址分析报告', model: 'deepseek-chat'})),
+  createProjectChatSession: vi.fn(() => Promise.resolve({session_id: '1', project_id: 'proj_1'})),
+  sendProjectChatMessage: vi.fn(() => Promise.resolve({answer: '基于评分和竞品数据回答。', references: ['score_result']})),
+  listProjectChatMessages: vi.fn(() => Promise.resolve({session_id: '1', project_id: 'proj_1', messages: []})),
 }));
 
 vi.mock('../api/client', () => ({
@@ -40,6 +54,35 @@ vi.mock('../api/client', () => ({
   exportPoisUrl: (id: number, category: string) => `/api/evaluations/${id}/pois/export?category=${category}`,
   isTimeoutError: (error: any) => error?.code === 'ECONNABORTED' || String(error?.message || '').includes('timeout'),
   friendlyTimeoutMessage: () => '请求超过预期时间，服务可能仍在处理中，请稍后重试。',
+}));
+
+vi.mock('../api/projects', () => ({
+  listProjects: apiMocks.listProjects,
+  createProject: apiMocks.createProject,
+  getProject: apiMocks.getProject,
+  getProjectDataset: apiMocks.getProjectDataset,
+  getProjectDataQuality: apiMocks.getProjectDataQuality,
+  getProjectMissingData: apiMocks.getProjectMissingData,
+  collectProjectAmap: apiMocks.collectProjectAmap,
+}));
+
+vi.mock('../api/data', () => ({
+  submitManualInput: apiMocks.submitManualInput,
+  listManualInputs: apiMocks.listManualInputs,
+}));
+
+vi.mock('../api/score', () => ({
+  scoreProject: apiMocks.scoreProject,
+}));
+
+vi.mock('../api/report', () => ({
+  generateAiReport: apiMocks.generateAiReport,
+}));
+
+vi.mock('../api/chat', () => ({
+  createProjectChatSession: apiMocks.createProjectChatSession,
+  sendProjectChatMessage: apiMocks.sendProjectChatMessage,
+  listProjectChatMessages: apiMocks.listProjectChatMessages,
 }));
 
 const sampleEvaluation = {
@@ -87,6 +130,49 @@ test('renders agent analysis page', () => {
   render(<MemoryRouter initialEntries={['/agent']}><App /></MemoryRouter>);
   expect(screen.getByRole('heading', {name: '选址 Agent 分析'})).toBeInTheDocument();
   expect(screen.getByRole('button', {name: '启动 Agent 分析'})).toBeInTheDocument();
+});
+
+test('renders projects page and empty list', async () => {
+  render(<MemoryRouter initialEntries={['/projects']}><App /></MemoryRouter>);
+  expect(screen.getByRole('heading', {name: '选址项目工作台'})).toBeInTheDocument();
+  expect(await screen.findByText('项目列表')).toBeInTheDocument();
+  expect(apiMocks.listProjects).toHaveBeenCalled();
+});
+
+test('submits create project form', async () => {
+  render(<MemoryRouter initialEntries={['/projects']}><App /></MemoryRouter>);
+  fireEvent.change(screen.getByPlaceholderText('西安小寨电竞馆'), {target: {value: '西安小寨电竞馆'}});
+  fireEvent.change(screen.getByPlaceholderText('西安市'), {target: {value: '西安市'}});
+  fireEvent.change(screen.getByPlaceholderText('雁塔区'), {target: {value: '雁塔区'}});
+  fireEvent.change(screen.getByPlaceholderText('小寨地铁站'), {target: {value: '小寨地铁站'}});
+  fireEvent.click(screen.getByRole('button', {name: '创建并进入项目'}));
+  await waitFor(() => expect(apiMocks.createProject).toHaveBeenCalled());
+});
+
+test('renders project detail workspace', async () => {
+  render(<MemoryRouter initialEntries={['/projects/proj_1']}><App /></MemoryRouter>);
+  expect(await screen.findByRole('heading', {name: '项目详情工作台'})).toBeInTheDocument();
+  expect(await screen.findByText('测试项目')).toBeInTheDocument();
+  expect(screen.getByText('开始高德采集')).toBeInTheDocument();
+  expect(screen.getByText('生成AI报告')).toBeInTheDocument();
+});
+
+test('project detail action buttons call APIs', async () => {
+  render(<MemoryRouter initialEntries={['/projects/proj_1']}><App /></MemoryRouter>);
+  expect(await screen.findByText('开始高德采集')).toBeInTheDocument();
+  fireEvent.click(screen.getByText('开始高德采集'));
+  fireEvent.click(screen.getByText('开始评分'));
+  fireEvent.click(screen.getByText('生成AI报告'));
+  await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
+  await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
+  await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
+});
+
+test('renders project chat page', async () => {
+  render(<MemoryRouter initialEntries={['/projects/proj_1/chat']}><App /></MemoryRouter>);
+  expect(await screen.findByText('AI 聊天助手')).toBeInTheDocument();
+  expect(await screen.findByText('项目 ID：proj_1')).toBeInTheDocument();
+  expect(apiMocks.createProjectChatSession).toHaveBeenCalledWith('proj_1');
 });
 
 test('renders rate limit message instead of key permission message', () => {

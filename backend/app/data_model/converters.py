@@ -117,7 +117,7 @@ def normalize_data(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             raise ValueError(f"unsupported data_type: {data_type}")
     except ValidationError:
         raise
-    return item.model_dump(mode="json"), warnings
+    return item.model_dump(mode="python"), warnings
 
 
 def coerce_food(raw: dict[str, Any]) -> dict[str, Any]:

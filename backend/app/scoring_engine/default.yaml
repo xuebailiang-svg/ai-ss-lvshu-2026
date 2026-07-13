@@ -1,0 +1,48 @@
+version: "project-score-v1"
+
+levels:
+  recommend: 75
+  cautious: 60
+
+population:
+  weight: 30
+  university: 10
+  vocational_school: 8
+  apartment: 5
+  young_residential: 5
+  relocation_housing: 2
+
+traffic:
+  weight: 20
+  subway: 10
+  bus: 5
+  parking: 5
+  penalties:
+    elevated_road: -5
+    interchange: -5
+    underpass: -5
+    railway: -5
+    green_barrier: -3
+
+support:
+  weight: 20
+  night_market: 8
+  convenience_24h: 4
+  late_food: 4
+  entertainment_max: 4
+
+competitor:
+  weight: 20
+  none_bonus: 10
+  reasonable_count_bonus: 5
+  quality_bonus: 5
+  too_many_threshold: 5
+  too_many_penalty: -5
+
+rent:
+  weight: 10
+  reasonable: 10
+  medium: 6
+  high: 3
+  reasonable_rent_per_sqm: 100
+  high_rent_per_sqm: 150
