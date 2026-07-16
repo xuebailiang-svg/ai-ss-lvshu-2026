@@ -29,6 +29,8 @@ class Settings(BaseModel):
     deepseek_api_key: str
     deepseek_base_url: str
     deepseek_model: str
+    system_config_encryption_key: str
+    admin_config_token: str
 
 @lru_cache
 def get_settings() -> Settings:
@@ -48,8 +50,10 @@ def get_settings() -> Settings:
         frontend_runtime_config_path=os.getenv("FRONTEND_RUNTIME_CONFIG_PATH","/etc/esports-site-selection/frontend-runtime.json"),
         site_feedback_store_path=os.getenv("SITE_FEEDBACK_STORE_PATH", "data/site_feedback.json"),
         agent_trace_store_path=os.getenv("AGENT_TRACE_STORE_PATH", "data/agent_traces.json"),
-        app_version=os.getenv("APP_VERSION", "v1.0-beta"),
+        app_version=os.getenv("APP_VERSION", "v1.0.0-beta"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        system_config_encryption_key=os.getenv("SYSTEM_CONFIG_ENCRYPTION_KEY", ""),
+        admin_config_token=os.getenv("ADMIN_CONFIG_TOKEN", ""),
     )

@@ -27,13 +27,43 @@ class AmapMapDataClient:
 
     def __init__(self, *, key: str | None = None, mock: bool | None = None, client: httpx.AsyncClient | None = None):
         settings = get_settings()
-        self.key = (key if key is not None else settings.amap_web_service_key).strip()
+        from app.system_config.service import resolve_config_value
+
+        self.key = (
+            key if key is not None else resolve_config_value("amap_web_service_key", settings.amap_web_service_key)
+        ).strip()
         self.mock = settings.amap_mock if mock is None else mock
         self.client = client
 
     def ensure_configured(self) -> None:
         if not self.key and not self.mock:
             raise AmapConfigError("AMAP_WEB_SERVICE_KEY未配置")
+
+    async def check_connectivity(self, *, timeout_seconds: float = 3.0) -> dict[str, Any]:
+        """使用固定地址执行轻量检查，不向调用层暴露带 Key 的请求 URL。"""
+        self.ensure_configured()
+        if self.mock:
+            return {"status": "1", "info": "OK", "infocode": "10000", "mock": True}
+
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=timeout_seconds)
+        try:
+            response = await client.get(
+                f"{self.base_url}/geocode/geo",
+                params={
+                    "key": self.key,
+                    "city": "西安市",
+                    "address": "小寨地铁站",
+                    "output": "JSON",
+                },
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, dict) else {}
+        finally:
+            if owns_client:
+                await client.aclose()
 
     async def collect_pois(
         self,
@@ -42,6 +72,7 @@ class AmapMapDataClient:
         latitude: float,
         radius_meters: int,
         city: str | None = None,
+        category_keywords: dict[str, list[str]] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         self.ensure_configured()
         if self.mock:
@@ -52,7 +83,7 @@ class AmapMapDataClient:
         owns_client = self.client is None
         client = self.client or httpx.AsyncClient(timeout=15)
         try:
-            for category, keywords in AMAP_CATEGORY_KEYWORDS.items():
+            for category, keywords in (category_keywords or AMAP_CATEGORY_KEYWORDS).items():
                 for keyword in keywords:
                     params: dict[str, Any] = {
                         "key": self.key,

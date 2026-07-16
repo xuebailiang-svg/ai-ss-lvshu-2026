@@ -50,6 +50,16 @@ export const saveCompetitorEnrichment = (id: number, data: CompetitorEnrichment)
 export const competitorHistory = (id: number) => api.get(`/competitors/${id}/enrichments`).then(response => response.data);
 export const compareEvaluations = (evaluation_ids: number[]) => api.post('/evaluations/compare', {evaluation_ids}).then(response => response.data);
 export const configStatus = () => api.get('/system/config-status').then(response => response.data);
+export const getManagedSystemConfig = () => api.get('/system/config').then(response => response.data);
+export const updateManagedSystemConfig = (data: Record<string, string>, adminToken: string) => api
+  .put('/system/config', data, {headers: {'X-Admin-Token': adminToken}})
+  .then(response => response.data);
+export const testManagedSystemConfig = (provider: 'deepseek' | 'amap', adminToken: string) => api
+  .post(`/system/config/${provider}/test`, undefined, {
+    headers: {'X-Admin-Token': adminToken},
+    timeout: LONG_REQUEST_TIMEOUT_MS,
+  })
+  .then(response => response.data);
 export const systemHealth = () => api.get('/system/health').then(response => response.data);
 export const amapGeocodeTest = (params: {city: string; address: string}) => api.get('/system/amap/geocode-test', {params}).then(response => response.data);
 export const runSiteSelectionAgent = (data: {

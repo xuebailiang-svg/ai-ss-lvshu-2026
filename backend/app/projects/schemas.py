@@ -15,6 +15,8 @@ class ProjectCreate(BaseModel):
     latitude: float | None = None
     radius_meters: int = Field(default=1000, gt=0)
     business_type: str = "电竞馆"
+    expected_area_sqm: float | None = None
+    investment_budget: float | None = None
 
 
 class ProjectOut(BaseModel):
@@ -27,6 +29,9 @@ class ProjectOut(BaseModel):
     latitude: float | None = None
     radius_meters: int
     business_type: str
+    expected_area_sqm: float | None = None
+    investment_budget: float | None = None
+    status: str | None = None
     created_at: datetime | None = None
     deleted_at: datetime | None = None
 

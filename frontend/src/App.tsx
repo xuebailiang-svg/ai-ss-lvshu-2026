@@ -7,13 +7,17 @@ import ReportPage from './pages/Report';
 import SystemConfig from './pages/SystemConfig';
 import AgentAnalysis from './pages/AgentAnalysis';
 import ProjectsPage from './pages/Projects';
+import ProjectCreatePage from './pages/Projects/Create';
 import ProjectDetailPage from './pages/ProjectDetail';
+import ProjectSupplementPage from './pages/ProjectSupplement';
+import ProjectUploadPage from './pages/ProjectUpload';
 import ProjectChat from './pages/ProjectChat';
 import './styles/app.css';
 
 export default function App() {
   const location = useLocation();
   const selectedKey = location.pathname.startsWith('/projects') ? '/projects' : location.pathname;
+
   return (
     <Layout className="app">
       <Layout.Header>
@@ -36,6 +40,9 @@ export default function App() {
           <Route path="/" element={<NewEvaluation />} />
           <Route path="/agent" element={<AgentAnalysis />} />
           <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects/create" element={<ProjectCreatePage />} />
+          <Route path="/projects/:projectId/supplement" element={<ProjectSupplementPage />} />
+          <Route path="/projects/:projectId/upload" element={<ProjectUploadPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/projects/:projectId/chat" element={<ProjectChat />} />
           <Route path="/evaluations/:id" element={<NewEvaluation />} />

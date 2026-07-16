@@ -12,6 +12,7 @@ class DimensionScore(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     missing_data: list[str] = Field(default_factory=list)
+    analysis: dict[str, Any] | None = None
 
 
 class ProjectScoreResponse(BaseModel):
@@ -23,6 +24,9 @@ class ProjectScoreResponse(BaseModel):
     advantages: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     missing_data: list[str] = Field(default_factory=list)
+    competitor_analysis: dict[str, Any] = Field(default_factory=dict)
+    supporting_analysis: dict[str, Any] = Field(default_factory=dict)
+    rent_analysis: dict[str, Any] = Field(default_factory=dict)
     scoring_version: str
     score_id: int | None = None
     created_at: Any | None = None

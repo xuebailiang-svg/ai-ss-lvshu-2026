@@ -36,10 +36,14 @@ CHINESE_COMPETITOR_FIELD_MAP = {
     "价格": "hour_price",
     "小时价": "hour_price",
     "会员价": "member_price",
+    "会员价格": "member_price",
     "上座率": "occupancy_rate",
     "月售": "monthly_sales",
+    "月营业额": "monthly_sales",
     "年售": "annual_sales",
+    "年营业额": "annual_sales",
     "充值金额": "recharge_amount",
+    "充值信息": "recharge_amount",
     "数据来源": "source",
     "置信度": "confidence",
 }
@@ -76,9 +80,14 @@ def convert_manual_competitor(raw: dict[str, Any]) -> CompetitorData:
         normalized[CHINESE_COMPETITOR_FIELD_MAP.get(key, key)] = value
     for key in ("distance_meters", "machine_count"):
         normalized[key] = to_int(normalized.get(key))
-    for key in ("area_sqm", "opening_years", "hour_price", "member_price", "occupancy_rate", "monthly_sales", "annual_sales", "recharge_amount", "confidence"):
+    for key in ("area_sqm", "opening_years", "hour_price", "member_price", "monthly_sales", "annual_sales", "recharge_amount", "confidence"):
         if key in normalized:
             normalized[key] = to_float(normalized.get(key))
+    occupancy = normalized.get("occupancy_rate")
+    if occupancy is not None:
+        text = str(occupancy).strip()
+        value = to_float(text.rstrip("%"))
+        normalized["occupancy_rate"] = value / 100 if value is not None and (text.endswith("%") or value > 1) else value
     normalized.setdefault("source", DataSourceType.manual)
     normalized.setdefault("status", DataStatus.pending_review)
     normalized.setdefault("confidence", 0.8)
@@ -105,7 +114,7 @@ def normalize_data(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         elif data_type == "entertainment":
             item = EntertainmentData(**coerce_entertainment(raw))
         elif data_type == "rent":
-            item = RentData(**{**raw, "raw_data": raw})
+            item = RentData(**coerce_rent(raw))
         elif data_type == "population":
             item = PopulationData(**{**raw, "raw_data": raw})
             warnings.append("人口数据为代理指标，不代表真实人口。")
@@ -123,9 +132,13 @@ def normalize_data(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 def coerce_food(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         **raw,
+        "name": raw.get("name") or raw.get("名称"),
         "distance_meters": to_int(raw.get("distance_meters") or raw.get("距离")),
+        "category": raw.get("category") or raw.get("品类"),
+        "opening_date": raw.get("opening_date") or raw.get("开业时间"),
         "opening_years": to_float(raw.get("opening_years") or raw.get("开业年限")),
-        "night_business": to_bool(raw.get("night_business") or raw.get("夜间营业")),
+        "business_hours": raw.get("business_hours") or raw.get("营业时间"),
+        "night_business": to_bool(raw.get("night_business") or raw.get("是否夜间营业") or raw.get("夜间营业")),
         "rating": to_float(raw.get("rating") or raw.get("评分")),
         "raw_data": raw,
     }
@@ -146,9 +159,23 @@ def coerce_entertainment(raw: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         **raw,
+        "name": raw.get("name") or raw.get("名称"),
         "type": type_map.get(text_type, EntertainmentType.other),
         "distance_meters": to_int(raw.get("distance_meters") or raw.get("距离")),
-        "night_business": to_bool(raw.get("night_business") or raw.get("夜间营业")),
+        "opening_date": raw.get("opening_date") or raw.get("开业时间"),
+        "business_hours": raw.get("business_hours") or raw.get("营业时间"),
+        "night_business": to_bool(raw.get("night_business") or raw.get("是否夜间营业") or raw.get("夜间营业")),
+        "raw_data": raw,
+    }
+
+
+def coerce_rent(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **raw,
+        "monthly_rent": to_float(raw.get("monthly_rent") or raw.get("月租金")),
+        "area_sqm": to_float(raw.get("area_sqm") or raw.get("面积")),
+        "rent_per_sqm": to_float(raw.get("rent_per_sqm") or raw.get("单平租金")),
+        "location_type": raw.get("location_type") or raw.get("地址"),
         "raw_data": raw,
     }
 

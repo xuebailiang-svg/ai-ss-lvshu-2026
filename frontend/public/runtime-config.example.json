@@ -1,0 +1,6 @@
+{
+  "apiBaseUrl": "/api",
+  "amapJsKey": "",
+  "amapSecurityJsCode": "",
+  "mapProvider": "amap"
+}

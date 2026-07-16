@@ -25,9 +25,15 @@ class DeepSeekClient:
         client: httpx.Client | None = None,
     ):
         settings = get_settings()
-        self.api_key = (api_key if api_key is not None else settings.deepseek_api_key).strip()
-        self.base_url = (base_url or settings.deepseek_base_url).rstrip("/")
-        self.model = model or settings.deepseek_model
+        from app.system_config.service import resolve_config_value
+
+        self.api_key = (
+            api_key if api_key is not None else resolve_config_value("deepseek_api_key", settings.deepseek_api_key)
+        ).strip()
+        self.base_url = (
+            base_url or resolve_config_value("deepseek_base_url", settings.deepseek_base_url)
+        ).rstrip("/")
+        self.model = model or resolve_config_value("deepseek_model", settings.deepseek_model)
         self.client = client
 
     def ensure_configured(self) -> None:
@@ -73,6 +79,27 @@ class DeepSeekClient:
 
     def generate_chat(self, chat_input: dict[str, Any], prompt: str) -> DeepSeekResult:
         return self.generate_report(chat_input, prompt=prompt)
+
+    def check_connectivity(self) -> None:
+        self.ensure_configured()
+        owns_client = self.client is None
+        client = self.client or httpx.Client(timeout=10)
+        try:
+            response = client.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "只回复OK"}],
+                    "temperature": 0,
+                    "max_tokens": 5,
+                },
+            )
+            response.raise_for_status()
+            self._extract_content(response.json())
+        finally:
+            if owns_client:
+                client.close()
 
     @staticmethod
     def _extract_content(data: dict[str, Any]) -> str:

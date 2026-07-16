@@ -6,8 +6,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import SiteScoreRecord
-from app.projects.service import dataset, get_project, row_to_dict
+from app.models import RentDataRecord, SiteScoreRecord
+from app.projects.service import dataset, get_project, row_to_dict, rows_for_project
 from app.scoring_engine.calculator import ProjectScoreCalculator
 from app.scoring_engine.rules import load_rules
 
@@ -22,6 +22,8 @@ def score_project(db: Session, project_id: str, *, rules_path: str | Path | None
         raise ProjectNotFoundError("Project not found")
     rules = load_rules(rules_path)
     project_dataset = dataset(db, project)
+    # 评分使用完整租金样本集；项目 dataset 的 rent_data 仍保留为兼容旧调用的最新记录。
+    project_dataset["rent_records"] = rows_for_project(db, RentDataRecord, project.project_id)
     result = ProjectScoreCalculator(rules).calculate(project_dataset)
     record = SiteScoreRecord(
         project_id=project.project_id,

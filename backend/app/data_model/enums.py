@@ -16,6 +16,7 @@ class DataStatus(str, Enum):
     estimated = "estimated"
     missing = "missing"
     pending_review = "pending_review"
+    rejected = "rejected"
 
 
 class POICategory(str, Enum):

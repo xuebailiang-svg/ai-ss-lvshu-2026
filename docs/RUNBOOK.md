@@ -1,6 +1,6 @@
 # v1.0 Runbook
 
-本手册用于 v1.0 freeze candidate 的启动、检查、调试和运维。当前系统不接入 LangChain / LangGraph / LLM API。
+本手册用于 v1.0.0-beta 的启动、检查、调试和运维。当前系统不接入 LangChain / LangGraph；AI 报告和项目聊天通过可选的 DeepSeek API 提供，未配置时不影响其他功能启动。
 
 ## 1. 项目启动方式
 
@@ -54,6 +54,11 @@ npm run build
 | `ENABLE_DEBUG_API` | `false` | 是否开放 trace debug API。生产默认关闭。 |
 | `SITE_FEEDBACK_STORE_PATH` | 本地开发默认 `data/site_feedback.json`；生产固定 `/var/lib/esports-site-selection/site_feedback.json` | feedback event log 本地 JSON 路径。 |
 | `AGENT_TRACE_STORE_PATH` | 本地开发默认 `data/agent_traces.json`；生产固定 `/var/lib/esports-site-selection/agent_traces.json` | Agent trace 本地 JSON 路径。 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek 环境变量备用 Key。配置中心数据库值优先。 |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API 地址。 |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek 模型名称。 |
+| `SYSTEM_CONFIG_ENCRYPTION_KEY` | 空 | 配置中心加密主密钥，生产至少32位；不能通过 Web 修改。 |
+| `ADMIN_CONFIG_TOKEN` | 空 | 配置中心写入和连接测试的管理员 Token。 |
 
 生产环境数据持久化路径统一为：
 
@@ -124,6 +129,27 @@ GET /api/system/health
 ```bash
 curl http://127.0.0.1:8000/api/system/health
 ```
+
+### 系统配置中心 API
+
+配置状态查询不会返回完整 Key：
+
+```http
+GET /api/system/config
+```
+
+保存和连接测试必须携带管理员 Token：
+
+```http
+PUT /api/system/config
+X-Admin-Token: <ADMIN_CONFIG_TOKEN>
+
+POST /api/system/config/deepseek/test
+POST /api/system/config/amap/test
+X-Admin-Token: <ADMIN_CONFIG_TOKEN>
+```
+
+第三方 Key 加密保存在 `system_configs`。生产升级需先执行 `alembic upgrade head`，再重启后端服务。
 
 ## 4. Agent 执行流程说明
 

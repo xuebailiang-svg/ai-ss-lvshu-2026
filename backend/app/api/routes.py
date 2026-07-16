@@ -213,7 +213,10 @@ POI_SUBTYPE_TEMPLATES: dict[str, dict[str, list[str]]] = {
 
 def provider():
     settings = get_settings()
-    return AmapDataProvider(settings.amap_web_service_key, mock=settings.amap_mock)
+    from app.system_config.service import resolve_config_value
+
+    key = resolve_config_value("amap_web_service_key", settings.amap_web_service_key)
+    return AmapDataProvider(key, mock=settings.amap_mock)
 
 
 @router.post("/data/validate")
@@ -335,20 +338,26 @@ def health(db: Session = Depends(get_db)):
 @router.get("/health/config")
 def health_config():
     settings = get_settings()
+    from app.system_config.service import resolve_config_value
+
+    amap_key = resolve_config_value("amap_web_service_key", settings.amap_web_service_key)
+    deepseek_key = resolve_config_value("deepseek_api_key", settings.deepseek_api_key)
     return {
-        "amap_configured": bool(settings.amap_web_service_key),
+        "amap_configured": bool(amap_key),
         "amap_mock": settings.amap_mock,
-        "llm_enabled": False,
-        "llm_configured": False,
-        "provider": None,
-        "model": None,
-        "note": "M1/M1.5 当前报告为规则评分报告，不调用大模型。",
+        "llm_enabled": bool(deepseek_key),
+        "llm_configured": bool(deepseek_key),
+        "provider": "deepseek" if deepseek_key else None,
+        "model": resolve_config_value("deepseek_model", settings.deepseek_model),
+        "note": "运行时配置优先读取数据库，未配置时回退环境变量。",
     }
 
 
 @router.get("/system/health")
 def system_health():
     settings = get_settings()
+    from app.system_config.service import resolve_config_value
+
     warnings: list[str] = []
     feedback_ok, feedback_error = SiteFeedbackStore().can_write()
     trace_ok, trace_error = AgentTraceStore().can_write()
@@ -376,7 +385,8 @@ def system_health():
     if missing_tools:
         warnings.append("tools registry missing: " + ", ".join(missing_tools))
 
-    amap_ok = settings.amap_mock or bool(settings.amap_web_service_key)
+    amap_key = resolve_config_value("amap_web_service_key", settings.amap_web_service_key)
+    amap_ok = settings.amap_mock or bool(amap_key)
     if not amap_ok:
         warnings.append("AMAP_WEB_SERVICE_KEY is missing and AMAP_MOCK=false")
 
@@ -437,12 +447,15 @@ def runtime_config():
 @router.get("/system/config-status")
 def system_config_status():
     settings = get_settings()
+    from app.system_config.service import resolve_config_value
+
     runtime = read_frontend_runtime_config()
+    amap_key = resolve_config_value("amap_web_service_key", settings.amap_web_service_key)
     js_key = "" if runtime.get("_invalid") else str(runtime.get("amapJsKey") or "")
     js_code = "" if runtime.get("_invalid") else str(runtime.get("amapSecurityJsCode") or "")
     return {
         "backend": {
-            "amapWebServiceKeyConfigured": bool(settings.amap_web_service_key),
+            "amapWebServiceKeyConfigured": bool(amap_key),
             "amapMock": settings.amap_mock,
             "databaseConfigured": bool(settings.database_url),
             "enableTrace": settings.enable_trace,

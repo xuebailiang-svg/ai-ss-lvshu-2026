@@ -1,4 +1,4 @@
-version: "project-score-v1"
+version: "project-score-v1.3"
 
 levels:
   recommend: 75
@@ -26,6 +26,15 @@ traffic:
 
 support:
   weight: 20
+  food_threshold: 20
+  food_score: 8
+  night_food_threshold: 5
+  night_food_score: 3
+  entertainment_threshold: 5
+  entertainment_score: 5
+  night_business_threshold: 3
+  night_business_score: 4
+  # 兼容旧配置键；v1.2 的评分不再基于未经人工确认的 POI 关键词。
   night_market: 8
   convenience_24h: 4
   late_food: 4
@@ -38,11 +47,25 @@ competitor:
   quality_bonus: 5
   too_many_threshold: 5
   too_many_penalty: -5
+  pending_review_weight: 0.5
+  count_scores:
+    low_max: 2
+    medium_max: 5
+    low: 12
+    medium: 8
+    high: 4
+  operating_data_scores:
+    price: 2
+    occupancy: 2
+    machine_count: 1
+  high_occupancy_threshold: 0.7
+  high_occupancy_penalty: -1
 
 rent:
-  weight: 10
-  reasonable: 10
-  medium: 6
-  high: 3
-  reasonable_rent_per_sqm: 100
-  high_rent_per_sqm: 150
+  weight: 20
+  low_pressure_score: 20
+  medium_pressure_score: 12
+  high_pressure_score: 4
+  low_pressure_ratio: 0.8
+  high_pressure_ratio: 1.2
+  minimum_sample_count: 3

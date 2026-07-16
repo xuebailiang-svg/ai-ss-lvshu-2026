@@ -300,7 +300,7 @@ def test_system_health_returns_module_status(client):
     response = client.get("/api/system/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["version"] == "v1.0-beta"
+    assert data["version"] == "v1.0.0-beta"
     assert data["modules"]["tools"] is True
     assert data["modules"]["planner"] is True
     assert data["modules"]["amap"] is True

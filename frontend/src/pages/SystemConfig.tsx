@@ -1,6 +1,12 @@
 import {useEffect, useState} from 'react';
-import {Alert, Button, Card, Descriptions, Form, Input, Space, Tag, message} from 'antd';
-import {amapGeocodeTest, configStatus} from '../api/client';
+import {Alert, Button, Card, Descriptions, Form, Input, Space, Tag, Typography, message} from 'antd';
+import {
+  amapGeocodeTest,
+  configStatus,
+  getManagedSystemConfig,
+  testManagedSystemConfig,
+  updateManagedSystemConfig,
+} from '../api/client';
 import {loadRuntimeConfig, maskKey} from '../runtimeConfig';
 
 declare global {
@@ -27,22 +33,38 @@ async function testAmapSdkLoad() {
 }
 
 export default function SystemConfig() {
+  const [deepseekForm] = Form.useForm();
+  const [amapForm] = Form.useForm();
   const [status, setStatus] = useState<any>();
   const [runtime, setRuntime] = useState<any>();
+  const [managed, setManaged] = useState<any>();
+  const [adminToken, setAdminToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testingProvider, setTestingProvider] = useState<string>();
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
-    const [config, runtimeConfig] = await Promise.all([
+    const [config, runtimeConfig, managedConfig] = await Promise.all([
       configStatus(),
       loadRuntimeConfig(true).catch(() => ({})),
+      getManagedSystemConfig(),
     ]);
     setStatus(config);
     setRuntime(runtimeConfig);
+    setManaged(managedConfig);
   };
 
   useEffect(() => {
     load().catch(error => message.error(error.message));
   }, []);
+
+  useEffect(() => {
+    if (!managed) return;
+    deepseekForm.setFieldsValue({
+      deepseek_base_url: managed.deepseek_base_url || 'https://api.deepseek.com',
+      deepseek_model: managed.deepseek_model || 'deepseek-chat',
+    });
+  }, [managed, deepseekForm]);
 
   const runGeocodeTest = async (values: {city: string; address: string}) => {
     setLoading(true);
@@ -68,15 +90,121 @@ export default function SystemConfig() {
     }
   };
 
+  const saveManagedConfig = async (values: Record<string, string>) => {
+    if (!adminToken.trim()) {
+      message.error('请输入管理员 Token');
+      return;
+    }
+    const payload = Object.fromEntries(
+      Object.entries(values).filter(([, value]) => typeof value === 'string' && value.trim()),
+    );
+    if (Object.keys(payload).length === 0) {
+      message.info('没有需要保存的配置');
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await updateManagedSystemConfig(payload, adminToken.trim());
+      setManaged(result);
+      deepseekForm.setFieldValue('deepseek_api_key', undefined);
+      amapForm.setFieldValue('amap_web_service_key', undefined);
+      message.success('系统配置已加密保存并立即生效');
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || error.message || '配置保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testManagedConnection = async (providerName: 'deepseek' | 'amap') => {
+    if (!adminToken.trim()) {
+      message.error('请输入管理员 Token');
+      return;
+    }
+    setTestingProvider(providerName);
+    try {
+      const result = await testManagedSystemConfig(providerName, adminToken.trim());
+      message.success(`${result.message}${result.latency_ms == null ? '' : `，耗时 ${result.latency_ms}ms`}`);
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || error.message || '连接测试失败');
+    } finally {
+      setTestingProvider(undefined);
+    }
+  };
+
   return (
     <div className="page">
       <h2>系统配置</h2>
       <Alert
         type="info"
         showIcon
-        message="本页面只显示配置状态和脱敏信息"
-        description="没有登录和管理权限控制，因此浏览器端不提供保存后端 Key 的能力。请到服务器编辑配置文件。"
+        message="第三方 Key 使用加密存储"
+        description="页面不会回显完整 Key。保存和连接测试必须通过管理员 Token 验证；Token 仅保留在当前页面内存中。"
       />
+
+      <Card title="管理员验证">
+        <Space direction="vertical" style={{width: '100%'}}>
+          <Input.Password
+            value={adminToken}
+            onChange={event => setAdminToken(event.target.value)}
+            placeholder="请输入 ADMIN_CONFIG_TOKEN"
+            autoComplete="off"
+          />
+          <Typography.Text type={managed?.management_enabled ? 'success' : 'danger'}>
+            {managed?.management_enabled
+              ? 'Web 配置管理已启用'
+              : 'Web 配置管理未启用，请先在服务器配置加密主密钥和管理员 Token'}
+          </Typography.Text>
+        </Space>
+      </Card>
+
+      <Card title="AI 模型配置">
+        <Descriptions column={1} style={{marginBottom: 16}} items={[
+          {key: 'status', label: 'DeepSeek Key', children: managed?.deepseek?.configured ? <Tag color="green">已配置</Tag> : <Tag color="red">未配置</Tag>},
+          {key: 'masked', label: '脱敏 Key', children: managed?.deepseek?.masked || '-'},
+          {key: 'source', label: '生效来源', children: managed?.deepseek?.source || '-'},
+        ]} />
+        <Form
+          form={deepseekForm}
+          layout="vertical"
+          initialValues={{
+            deepseek_base_url: managed?.deepseek_base_url || 'https://api.deepseek.com',
+            deepseek_model: managed?.deepseek_model || 'deepseek-chat',
+          }}
+          onFinish={saveManagedConfig}
+        >
+          <Form.Item name="deepseek_base_url" label="API 地址">
+            <Input placeholder="https://api.deepseek.com" />
+          </Form.Item>
+          <Form.Item name="deepseek_model" label="模型">
+            <Input placeholder="deepseek-chat" />
+          </Form.Item>
+          <Form.Item name="deepseek_api_key" label="API Key">
+            <Input.Password placeholder="输入新 Key；留空表示保持现有配置" autoComplete="new-password" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" htmlType="submit" loading={saving}>保存 AI 配置</Button>
+            <Button onClick={() => testManagedConnection('deepseek')} loading={testingProvider === 'deepseek'}>测试 DeepSeek 连接</Button>
+          </Space>
+        </Form>
+      </Card>
+
+      <Card title="高德 Web 服务配置">
+        <Descriptions column={1} style={{marginBottom: 16}} items={[
+          {key: 'status', label: '高德 Web 服务 Key', children: managed?.amap?.configured ? <Tag color="green">已配置</Tag> : <Tag color="red">未配置</Tag>},
+          {key: 'masked', label: '脱敏 Key', children: managed?.amap?.masked || '-'},
+          {key: 'source', label: '生效来源', children: managed?.amap?.source || '-'},
+        ]} />
+        <Form form={amapForm} layout="vertical" onFinish={saveManagedConfig}>
+          <Form.Item name="amap_web_service_key" label="高德 Web 服务 Key">
+            <Input.Password placeholder="输入新 Key；留空表示保持现有配置" autoComplete="new-password" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" htmlType="submit" loading={saving}>保存高德配置</Button>
+            <Button onClick={() => testManagedConnection('amap')} loading={testingProvider === 'amap'}>测试高德连接</Button>
+          </Space>
+        </Form>
+      </Card>
 
       <Card title="配置文件位置">
         <Descriptions column={1} items={[

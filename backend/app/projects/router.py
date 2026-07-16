@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.projects.schemas import ProjectCreate, ProjectDataImport
+from app.projects.csv_upload import CsvUploadError, import_project_csv
 from app.projects.service import (
     create_project,
     data_quality,
@@ -28,7 +29,12 @@ def create_project_api(body: ProjectCreate, db: Session = Depends(get_db)):
 
 @router.get("")
 def list_projects_api(db: Session = Depends(get_db)):
-    return {"items": [project_to_dict(project) for project in list_projects(db)]}
+    items = []
+    for project in list_projects(db):
+        item = project_to_dict(project)
+        item["stats"] = project_stats(db, project.project_id)
+        items.append(item)
+    return {"items": items}
 
 
 @router.get("/{project_id}")
@@ -63,6 +69,32 @@ def import_project_data_api(project_id: str, body: ProjectDataImport, db: Sessio
         raise HTTPException(404, "Project not found")
     row, warnings = import_project_data(db, project.project_id, body.type, body.data)
     return {"success": True, "type": body.type, "data": row, "warnings": warnings}
+
+
+@router.post("/{project_id}/data/upload")
+async def upload_project_data_api(
+    project_id: str,
+    data_type: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    project = get_project(db, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "仅支持CSV文件")
+
+    max_bytes = 5 * 1024 * 1024
+    try:
+        content = await file.read(max_bytes + 1)
+    finally:
+        await file.close()
+    if len(content) > max_bytes:
+        raise HTTPException(413, "CSV文件不能超过5MB")
+    try:
+        return import_project_csv(db, project.project_id, data_type, content)
+    except CsvUploadError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @router.get("/{project_id}/data-quality")

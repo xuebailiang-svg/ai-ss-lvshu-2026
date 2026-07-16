@@ -1,10 +1,10 @@
-# 电竞馆智能选址系统 M1
+# 电竞馆智能选址系统 v1.0.0-beta
 
-面向电竞馆投资与运营人员的候选地址初筛系统。系统支持地址地理编码、周边 POI、物业调查、合规风险、规则评分、报告和历史记录。
+面向电竞馆投资与运营人员的智能选址平台。当前版本包含项目管理、高德采集、竞品分析、周边配套、夜间消费分析、租金成本分析、结构化评分、DeepSeek AI 报告和系统配置中心。
 
 > 系统结果仅用于初步筛查，最终以当地文化旅游、行政审批、消防和其他主管部门要求为准。
 
-## v1.0-beta Ubuntu 一键部署
+## v1.0.0-beta Ubuntu 一键部署
 
 当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。
 
@@ -155,6 +155,11 @@ ENABLE_REFLECTION=true
 ENABLE_FEEDBACK=true
 ENABLE_SIMILAR_CASES=true
 ENABLE_DEBUG_API=false
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+SYSTEM_CONFIG_ENCRYPTION_KEY=至少32位随机字符串
+ADMIN_CONFIG_TOKEN=独立的管理员强密码
 ```
 
 前端公开运行配置示例：
@@ -174,6 +179,33 @@ ENABLE_DEBUG_API=false
 - 前端地图 Key 不再写入 `frontend/.env.production`，也不再依赖 Vite build 固化；
 - 修改 `/etc/esports-site-selection/frontend-runtime.json` 后只需 `sudo systemctl reload nginx`；
 - 修改 `/etc/esports-site-selection/backend.env` 后需要 `sudo systemctl restart esports-site-selection`。
+
+### Web 系统配置中心
+
+部署后可在前端“系统配置”页面管理 DeepSeek API Key 和高德 Web 服务 Key。第三方 Key 使用 Fernet 加密保存到 `system_configs`；运行时优先读取数据库，数据库未配置时回退 `backend.env`。
+
+配置中心启用前，服务器必须一次性设置以下安全基础变量：
+
+```env
+SYSTEM_CONFIG_ENCRYPTION_KEY=至少32位随机字符串
+ADMIN_CONFIG_TOKEN=独立的管理员强密码
+```
+
+这两个值不能通过 Web 修改。不要在 Key 已经入库后更换 `SYSTEM_CONFIG_ENCRYPTION_KEY`，否则已有密文将无法解密。
+
+部署或升级必须执行：
+
+```bash
+cd backend
+.venv/bin/alembic upgrade head
+sudo systemctl restart esports-site-selection
+```
+
+配置状态接口不会返回完整 Key：
+
+```bash
+curl http://127.0.0.1/api/system/config
+```
 
 ### v1.0 baseline 模块分类
 
@@ -1105,3 +1137,20 @@ M1.5 在已通过测试的 M1 基础流程上增量增加真实调研能力，�
 - 人口相关内容只显示为 POI 代理指标，不显示为真实人口。
 - 上座率等人工判断会在报告中标注为“估算值”。
 - 硬性风险与普通评分分离，高分不能覆盖准入风险。
+## Windows 11 开发调试
+
+Windows 仅作为本地开发调试环境，和 Ubuntu 生产环境使用同一份代码，不维护第二套代码。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/install_windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts/windows/start_backend.ps1
+powershell -ExecutionPolicy Bypass -File scripts/windows/start_frontend.ps1
+```
+
+浏览器访问：
+
+```text
+http://localhost:5173
+```
+
+详细说明见 [docs/DEVELOPMENT_WINDOWS.md](docs/DEVELOPMENT_WINDOWS.md)。

@@ -27,12 +27,22 @@ def latest_score(db: Session, project_id: str) -> dict[str, Any] | None:
     )
     if not row:
         return None
+    dimensions = row.dimension_scores or {}
+    competitor_dimension = dimensions.get("competitor") or {}
+    competitor_analysis = competitor_dimension.get("analysis") or {}
+    support_dimension = dimensions.get("support") or {}
+    supporting_analysis = support_dimension.get("analysis") or {}
+    rent_dimension = dimensions.get("rent") or {}
+    rent_analysis = rent_dimension.get("analysis") or {}
     return {
         "score_id": row.id,
         "project_id": row.project_id,
         "total_score": row.total_score,
         "level": row.level,
-        "dimensions": row.dimension_scores,
+        "dimensions": dimensions,
+        "competitor_analysis": competitor_analysis,
+        "supporting_analysis": supporting_analysis,
+        "rent_analysis": rent_analysis,
         "advantages": row.advantage_items,
         "risks": row.risk_items,
         "missing_data": row.missing_data,
@@ -51,6 +61,12 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         score = score_project(db, project_id)
     quality = data_quality(db, project_id)
     pois = project_dataset.get("pois", [])
+    confirmed_food_businesses = [
+        row for row in project_dataset.get("food_businesses", []) if row.get("status") == "confirmed"
+    ]
+    confirmed_entertainments = [
+        row for row in project_dataset.get("entertainments", []) if row.get("status") == "confirmed"
+    ]
     environment = {
         "transport": [row for row in pois if row.get("category") == "transport"],
         "population": {
@@ -61,8 +77,8 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         "support": {
             "food_pois": [row for row in pois if row.get("category") == "food"],
             "entertainment_pois": [row for row in pois if row.get("category") == "entertainment"],
-            "food_businesses": project_dataset.get("food_businesses", []),
-            "entertainments": project_dataset.get("entertainments", []),
+            "food_businesses": confirmed_food_businesses,
+            "entertainments": confirmed_entertainments,
         },
     }
     project_info = project_dataset["project"]
@@ -82,7 +98,11 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         },
         environment=environment,
         competitors=project_dataset.get("competitors", []),
-        rent=project_dataset.get("rent_data") or {},
+        competitor_analysis=score.get("competitor_analysis") or {},
+        supporting_analysis=score.get("supporting_analysis") or {},
+        rent_analysis=score.get("rent_analysis") or {},
+        # 不向 AI 发送未经评分过滤的原始租金记录，保留空字段仅用于结构兼容。
+        rent={},
         score_result=score,
         data_quality=quality,
         risks=list(score.get("risks") or []) + list(quality.get("warnings") or []),
