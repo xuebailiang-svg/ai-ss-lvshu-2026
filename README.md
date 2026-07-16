@@ -18,9 +18,16 @@ sudo ./install.sh --check
 # 日常升级：保留 backend.env、frontend-runtime.json、数据库和 trace/feedback
 sudo ./install.sh --upgrade
 
-# 安全卸载：默认保留数据库，删除运行数据需要二次确认
+# 重建后端虚拟环境和前端产物，仍保留配置、数据库和生产数据
+sudo ./install.sh --reinstall
+
+# 安全卸载：默认保留配置、运行数据和数据库
 sudo ./uninstall.sh
 ```
+
+安装、升级和重装都会在迁移前自动备份数据库。默认卸载同时保留
+`/etc/esports-site-selection`、`/var/lib/esports-site-selection` 和 PostgreSQL 数据库，
+因此重新安装无需再次输入数据库密码或第三方 Key。
 
 详细说明见 [docs/INSTALL.md](docs/INSTALL.md)。
 

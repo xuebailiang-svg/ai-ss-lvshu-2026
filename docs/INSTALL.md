@@ -1,6 +1,6 @@
 # Ubuntu 22.04 一键部署手册
 
-本项目 v1.0-beta 生产部署不使用 Docker。标准入口只有两个根目录脚本：
+本项目 v1.0.0-beta 生产部署不使用 Docker。标准入口只有两个根目录脚本：
 
 ```bash
 sudo ./install.sh
@@ -19,9 +19,18 @@ sudo ./install.sh --check
 # 日常升级，不覆盖 backend.env，不覆盖 frontend-runtime.json 中已有 Key
 sudo ./install.sh --upgrade
 
+# 保留数据库、配置和生产数据，重建 Python/前端运行环境
+sudo ./install.sh --reinstall
+
 # 安全卸载，默认保留数据库
 sudo ./uninstall.sh
 ```
+
+首次安装会自动生成数据库密码、`SYSTEM_CONFIG_ENCRYPTION_KEY` 和
+`ADMIN_CONFIG_TOKEN`，不再要求安装过程中输入第三方 Key。安装完成后在浏览器
+“系统配置”页面填写 DeepSeek 和高德 Web 服务 Key。
+
+每次安装、升级或重装都会在数据库迁移前自动备份到项目的 `backups/` 目录。
 
 兼容旧入口：
 
@@ -58,6 +67,11 @@ ENABLE_REFLECTION=true
 ENABLE_SIMILAR_CASES=true
 ENABLE_DEBUG_API=false
 ENABLE_DEBUG_ENDPOINTS=false
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+SYSTEM_CONFIG_ENCRYPTION_KEY=<安装脚本自动生成>
+ADMIN_CONFIG_TOKEN=<安装脚本自动生成>
 SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
 AGENT_TRACE_STORE_PATH=/var/lib/esports-site-selection/agent_traces.json
 ```
@@ -200,14 +214,47 @@ sudo ./uninstall.sh
 - 删除 Nginx 配置；
 - 删除 `backend/.venv`；
 - 删除 `frontend/dist`；
-- 删除 `/etc/esports-site-selection`；
+- 保留 `/etc/esports-site-selection`，便于直接重装；
 - 默认保留 `/var/lib/esports-site-selection`；
 - 默认保留 PostgreSQL 数据库。
 
-只有明确输入：
+因此安全重装只需要：
+
+```bash
+sudo ./uninstall.sh
+sudo ./install.sh
+```
+
+也可以不卸载，直接执行：
+
+```bash
+sudo ./install.sh --reinstall
+```
+
+清除配置和运行数据、但保留数据库：
+
+```bash
+sudo ./uninstall.sh --purge
+```
+
+只有执行 `--purge-all` 并明确输入：
 
 ```text
 DELETE_DATABASE
 ```
 
 才会删除数据库 `site_selection` 和用户 `site_selection`。
+
+```bash
+sudo ./uninstall.sh --purge-all
+```
+
+## 数据库迁移兼容
+
+迁移脚本支持以下三种情况直接执行 `alembic upgrade head`：
+
+- 全新空数据库；
+- 已有 M1/M1.5 表结构但缺少 `alembic_version` 的旧数据库；
+- 已经由 Alembic 管理的数据库。
+
+表、字段和索引已经存在时会安全跳过，不需要手工执行 `alembic stamp`，也不要清空数据库。

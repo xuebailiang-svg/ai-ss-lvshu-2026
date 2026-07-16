@@ -7,6 +7,9 @@ Create Date: 2026-07-10
 
 from alembic import op
 import sqlalchemy as sa
+from app.core.database import Base
+import app.models  # noqa: F401 - register all current tables for partial legacy recovery
+from migrations.helpers import table_exists
 
 
 revision = "0004_unified_data_model"
@@ -26,6 +29,16 @@ def source_columns() -> list[sa.Column]:
 
 
 def upgrade() -> None:
+    expected_tables = {
+        "site_projects", "pois", "competitors", "food_businesses",
+        "entertainments", "rent_data", "population_data", "supplements",
+    }
+    existing_tables = {name for name in expected_tables if table_exists(name)}
+    if existing_tables:
+        # 旧部署可能由 0001 的动态 metadata 创建了部分或全部新表。
+        # create_all 只补缺失表，不会覆盖已有数据；后续迁移继续补充增量字段。
+        Base.metadata.create_all(op.get_bind())
+        return
     op.create_table(
         "site_projects",
         sa.Column("id", sa.Integer(), primary_key=True),

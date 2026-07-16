@@ -19,8 +19,10 @@ if [[ "${1:-}" == "--check" ]]; then
   MODE="check"
 elif [[ "${1:-}" == "--upgrade" ]]; then
   MODE="upgrade"
+elif [[ "${1:-}" == "--reinstall" ]]; then
+  MODE="reinstall"
 elif [[ "${1:-}" != "" ]]; then
-  echo "Usage: sudo ./install.sh [--check|--upgrade]" >&2
+  echo "Usage: sudo ./install.sh [--check|--upgrade|--reinstall]" >&2
   exit 2
 fi
 
@@ -71,6 +73,14 @@ read_secret() {
   read -r -s -p "${prompt}" value
   echo >&2
   printf '%s' "${value}"
+}
+
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "${1:-32}"
+  else
+    python3 -c "import secrets; print(secrets.token_hex(${1:-32}))"
+  fi
 }
 
 read_text_default_no() {
@@ -129,6 +139,9 @@ write_backend_env() {
   local db_password_url
   db_password_url="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${db_password}")"
   local tmp
+  local encryption_key admin_token
+  encryption_key="$(generate_secret 32)"
+  admin_token="$(generate_secret 24)"
   tmp="$(mktemp)"
   cat >"${tmp}" <<EOF
 APP_ENV=production
@@ -142,6 +155,11 @@ ENABLE_REFLECTION=true
 ENABLE_SIMILAR_CASES=true
 ENABLE_DEBUG_API=false
 ENABLE_DEBUG_ENDPOINTS=false
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+SYSTEM_CONFIG_ENCRYPTION_KEY=${encryption_key}
+ADMIN_CONFIG_TOKEN=${admin_token}
 SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
 AGENT_TRACE_STORE_PATH=/var/lib/esports-site-selection/agent_traces.json
 EOF
@@ -151,25 +169,35 @@ EOF
 
 ensure_backend_env() {
   log "检查 backend.env"
-  if [[ "${MODE}" == "upgrade" && -s "${ENV_FILE}" ]]; then
-    echo "OK: 升级模式保留已有 ${ENV_FILE}"
+  if [[ -s "${ENV_FILE}" ]]; then
+    echo "OK: 保留已有 ${ENV_FILE}"
     return 0
   fi
-  if [[ -s "${ENV_FILE}" ]]; then
-    if read_text_default_no "${ENV_FILE} 已存在，是否覆盖"; then
-      :
-    else
-      echo "OK: 保留已有 ${ENV_FILE}"
-      return 0
-    fi
-  fi
   local db_password amap_key
-  db_password="$(read_secret "请输入 PostgreSQL 密码 site_selection: ")"
-  [[ -n "${db_password}" ]] || fail "PostgreSQL 密码不能为空"
-  amap_key="$(read_secret "请输入高德 Web Service Key AMAP_WEB_SERVICE_KEY: ")"
-  [[ -n "${amap_key}" ]] || fail "AMAP_WEB_SERVICE_KEY 不能为空"
+  db_password="$(generate_secret 24)"
+  amap_key=""
   write_backend_env "${db_password}" "${amap_key}"
-  echo "OK: 已生成 ${ENV_FILE}"
+  echo "OK: 已自动生成 ${ENV_FILE}（数据库密码、配置加密密钥和管理员 Token 均为随机强值）"
+}
+
+ensure_security_settings() {
+  local changed=false value
+  for key in SYSTEM_CONFIG_ENCRYPTION_KEY ADMIN_CONFIG_TOKEN; do
+    if ! grep -Eq "^${key}=.{16,}$" "${ENV_FILE}"; then
+      value="$(generate_secret 32)"
+      if grep -q "^${key}=" "${ENV_FILE}"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}"
+      else
+        printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
+      fi
+      changed=true
+    fi
+  done
+  chown root:"${APP_GROUP}" "${ENV_FILE}"
+  chmod 0640 "${ENV_FILE}"
+  if [[ "${changed}" == true ]]; then
+    echo "OK: 已补充配置中心安全密钥（未打印完整值）"
+  fi
 }
 
 normalize_frontend_runtime_config() {
@@ -193,10 +221,6 @@ except Exception:
 PY
 )"
   fi
-  if [[ -z "${js_key}" && "${MODE}" != "upgrade" ]]; then
-    js_key="$(read_secret "请输入高德前端 JS Key amapJsKey，可直接回车跳过: ")"
-    security="$(read_secret "请输入高德 JS 安全密钥 amapSecurityJsCode，可直接回车跳过: ")"
-  fi
   tmp="$(mktemp)"
   python3 - "${tmp}" "${js_key}" "${security}" <<'PY'
 import json, sys
@@ -206,6 +230,13 @@ data = {
     "amapJsKey": key,
     "amapSecurityJsCode": security,
     "mapProvider": "amap",
+}
+
+prepare_reinstall() {
+  [[ "${MODE}" == "reinstall" ]] || return 0
+  log "重建应用运行环境（保留配置、数据库和生产数据）"
+  systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+  rm -rf "${APP_ROOT}/backend/.venv" "${APP_ROOT}/frontend/dist"
 }
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
@@ -256,6 +287,11 @@ install_backend() {
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
   runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
+}
+
+backup_before_migration() {
+  log "迁移前自动备份数据库"
+  BACKUP_DIR="${APP_ROOT}/backups" BACKEND_ENV_FILE="${ENV_FILE}" bash "${APP_ROOT}/scripts/backup-db.sh"
 }
 
 install_frontend() {
@@ -436,9 +472,13 @@ validate_deployment() {
 import json, urllib.request, sys
 for url in ("http://127.0.0.1/api/system/health", "http://127.0.0.1:8000/api/system/health"):
     data = json.load(urllib.request.urlopen(url, timeout=10))
-    if data.get("status") != "ok" or data.get("warnings"):
+    if data.get("status") not in {"ok", "warning"}:
         raise SystemExit(f"health failed: {url} -> {data}")
-print("OK: API health status=ok warnings=[]")
+    warnings = data.get("warnings") or []
+    if warnings:
+        print(f"WARNING: {url} 服务正常，但仍有待配置项：{warnings}")
+    else:
+        print(f"OK: {url} health status=ok warnings=[]")
 PY
   assert_no_app_root_placeholder
 }
@@ -469,10 +509,13 @@ main() {
   fi
   require_root_for_write
   apt_install_if_missing
+  prepare_reinstall
   ensure_user_and_dirs
   ensure_backend_env
+  ensure_security_settings
   normalize_frontend_runtime_config
   ensure_postgres
+  backup_before_migration
   install_backend
   install_frontend
   write_systemd
@@ -495,6 +538,15 @@ Health:
 生产数据:
   ${DATA_DIR}/site_feedback.json
   ${DATA_DIR}/agent_traces.json
+
+日常升级:
+  sudo ./install.sh --upgrade
+
+保留数据重装:
+  sudo ./install.sh --reinstall
+
+查看 Web 配置中心管理员 Token（请勿复制到日志或聊天）:
+  sudo grep '^ADMIN_CONFIG_TOKEN=' ${ENV_FILE}
 EOF
 }
 

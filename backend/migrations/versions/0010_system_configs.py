@@ -7,6 +7,7 @@ Create Date: 2026-07-16
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.helpers import table_exists
 
 
 revision = "0010_system_configs"
@@ -16,6 +17,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if table_exists("system_configs"):
+        return
     op.create_table(
         "system_configs",
         sa.Column("id", sa.Integer(), primary_key=True),

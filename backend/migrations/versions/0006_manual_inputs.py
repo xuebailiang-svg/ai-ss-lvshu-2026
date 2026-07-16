@@ -7,6 +7,7 @@ Create Date: 2026-07-13
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.helpers import table_exists
 
 
 revision = "0006_manual_inputs"
@@ -16,6 +17,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if table_exists("manual_inputs"):
+        return
     op.create_table(
         "manual_inputs",
         sa.Column("id", sa.Integer(), primary_key=True),

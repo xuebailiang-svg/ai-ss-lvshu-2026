@@ -1,6 +1,7 @@
 """m15 research enhancements"""
 from alembic import op
 import sqlalchemy as sa
+from migrations.helpers import column_exists, index_exists, table_exists
 
 revision = "0002_m15"
 down_revision = "0001"
@@ -42,7 +43,8 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     ]
     for column in property_columns:
-        op.add_column("property_surveys", column)
+        if not column_exists("property_surveys", column.name):
+            op.add_column("property_surveys", column)
 
     competitor_columns = [
         sa.Column("cpu", sa.String(length=100), nullable=True),
@@ -63,19 +65,22 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     ]
     for column in competitor_columns:
-        op.add_column("competitor_enrichments", column)
+        if not column_exists("competitor_enrichments", column.name):
+            op.add_column("competitor_enrichments", column)
 
-    op.create_table(
-        "competitor_survey_records",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("poi_observation_id", sa.Integer(), sa.ForeignKey("poi_observations.id"), nullable=False),
-        sa.Column("payload", sa.JSON(), nullable=False),
-        sa.Column("source", sa.String(length=100), nullable=True),
-        sa.Column("confidence", sa.Float(), nullable=False),
-        sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.create_index("ix_competitor_survey_records_poi_observation_id", "competitor_survey_records", ["poi_observation_id"])
+    if not table_exists("competitor_survey_records"):
+        op.create_table(
+            "competitor_survey_records",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("poi_observation_id", sa.Integer(), sa.ForeignKey("poi_observations.id"), nullable=False),
+            sa.Column("payload", sa.JSON(), nullable=False),
+            sa.Column("source", sa.String(length=100), nullable=True),
+            sa.Column("confidence", sa.Float(), nullable=False),
+            sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        )
+    if not index_exists("competitor_survey_records", "ix_competitor_survey_records_poi_observation_id"):
+        op.create_index("ix_competitor_survey_records_poi_observation_id", "competitor_survey_records", ["poi_observation_id"])
 
 
 def downgrade():

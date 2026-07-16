@@ -45,9 +45,11 @@ if [[ -r "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
   set +a
   [[ -n "${DATABASE_URL:-}" ]] || fail "DATABASE_URL 为空。"
-  pg_dump "${DATABASE_URL}" | gzip >"${tmp_file}"
+  # pg_dump 使用 libpq URI，不识别 SQLAlchemy 的 postgresql+psycopg:// 前缀。
+  pg_dump_url="${DATABASE_URL/postgresql+psycopg:/postgresql:}"
+  pg_dump "${pg_dump_url}" | gzip >"${tmp_file}"
 else
-  "${SUDO[@]}" bash -c "set -Eeuo pipefail; set -a; source '${ENV_FILE}'; set +a; pg_dump \"\${DATABASE_URL}\"" | gzip >"${tmp_file}"
+  "${SUDO[@]}" bash -c "set -Eeuo pipefail; set -a; source '${ENV_FILE}'; set +a; pg_dump_url=\"\${DATABASE_URL/postgresql+psycopg:/postgresql:}\"; pg_dump \"\${pg_dump_url}\"" | gzip >"${tmp_file}"
 fi
 
 gzip -t "${tmp_file}"

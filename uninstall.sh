@@ -8,6 +8,14 @@ DATA_DIR="/var/lib/esports-site-selection"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 NGINX_AVAILABLE="/etc/nginx/sites-available/esports-site-selection"
 NGINX_ENABLED="/etc/nginx/sites-enabled/esports-site-selection"
+MODE="safe"
+
+case "${1:-}" in
+  "") ;;
+  --purge) MODE="purge" ;;
+  --purge-all) MODE="purge-all" ;;
+  *) echo "Usage: sudo ./uninstall.sh [--purge|--purge-all]" >&2; exit 2 ;;
+esac
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "ERROR: 卸载需要 root 权限，请执行：sudo ./uninstall.sh" >&2
@@ -15,12 +23,6 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 log() { echo "==> $*"; }
-
-confirm_yes() {
-  local prompt="$1" value
-  read -r -p "${prompt} [y/N]: " value || true
-  [[ "${value}" == "y" || "${value}" == "Y" ]]
-}
 
 log "停止并禁用后端服务"
 systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
@@ -38,24 +40,23 @@ log "删除本项目构建产物"
 rm -rf "${APP_ROOT}/backend/.venv"
 rm -rf "${APP_ROOT}/frontend/dist"
 
-log "删除配置目录"
-rm -rf "${CONFIG_DIR}"
-
-if confirm_yes "是否删除 trace/feedback 运行数据目录 ${DATA_DIR}"; then
-  if confirm_yes "再次确认删除 ${DATA_DIR}，该操作不可恢复"; then
-    rm -rf "${DATA_DIR}"
-    echo "已删除 ${DATA_DIR}"
-  else
-    echo "保留 ${DATA_DIR}"
-  fi
+if [[ "${MODE}" == "purge" || "${MODE}" == "purge-all" ]]; then
+  log "彻底删除配置和运行数据"
+  rm -rf "${CONFIG_DIR}" "${DATA_DIR}"
 else
+  echo "保留配置：${CONFIG_DIR}"
   echo "保留 ${DATA_DIR}"
 fi
 
-echo
-echo "数据库默认保留。只有输入 DELETE_DATABASE 才会删除 site_selection 数据库和用户。"
-read -r -p "如需删除数据库和用户，请输入 DELETE_DATABASE: " db_confirm || true
-if [[ "${db_confirm}" == "DELETE_DATABASE" ]]; then
+if [[ "${MODE}" == "purge-all" ]]; then
+  echo
+  echo "警告：即将删除 site_selection 数据库和用户。"
+  read -r -p "请输入 DELETE_DATABASE 确认: " db_confirm || true
+  [[ "${db_confirm}" == "DELETE_DATABASE" ]] || {
+    echo "未确认删除数据库，数据库继续保留。"
+    echo "卸载完成。"
+    exit 0
+  }
   if command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
     sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='site_selection';" || true
     sudo -u postgres psql -c "DROP DATABASE IF EXISTS site_selection;"
@@ -64,8 +65,14 @@ if [[ "${db_confirm}" == "DELETE_DATABASE" ]]; then
   else
     echo "未找到 PostgreSQL/psql，跳过数据库删除"
   fi
-else
+fi
+
+if [[ "${MODE}" != "purge-all" ]]; then
   echo "保留数据库 site_selection"
 fi
 
+echo
 echo "卸载完成。"
+if [[ "${MODE}" == "safe" ]]; then
+  echo "重新安装只需执行：sudo ./install.sh"
+fi

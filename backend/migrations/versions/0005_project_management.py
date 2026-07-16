@@ -7,6 +7,7 @@ Create Date: 2026-07-10
 
 from alembic import op
 import sqlalchemy as sa
+from migrations.helpers import column_exists
 
 
 revision = "0005_project_management"
@@ -16,7 +17,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("site_projects", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True))
+    if not column_exists("site_projects", "deleted_at"):
+        op.add_column("site_projects", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
