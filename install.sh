@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[[ "${SCRIPT_DIR}" == "${BASH_SOURCE[0]}" ]] && SCRIPT_DIR="."
+APP_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
 SERVICE_NAME="esports-site-selection"
 APP_USER="esports-site-selection"
 APP_GROUP="esports-site-selection"
@@ -231,13 +233,6 @@ data = {
     "amapSecurityJsCode": security,
     "mapProvider": "amap",
 }
-
-prepare_reinstall() {
-  [[ "${MODE}" == "reinstall" ]] || return 0
-  log "重建应用运行环境（保留配置、数据库和生产数据）"
-  systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-  rm -rf "${APP_ROOT}/backend/.venv" "${APP_ROOT}/frontend/dist"
-}
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
     f.write("\n")
@@ -251,6 +246,13 @@ PY
   else
     echo "OK: 前端 runtime 配置已保留/写入 amapJsKey（未打印完整 Key）"
   fi
+}
+
+prepare_reinstall() {
+  [[ "${MODE}" == "reinstall" ]] || return 0
+  log "重建应用运行环境（保留配置、数据库和生产数据）"
+  systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+  rm -rf "${APP_ROOT}/backend/.venv" "${APP_ROOT}/frontend/dist"
 }
 
 ensure_postgres() {
@@ -550,4 +552,6 @@ Health:
 EOF
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
