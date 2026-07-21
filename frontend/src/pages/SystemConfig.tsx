@@ -15,11 +15,12 @@ import {
   Typography,
   message,
 } from 'antd';
-import {CheckCircleOutlined, ReloadOutlined, SaveOutlined} from '@ant-design/icons';
+import {CheckCircleOutlined, PlusOutlined, ReloadOutlined, SaveOutlined} from '@ant-design/icons';
 import {
   getManagedSystemConfig,
   testManagedSystemConfig,
   updateManagedSystemConfig,
+  verifyManagedSystemConfigToken,
 } from '../api/client';
 import {
   checkDataSourceConnectivity,
@@ -32,6 +33,7 @@ import {
   resetScoringConfig,
   updateScoringConfig,
   type ScoringDimensionConfig,
+  type ScoringFactorConfig,
 } from '../api/scoringConfig';
 import {
   createMemory,
@@ -40,6 +42,8 @@ import {
   type MemoryItem,
   type MemoryStatus,
 } from '../api/memory';
+
+type CheckState = ConnectivityCheck | {success: false; message: string; latency_ms?: number} | 'loading' | undefined;
 
 function statusTag(configured?: boolean, text?: string) {
   return configured ? <Tag color="green">{text || '已配置'}</Tag> : <Tag color="red">{text || '未配置'}</Tag>;
@@ -52,17 +56,44 @@ function providerStatusText(status: string) {
   return status;
 }
 
+function splitDataSources(value: string) {
+  return value.split(/[,，、\s]+/).map(item => item.trim()).filter(Boolean);
+}
+
+function newKey(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function checkAlert(provider: string, state: CheckState) {
+  if (!state) return null;
+  if (state === 'loading') {
+    return <Alert style={{marginTop: 8}} type="info" showIcon message={`${provider} 连接测试中...`} />;
+  }
+  const ok = 'success' in state ? state.success : state.reachable;
+  return (
+    <Alert
+      style={{marginTop: 8}}
+      type={ok ? 'success' : 'error'}
+      showIcon
+      message={ok ? `${provider} 测试成功` : `${provider} 测试失败`}
+      description={`${state.message}${state.latency_ms != null ? ` · ${state.latency_ms}ms` : ''}`}
+    />
+  );
+}
+
 export default function SystemConfig() {
   const [token, setToken] = useState('');
+  const [tokenStatus, setTokenStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const [configForm] = Form.useForm();
   const [memoryForm] = Form.useForm();
   const [managedConfig, setManagedConfig] = useState<any>(null);
   const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
-  const [checks, setChecks] = useState<Record<string, ConnectivityCheck | 'loading' | 'failed'>>({});
+  const [checks, setChecks] = useState<Record<string, CheckState>>({});
   const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [savingConfig, setSavingConfig] = useState(false);
   const [savingDimensions, setSavingDimensions] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const totalWeight = useMemo(
     () => dimensions.filter(item => item.enabled).reduce((sum, item) => sum + Number(item.weight || 0), 0),
@@ -70,35 +101,63 @@ export default function SystemConfig() {
   );
 
   const loadAll = async () => {
-    const [config, sources, scoring, memory] = await Promise.all([
-      getManagedSystemConfig().catch(() => null),
-      getDataSourceStatus().catch(() => ({items: []})),
-      getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
-      listMemory().catch(() => ({items: [], total: 0})),
-    ]);
-    setManagedConfig(config);
-    setDataSources(sources.items || []);
-    setDimensions(scoring.dimensions || []);
-    setMemories(memory.items || []);
-    configForm.setFieldsValue({
-      deepseek_base_url: config?.deepseek_base_url || 'https://api.deepseek.com',
-      deepseek_model: config?.deepseek_model || 'deepseek-chat',
-    });
+    setLoading(true);
+    try {
+      const [config, sources, scoring, memory] = await Promise.all([
+        getManagedSystemConfig().catch(() => null),
+        getDataSourceStatus().catch(() => ({items: []})),
+        getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
+        listMemory().catch(() => ({items: [], total: 0})),
+      ]);
+      setManagedConfig(config);
+      setDataSources(sources.items || []);
+      setDimensions(scoring.dimensions || []);
+      setMemories(memory.items || []);
+      configForm.setFieldsValue({
+        deepseek_base_url: config?.deepseek_base_url || 'https://api.deepseek.com',
+        deepseek_model: config?.deepseek_model || 'deepseek-chat',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     loadAll().catch(error => message.error(error.message || '配置加载失败'));
   }, []);
 
-  const saveConfigPatch = async (patch: Record<string, string | undefined>) => {
+  const verifyToken = async () => {
     if (!token.trim()) {
+      setTokenStatus('invalid');
       message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return;
+    }
+    setTokenStatus('checking');
+    try {
+      await verifyManagedSystemConfigToken(token.trim());
+      setTokenStatus('valid');
+      message.success('管理员 Token 验证成功');
+    } catch (error: any) {
+      setTokenStatus('invalid');
+      message.error(error?.response?.data?.detail || error.message || '管理员 Token 验证失败');
+    }
+  };
+
+  const saveConfigPatch = async (
+    patch: Record<string, string | undefined>,
+    options: {showEmptyMessage?: boolean} = {showEmptyMessage: true},
+  ) => {
+    if (!token.trim()) {
+      message.warning('请先输入 ADMIN_CONFIG_TOKEN');
+      return false;
     }
     const payload: Record<string, string> = Object.fromEntries(
       Object.entries(patch).filter(([, value]) => typeof value === 'string' && value.trim()),
     ) as Record<string, string>;
-    if (!Object.keys(payload).length) return;
+    if (!Object.keys(payload).length) {
+      if (options.showEmptyMessage) message.info('没有需要保存的配置');
+      return true;
+    }
     setSavingConfig(true);
     try {
       const result = await updateManagedSystemConfig(payload, token.trim());
@@ -111,11 +170,36 @@ export default function SystemConfig() {
         third_party_api_key: undefined,
       });
       message.success('配置已加密保存');
+      return true;
     } catch (error: any) {
       message.error(error?.response?.data?.detail || error.message || '配置保存失败');
+      return false;
     } finally {
       setSavingConfig(false);
     }
+  };
+
+  const saveDeepSeekConfig = () => {
+    const values = configForm.getFieldsValue([
+      'deepseek_base_url',
+      'deepseek_model',
+      'deepseek_api_key',
+    ]);
+    return saveConfigPatch(values);
+  };
+
+  const saveAmapConfig = () => {
+    const values = configForm.getFieldsValue([
+      'amap_web_service_key',
+      'amap_js_key',
+      'amap_security_js_code',
+    ]);
+    return saveConfigPatch(values);
+  };
+
+  const saveThirdPartyConfig = () => {
+    const values = configForm.getFieldsValue(['third_party_api_key']);
+    return saveConfigPatch(values);
   };
 
   const testManagedProvider = async (provider: 'deepseek' | 'amap') => {
@@ -123,14 +207,24 @@ export default function SystemConfig() {
       message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return;
     }
+    const pendingValues = provider === 'deepseek'
+      ? configForm.getFieldsValue(['deepseek_base_url', 'deepseek_model', 'deepseek_api_key'])
+      : configForm.getFieldsValue(['amap_web_service_key', 'amap_js_key', 'amap_security_js_code']);
+    const saved = await saveConfigPatch(pendingValues, {showEmptyMessage: false});
+    if (!saved) return;
     setChecks(previous => ({...previous, [provider]: 'loading'}));
     try {
       const result = await testManagedSystemConfig(provider, token.trim());
       setChecks(previous => ({...previous, [provider]: result}));
       message.success(result.message);
     } catch (error: any) {
-      setChecks(previous => ({...previous, [provider]: 'failed'}));
-      message.error(error?.response?.data?.detail || error.message || '连接测试失败');
+      setChecks(previous => ({
+        ...previous,
+        [provider]: {
+          success: false,
+          message: error?.response?.data?.detail || error.message || '连接测试失败',
+        },
+      }));
     }
   };
 
@@ -139,8 +233,11 @@ export default function SystemConfig() {
     try {
       const result = await checkDataSourceConnectivity(name);
       setChecks(previous => ({...previous, [name]: result}));
-    } catch {
-      setChecks(previous => ({...previous, [name]: 'failed'}));
+    } catch (error: any) {
+      setChecks(previous => ({
+        ...previous,
+        [name]: {success: false, message: error?.response?.data?.detail || error.message || '检测失败，请稍后重试'},
+      }));
     }
   };
 
@@ -148,10 +245,76 @@ export default function SystemConfig() {
     setDimensions(previous => previous.map((item, itemIndex) => itemIndex === index ? {...item, ...patch} : item));
   };
 
+  const updateFactor = (dimensionIndex: number, factorIndex: number, patch: Partial<ScoringFactorConfig>) => {
+    setDimensions(previous => previous.map((dimension, itemIndex) => {
+      if (itemIndex !== dimensionIndex) return dimension;
+      return {
+        ...dimension,
+        factors: (dimension.factors || []).map((factor, currentFactorIndex) => (
+          currentFactorIndex === factorIndex ? {...factor, ...patch} : factor
+        )),
+      };
+    }));
+  };
+
+  const addDimension = () => {
+    setDimensions(previous => [
+      ...previous,
+      {
+        key: newKey('dimension'),
+        name: '新维度',
+        description: '请填写该维度的业务含义',
+        weight: 0,
+        enabled: true,
+        data_sources: ['manual'],
+        sort_order: previous.length,
+        factors: [],
+      },
+    ]);
+  };
+
+  const removeDimension = (index: number) => {
+    setDimensions(previous => previous.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const addFactor = (dimensionIndex: number) => {
+    setDimensions(previous => previous.map((dimension, itemIndex) => {
+      if (itemIndex !== dimensionIndex) return dimension;
+      const factors = dimension.factors || [];
+      return {
+        ...dimension,
+        factors: [
+          ...factors,
+          {
+            key: newKey('factor'),
+            name: '新子维度',
+            description: '请填写该子维度的判断规则',
+            weight: 0,
+            enabled: true,
+            data_sources: dimension.data_sources || ['manual'],
+            sort_order: factors.length,
+            config: {},
+          },
+        ],
+      };
+    }));
+  };
+
+  const removeFactor = (dimensionIndex: number, factorIndex: number) => {
+    setDimensions(previous => previous.map((dimension, itemIndex) => {
+      if (itemIndex !== dimensionIndex) return dimension;
+      return {
+        ...dimension,
+        factors: (dimension.factors || []).filter((_, currentFactorIndex) => currentFactorIndex !== factorIndex),
+      };
+    }));
+  };
+
   const saveDimensions = async () => {
     setSavingDimensions(true);
     try {
-      const result = await updateScoringConfig(dimensions);
+      const payload = dimensions.map((item, index) => ({...item, sort_order: index}));
+      const result = await updateScoringConfig(payload);
       setDimensions(result.dimensions);
       message.success('评分维度和权重已保存');
     } catch (error: any) {
@@ -176,7 +339,7 @@ export default function SystemConfig() {
     try {
       await createMemory({
         ...values,
-        tags: String(values.tags || '').split(/[,\s，、]+/).filter(Boolean),
+        tags: String(values.tags || '').split(/[,，、\s]+/).filter(Boolean),
         status: 'pending_review',
         confidence: Number(values.confidence ?? 0.7),
       });
@@ -204,18 +367,26 @@ export default function SystemConfig() {
             集中管理 Key、模型、数据源、评分维度、权重和 memory。敏感 Key 加密保存，不回显完整值。
           </Typography.Paragraph>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={() => loadAll()}>刷新</Button>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadAll()}>刷新</Button>
       </div>
 
       <Card title="管理员验证">
-        <Input.Password
-          value={token}
-          onChange={event => setToken(event.target.value)}
-          placeholder="请输入 ADMIN_CONFIG_TOKEN"
-          autoComplete="off"
-        />
+        <Space.Compact style={{width: '100%'}}>
+          <Input.Password
+            value={token}
+            onChange={event => {
+              setToken(event.target.value);
+              setTokenStatus('idle');
+            }}
+            placeholder="请输入 ADMIN_CONFIG_TOKEN"
+            autoComplete="off"
+          />
+          <Button loading={tokenStatus === 'checking'} onClick={verifyToken}>验证管理员 Token</Button>
+        </Space.Compact>
+        {tokenStatus === 'valid' && <Alert style={{marginTop: 8}} type="success" showIcon message="管理员 Token 验证成功，可以保存配置和测试连接。" />}
+        {tokenStatus === 'invalid' && <Alert style={{marginTop: 8}} type="error" showIcon message="管理员 Token 验证失败，请检查 /etc/esports-site-selection/backend.env。" />}
         <Typography.Paragraph type="secondary" style={{marginTop: 8}}>
-          Token 只保存在当前浏览器内存中，用于保存配置和测试连接。
+          Token 只保存在当前浏览器内存中，不会写入本地存储。保存 Key、测试 DeepSeek 和高德连接时会使用它。
         </Typography.Paragraph>
       </Card>
 
@@ -227,15 +398,19 @@ export default function SystemConfig() {
                 <Space direction="vertical" style={{width: '100%'}}>
                   <Space>{statusTag(managedConfig?.deepseek?.configured)}<span>{managedConfig?.deepseek?.masked || ''}</span></Space>
                   <Form.Item name="deepseek_base_url" label="API 地址">
-                    <Input onBlur={event => saveConfigPatch({deepseek_base_url: event.target.value})} />
+                    <Input placeholder="https://api.deepseek.com" />
                   </Form.Item>
                   <Form.Item name="deepseek_model" label="模型">
-                    <Input onBlur={event => saveConfigPatch({deepseek_model: event.target.value})} />
+                    <Input placeholder="deepseek-chat" />
                   </Form.Item>
                   <Form.Item name="deepseek_api_key" label="DeepSeek API Key">
-                    <Input.Password onBlur={event => saveConfigPatch({deepseek_api_key: event.target.value})} placeholder="输入后自动加密保存" />
+                    <Input.Password placeholder="填写后点击保存 DeepSeek 配置" />
                   </Form.Item>
-                  <Button onClick={() => testManagedProvider('deepseek')} loading={checks.deepseek === 'loading'}>测试 DeepSeek</Button>
+                  <Space>
+                    <Button type="primary" loading={savingConfig} onClick={saveDeepSeekConfig}>保存 DeepSeek 配置</Button>
+                    <Button onClick={() => testManagedProvider('deepseek')} loading={checks.deepseek === 'loading'}>测试 DeepSeek</Button>
+                  </Space>
+                  {checkAlert('DeepSeek', checks.deepseek)}
                 </Space>
               </Card>
             </Col>
@@ -245,23 +420,28 @@ export default function SystemConfig() {
                   <Space>Web Service：{statusTag(managedConfig?.amap?.configured)} {managedConfig?.amap?.masked || ''}</Space>
                   <Space>JS Key：{statusTag(managedConfig?.amap_js?.configured)} {managedConfig?.amap_js?.masked || ''}</Space>
                   <Form.Item name="amap_web_service_key" label="高德 Web Service Key">
-                    <Input.Password onBlur={event => saveConfigPatch({amap_web_service_key: event.target.value})} placeholder="输入后自动加密保存" />
+                    <Input.Password placeholder="后端地址解析和 POI 查询使用" />
                   </Form.Item>
                   <Form.Item name="amap_js_key" label="高德 JS Key">
-                    <Input.Password onBlur={event => saveConfigPatch({amap_js_key: event.target.value})} placeholder="输入后自动加密保存" />
+                    <Input.Password placeholder="前端地图展示使用" />
                   </Form.Item>
                   <Form.Item name="amap_security_js_code" label="高德安全密钥">
-                    <Input.Password onBlur={event => saveConfigPatch({amap_security_js_code: event.target.value})} placeholder="输入后自动加密保存" />
+                    <Input.Password placeholder="高德 JS API 2.0 安全密钥" />
                   </Form.Item>
-                  <Button onClick={() => testManagedProvider('amap')} loading={checks.amap === 'loading'}>测试高德</Button>
+                  <Space>
+                    <Button type="primary" loading={savingConfig} onClick={saveAmapConfig}>保存高德配置</Button>
+                    <Button onClick={() => testManagedProvider('amap')} loading={checks.amap === 'loading'}>测试高德</Button>
+                  </Space>
+                  {checkAlert('高德', checks.amap)}
                 </Space>
               </Card>
             </Col>
             <Col span={24}>
               <Card size="small" title="后续第三方平台 Key">
                 <Form.Item name="third_party_api_key" label="第三方平台 Key">
-                  <Input.Password onBlur={event => saveConfigPatch({third_party_api_key: event.target.value})} placeholder="预留：美团/消费数据等第三方平台" />
+                  <Input.Password placeholder="预留：美团、消费数据等第三方平台" />
                 </Form.Item>
+                <Button loading={savingConfig} onClick={saveThirdPartyConfig}>保存第三方配置</Button>
               </Card>
             </Col>
           </Row>
@@ -274,33 +454,64 @@ export default function SystemConfig() {
           type={Math.abs(totalWeight - 100) < 0.01 ? 'success' : 'warning'}
           showIcon
           message={`当前启用维度权重合计：${totalWeight.toFixed(2)}`}
-          description="建议合计为 100。系统会把这些业务维度映射到现有评分引擎，后续可逐步细化到每个维度独立评分。"
+          description="建议合计为 100。新增维度默认不影响评分，保存后会进入后续分析上下文。"
           style={{marginBottom: 12}}
         />
-        <List
-          dataSource={dimensions}
-          renderItem={(item, index) => (
-            <List.Item>
-              <Row gutter={12} style={{width: '100%'}} align="middle">
-                <Col xs={24} md={4}><Input value={item.name} onChange={event => updateDimension(index, {name: event.target.value})} /></Col>
-                <Col xs={24} md={3}><InputNumber min={0} value={item.weight} onChange={value => updateDimension(index, {weight: Number(value || 0)})} style={{width: '100%'}} /></Col>
-                <Col xs={24} md={3}><Switch checked={item.enabled} onChange={checked => updateDimension(index, {enabled: checked})} checkedChildren="启用" unCheckedChildren="停用" /></Col>
-                <Col xs={24} md={6}><Input value={(item.data_sources || []).join(',')} onChange={event => updateDimension(index, {data_sources: event.target.value.split(',').map(v => v.trim()).filter(Boolean)})} /></Col>
-                <Col xs={24} md={8}><Input value={item.description || ''} onChange={event => updateDimension(index, {description: event.target.value})} /></Col>
-              </Row>
-            </List.Item>
-          )}
-        />
-        <Space>
+        {loading && <Alert style={{marginBottom: 12}} type="info" showIcon message="正在加载评分配置..." />}
+        {!loading && dimensions.length === 0 && (
+          <Alert style={{marginBottom: 12}} type="warning" showIcon message="评分配置为空，请点击恢复默认。" />
+        )}
+        <Space style={{marginBottom: 12}}>
+          <Button icon={<PlusOutlined />} onClick={addDimension}>新增维度</Button>
           <Button type="primary" icon={<SaveOutlined />} loading={savingDimensions} onClick={saveDimensions}>保存维度配置</Button>
           <Button onClick={resetDimensions}>恢复默认</Button>
         </Space>
+        <List
+          dataSource={dimensions}
+          locale={{emptyText: '暂无评分维度'}}
+          renderItem={(item, index) => (
+            <List.Item>
+              <Card size="small" style={{width: '100%'}} title={<Space><span>{item.name}</span><Tag>{item.key}</Tag></Space>}>
+                <Row gutter={12} align="middle">
+                  <Col xs={24} md={4}><Input value={item.name} onChange={event => updateDimension(index, {name: event.target.value})} placeholder="维度名称" /></Col>
+                  <Col xs={24} md={3}><InputNumber min={0} value={item.weight} onChange={value => updateDimension(index, {weight: Number(value || 0)})} style={{width: '100%'}} addonAfter="权重" /></Col>
+                  <Col xs={24} md={3}><Switch checked={item.enabled} onChange={checked => updateDimension(index, {enabled: checked})} checkedChildren="启用" unCheckedChildren="停用" /></Col>
+                  <Col xs={24} md={5}><Input value={(item.data_sources || []).join(',')} onChange={event => updateDimension(index, {data_sources: splitDataSources(event.target.value)})} placeholder="依赖数据源，逗号分隔" /></Col>
+                  <Col xs={24} md={7}><Input value={item.description || ''} onChange={event => updateDimension(index, {description: event.target.value})} placeholder="说明" /></Col>
+                  <Col xs={24} md={2}><Button danger onClick={() => removeDimension(index)}>删除</Button></Col>
+                </Row>
+                <Space style={{marginTop: 12, marginBottom: 8}}>
+                  <Button size="small" icon={<PlusOutlined />} onClick={() => addFactor(index)}>新增子维度</Button>
+                  <Typography.Text type="secondary">子维度用于记录更细的判断规则，后续可逐步接入独立评分。</Typography.Text>
+                </Space>
+                <List
+                  size="small"
+                  dataSource={item.factors || []}
+                  locale={{emptyText: '暂无子维度'}}
+                  renderItem={(factor, factorIndex) => (
+                    <List.Item>
+                      <Row gutter={8} style={{width: '100%'}} align="middle">
+                        <Col xs={24} md={4}><Input value={factor.name} onChange={event => updateFactor(index, factorIndex, {name: event.target.value})} placeholder="子维度名称" /></Col>
+                        <Col xs={24} md={3}><InputNumber min={0} value={factor.weight} onChange={value => updateFactor(index, factorIndex, {weight: Number(value || 0)})} style={{width: '100%'}} addonAfter="权重" /></Col>
+                        <Col xs={24} md={3}><Switch checked={factor.enabled} onChange={checked => updateFactor(index, factorIndex, {enabled: checked})} checkedChildren="启用" unCheckedChildren="停用" /></Col>
+                        <Col xs={24} md={5}><Input value={(factor.data_sources || []).join(',')} onChange={event => updateFactor(index, factorIndex, {data_sources: splitDataSources(event.target.value)})} placeholder="依赖数据源" /></Col>
+                        <Col xs={24} md={7}><Input value={factor.description || ''} onChange={event => updateFactor(index, factorIndex, {description: event.target.value})} placeholder="说明" /></Col>
+                        <Col xs={24} md={2}><Button danger size="small" onClick={() => removeFactor(index, factorIndex)}>删除</Button></Col>
+                      </Row>
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            </List.Item>
+          )}
+        />
       </Card>
 
       <Card title="数据源">
         <List
           grid={{gutter: 12, xs: 1, md: 2, xl: 3}}
           dataSource={dataSources}
+          locale={{emptyText: '暂无数据源状态'}}
           renderItem={item => {
             const check = checks[item.name];
             const checkResult = typeof check === 'object' ? check : null;
@@ -316,10 +527,10 @@ export default function SystemConfig() {
                     </Space>
                     <Typography.Text type="secondary">{item.description}</Typography.Text>
                     <Button size="small" disabled={!item.check_supported} loading={check === 'loading'} onClick={() => testDataSource(item.name)}>检测连接</Button>
-                    {check === 'failed' && <Typography.Text type="danger">检测失败，请稍后重试。</Typography.Text>}
+                    {check === 'loading' && <Typography.Text type="secondary">检测中...</Typography.Text>}
                     {checkResult && (
-                      <Typography.Text type={checkResult.reachable ? 'success' : 'danger'}>
-                        {checkResult.message} · {checkResult.latency_ms}ms
+                      <Typography.Text type={'success' in checkResult ? checkResult.success ? 'success' : 'danger' : checkResult.reachable ? 'success' : 'danger'}>
+                        {checkResult.message}{checkResult.latency_ms != null ? ` · ${checkResult.latency_ms}ms` : ''}
                       </Typography.Text>
                     )}
                   </Space>

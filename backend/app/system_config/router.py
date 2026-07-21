@@ -29,6 +29,11 @@ def get_system_config(db: Session = Depends(get_db)):
     return config_status(db)
 
 
+@router.get("/verify", dependencies=[Depends(require_admin)])
+def verify_admin_token():
+    return {"success": True, "message": "管理员 Token 验证成功"}
+
+
 @router.put("", response_model=SystemConfigStatus, dependencies=[Depends(require_admin)])
 def put_system_config(body: SystemConfigUpdate, db: Session = Depends(get_db)):
     try:

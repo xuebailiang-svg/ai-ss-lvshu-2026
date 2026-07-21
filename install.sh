@@ -3,7 +3,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [[ "${SCRIPT_DIR}" == "${BASH_SOURCE[0]}" ]] && SCRIPT_DIR="."
-APP_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
+SOURCE_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
+DEPLOY_ROOT="${ESPORTS_APP_ROOT:-/opt/esports-site-selection/app/ai-ss-lvshu-2026-main}"
+APP_ROOT="${DEPLOY_ROOT}"
 SERVICE_NAME="esports-site-selection"
 APP_USER="esports-site-selection"
 APP_GROUP="esports-site-selection"
@@ -37,6 +39,34 @@ fi
 log() { echo "==> $*"; }
 warn() { echo "WARNING: $*" >&2; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
+
+copy_source_to_deploy_root() {
+  [[ "${MODE}" != "check" ]] || return 0
+  [[ "${SOURCE_ROOT}" != "${DEPLOY_ROOT}" ]] || return 0
+
+  log "同步应用代码到固定部署目录：${DEPLOY_ROOT}"
+  install -d -m 0755 -o root -g root "$(dirname "${DEPLOY_ROOT}")"
+
+  local staging
+  staging="$(mktemp -d /tmp/esports-site-selection-deploy.XXXXXX)"
+  tar -C "${SOURCE_ROOT}" \
+    --exclude='./.git' \
+    --exclude='./backend/.venv' \
+    --exclude='./frontend/node_modules' \
+    --exclude='./frontend/dist' \
+    --exclude='./backups' \
+    --exclude='./*.zip' \
+    -cf - . | tar -C "${staging}" -xf -
+
+  rm -rf "${DEPLOY_ROOT}"
+  install -d -m 0755 -o root -g root "${DEPLOY_ROOT}"
+  tar -C "${staging}" -cf - . | tar -C "${DEPLOY_ROOT}" -xf -
+  rm -rf "${staging}"
+  chmod +x "${DEPLOY_ROOT}/install.sh" 2>/dev/null || true
+
+  log "切换到固定部署目录继续安装"
+  exec bash "${DEPLOY_ROOT}/install.sh" "${1:-}"
+}
 
 require_root_for_write() {
   if [[ "${MODE}" != "check" && "${EUID}" -ne 0 ]]; then
@@ -490,6 +520,8 @@ PY
 }
 
 run_check() {
+  echo "SOURCE_ROOT=${SOURCE_ROOT}"
+  echo "DEPLOY_ROOT=${DEPLOY_ROOT}"
   echo "APP_ROOT=${APP_ROOT}"
   for cmd in python3 node npm psql nginx curl systemctl ss; do
     if need_command "${cmd}"; then echo "OK: ${cmd}"; else warn "缺少 ${cmd}"; fi
@@ -514,6 +546,7 @@ main() {
     return 0
   fi
   require_root_for_write
+  copy_source_to_deploy_root "${1:-}"
   apt_install_if_missing
   prepare_reinstall
   ensure_user_and_dirs

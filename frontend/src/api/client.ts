@@ -51,6 +51,9 @@ export const competitorHistory = (id: number) => api.get(`/competitors/${id}/enr
 export const compareEvaluations = (evaluation_ids: number[]) => api.post('/evaluations/compare', {evaluation_ids}).then(response => response.data);
 export const configStatus = () => api.get('/system/config-status').then(response => response.data);
 export const getManagedSystemConfig = () => api.get('/system/config').then(response => response.data);
+export const verifyManagedSystemConfigToken = (adminToken: string) => api
+  .get('/system/config/verify', {headers: {'X-Admin-Token': adminToken}})
+  .then(response => response.data);
 export const updateManagedSystemConfig = (data: Record<string, string>, adminToken: string) => api
   .put('/system/config', data, {headers: {'X-Admin-Token': adminToken}})
   .then(response => response.data);

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="${ESPORTS_APP_ROOT:-/opt/esports-site-selection/app/ai-ss-lvshu-2026-main}"
 SERVICE_NAME="esports-site-selection"
 CONFIG_DIR="/etc/esports-site-selection"
 DATA_DIR="/var/lib/esports-site-selection"

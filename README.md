@@ -6,16 +6,17 @@
 
 ## v1.0.0-beta Ubuntu 一键部署
 
-当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。
+当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。安装脚本会自动把当前解压目录同步到固定生产目录
+`/opt/esports-site-selection/app/ai-ss-lvshu-2026-main`，避免 systemd 指向 `/tmp` 或 `/home/ubuntu` 导致权限和 venv shebang 问题。
 
 ```bash
-# 全新安装 / 重复安装
+# 全新安装 / 重复安装：从任意解压目录执行即可
 sudo ./install.sh
 
 # 只检查环境，不修改系统
 sudo ./install.sh --check
 
-# 日常升级：保留 backend.env、frontend-runtime.json、数据库和 trace/feedback
+# 日常升级：一条命令完成同步代码、安装依赖、迁移、构建、重启和验收
 sudo ./install.sh --upgrade
 
 # 重建后端虚拟环境和前端产物，仍保留配置、数据库和生产数据
@@ -45,16 +46,16 @@ grep -R "__APP_ROOT__" /etc/nginx /etc/systemd/system/esports-site-selection.ser
 
 ## 最常用命令
 
-服务器默认项目目录按当前生产/测试约定写为 `/home/ubuntu/data/ai-ss-lvshu-2026-main`。如果你的实际目录是 `/opt/esports-site-selection/app`，把下面第一行替换成对应目录即可。
+服务器可以从 `/home/ubuntu/data/ai-ss-lvshu-2026-main` 这类临时解压目录执行安装脚本；脚本会自动同步到固定生产目录 `/opt/esports-site-selection/app/ai-ss-lvshu-2026-main`。
 
 ```bash
 cd /home/ubuntu/data/ai-ss-lvshu-2026-main
 
 # 首次一键安装 / 重新部署
-bash install.sh
+sudo ./install.sh
 
-# 日常更新：deploy.sh 已包含 alembic upgrade head，不需要重复手工执行迁移
-git pull && bash scripts/deploy.sh
+# 日常升级：保留配置、数据库和生产数据
+sudo ./install.sh --upgrade
 
 # 健康检查
 bash scripts/health-check.sh

@@ -65,6 +65,53 @@ class AmapMapDataClient:
             if owns_client:
                 await client.aclose()
 
+    async def geocode(
+        self,
+        *,
+        city: str,
+        address: str,
+        timeout_seconds: float = 8.0,
+    ) -> dict[str, Any]:
+        self.ensure_configured()
+        if self.mock:
+            return {
+                "status": "1",
+                "geocodes": [
+                    {
+                        "formatted_address": f"{city}{address}",
+                        "location": "108.946767,34.222838",
+                    }
+                ],
+                "mock": True,
+            }
+
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=timeout_seconds)
+        try:
+            response = await client.get(
+                f"{self.base_url}/geocode/geo",
+                params={
+                    "key": self.key,
+                    "city": city,
+                    "address": address,
+                    "output": "JSON",
+                },
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict) or str(data.get("status")) != "1":
+                info = str(data.get("info", "unknown error")) if isinstance(data, dict) else "invalid response"
+                infocode = str(data.get("infocode", "")) if isinstance(data, dict) else ""
+                raise RuntimeError(f"Amap geocode failed: {info} ({infocode})")
+            geocodes = data.get("geocodes")
+            if not isinstance(geocodes, list) or not geocodes:
+                raise RuntimeError("Amap geocode returned no result")
+            return data
+        finally:
+            if owns_client:
+                await client.aclose()
+
     async def collect_pois(
         self,
         *,

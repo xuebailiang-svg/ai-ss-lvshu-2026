@@ -47,7 +47,10 @@ type ProjectItem = {
   name?: string;
   project_name?: string;
   city?: string;
+  district?: string;
   address?: string;
+  longitude?: number | null;
+  latitude?: number | null;
   radius_meters?: number;
   business_type?: string;
   status?: string;
@@ -60,11 +63,22 @@ type ChatMessage = {
 };
 
 const QUICK_MESSAGES = [
-  '西安市 小寨地铁站 1000米 电竞馆，帮我做一次选址分析',
+  '西安市小寨地铁站 1000 米，电竞馆，帮我做一次选址分析',
   '这个项目当前缺哪些关键数据？',
   '竞品压力和夜间消费环境怎么样？',
   '生成一份适合投资人看的报告',
 ];
+
+const STATUS_TEXT: Record<string, string> = {
+  draft: '初始化',
+  pending_review: '初始化',
+  confirmed: '初始化',
+  collecting: '数据采集中',
+  data_ready: '数据已就绪',
+  supplementing: '数据补充中',
+  scored: '分析完成',
+  reported: '已生成报告',
+};
 
 function projectTitle(project?: ProjectItem | null) {
   if (!project) return '未选择项目';
@@ -72,15 +86,7 @@ function projectTitle(project?: ProjectItem | null) {
 }
 
 function statusText(status?: string) {
-  const map: Record<string, string> = {
-    pending_review: '初始化',
-    confirmed: '初始化',
-    collecting: '数据采集中',
-    supplementing: '数据补充中',
-    scored: '分析完成',
-    reported: '已生成报告',
-  };
-  return map[status || ''] || '初始化';
+  return STATUS_TEXT[status || ''] || '初始化';
 }
 
 function errorText(error: any, fallback: string) {
@@ -88,6 +94,58 @@ function errorText(error: any, fallback: string) {
   if (typeof detail === 'string') return detail;
   if (detail?.message) return detail.message;
   return error?.message || fallback;
+}
+
+function countText(value: unknown) {
+  if (value === undefined || value === null || value === '') return '--';
+  return String(value);
+}
+
+function summarizeAction(action: string, result: any) {
+  if (result?.success === false) {
+    return `${action}失败：${result.message || '服务暂时不可用，请检查配置或稍后重试。'}`;
+  }
+
+  if (action === '高德 POI 采集') {
+    const collected = result?.collected || {};
+    return [
+      '高德 POI 采集完成。',
+      `POI：${countText(collected.poi_count)}`,
+      `竞品：${countText(collected.competitor_count)}`,
+      `餐饮：${countText(collected.food_count)}`,
+      `娱乐：${countText(collected.entertainment_count)}`,
+    ].join('\n');
+  }
+
+  if (action === '竞品采集') {
+    const count = result?.discovered_count ?? result?.competitor_count ?? result?.saved_count ?? result?.imported_rows;
+    return `竞品采集完成：发现 ${countText(count)} 个疑似竞品，请在后续流程中人工确认。`;
+  }
+
+  if (action === '周边配套采集') {
+    return [
+      '周边配套采集完成。',
+      `餐饮：${countText(result?.food_count)}`,
+      `娱乐：${countText(result?.entertainment_count)}`,
+      `夜间商业候选：${countText(result?.night_business_count)}`,
+    ].join('\n');
+  }
+
+  if (action === '数据核验') {
+    const missing = Array.isArray(result?.missing) ? result.missing.length : 0;
+    const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0;
+    return `数据核验完成：完整度 ${countText(result?.quality_score)}%，缺失 ${missing} 项，风险提示 ${warnings} 项。`;
+  }
+
+  if (action === '评分分析') {
+    return `评分分析完成：综合评分 ${countText(result?.total_score)} 分，评级 ${result?.level || '--'}。`;
+  }
+
+  if (action === 'AI 报告生成') {
+    return 'AI 报告已生成，可在下方查看并导出。';
+  }
+
+  return `${action}完成。`;
 }
 
 function downloadHtml(filename: string, markdown: string) {
@@ -124,7 +182,10 @@ export default function WorkbenchPage() {
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([
-    {role: 'system', content: '这是面向客户的工作台。可以直接创建项目、采集数据、补充信息、评分、生成报告，也可以围绕当前项目提问。'},
+    {
+      role: 'system',
+      content: '这是面向客户的选址工作台。可以创建项目、采集数据、补充信息、评分、生成报告，也可以围绕当前项目提问。',
+    },
   ]);
 
   const selectedProject = useMemo(
@@ -151,7 +212,9 @@ export default function WorkbenchPage() {
       const [sourceResult, configResult, memoryResult] = await Promise.all([
         getDataSourceStatus().catch(() => ({items: []})),
         getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
-        projectId ? listMemory({project_id: projectId, status: 'confirmed'}).catch(() => ({items: [], total: 0})) : Promise.resolve({items: [], total: 0}),
+        projectId
+          ? listMemory({project_id: projectId, status: 'confirmed'}).catch(() => ({items: [], total: 0}))
+          : Promise.resolve({items: [], total: 0}),
       ]);
       setDataSources(sourceResult.items || []);
       setDimensions(configResult.dimensions || []);
@@ -193,22 +256,28 @@ export default function WorkbenchPage() {
     }
   };
 
-  const runAction = async (name: string, fn: () => Promise<any>, successMessage: string) => {
+  const runAction = async (loadingKey: string, actionName: string, fn: () => Promise<any>) => {
     if (!selectedProjectId) {
       message.warning('请先选择或创建项目');
-      return;
+      return null;
     }
-    setActionLoading(name);
+
+    setActionLoading(loadingKey);
     try {
       const result = await fn();
-      message.success(successMessage);
-      setMessages(previous => [...previous, {role: 'system', content: `${successMessage}：${JSON.stringify(result).slice(0, 180)}`}]);
+      const summary = summarizeAction(actionName, result);
+      setMessages(previous => [...previous, {role: 'system', content: summary}]);
+      if (result?.success === false) {
+        message.warning(result.message || `${actionName}失败`);
+      } else {
+        message.success(`${actionName}完成`);
+      }
       await loadProjects();
       await loadSideContext(selectedProjectId);
       return result;
     } catch (error: any) {
-      const reason = errorText(error, `${successMessage}失败`);
-      setMessages(previous => [...previous, {role: 'system', content: `操作失败：${reason}`}]);
+      const reason = errorText(error, `${actionName}失败`);
+      setMessages(previous => [...previous, {role: 'system', content: `${actionName}失败：${reason}`}]);
       message.error(reason);
       return null;
     } finally {
@@ -217,19 +286,19 @@ export default function WorkbenchPage() {
   };
 
   const checkQuality = async () => {
-    const result = await runAction('quality', () => getProjectDataQuality(selectedProjectId), '数据核验完成');
+    const result = await runAction('quality', '数据核验', () => getProjectDataQuality(selectedProjectId));
     if (result) setQuality(result);
   };
 
   const runScore = async () => {
-    const result = await runAction('score', () => scoreProject(selectedProjectId), '评分分析完成');
+    const result = await runAction('score', '评分分析', () => scoreProject(selectedProjectId));
     if (result) setScore(result);
   };
 
   const runReport = async () => {
-    const result = await runAction('report', () => generateAiReport(selectedProjectId), 'AI 报告生成完成');
+    const result = await runAction('report', 'AI 报告生成', () => generateAiReport(selectedProjectId));
     if (result?.success === false) {
-      message.warning(result.message || 'AI 报告生成失败');
+      setReport(null);
       return;
     }
     if (result) setReport(result);
@@ -257,6 +326,9 @@ export default function WorkbenchPage() {
 
   const qualityScore = Number(quality?.quality_score) || 0;
   const reportContent = String(report?.content || '');
+  const scoreDimensions = score?.dimensions && typeof score.dimensions === 'object'
+    ? Object.entries(score.dimensions as Record<string, any>)
+    : [];
 
   return (
     <div className="v11-workbench">
@@ -292,18 +364,30 @@ export default function WorkbenchPage() {
             </Form.Item>
             <Row gutter={8}>
               <Col span={12}><Form.Item name="city" label="城市" rules={[{required: true}]}><Input /></Form.Item></Col>
-              <Col span={12}><Form.Item name="district" label="区域"><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item name="district" label="区域"><Input placeholder="例如：雁塔区" /></Form.Item></Col>
             </Row>
             <Form.Item name="address" label="详细地址" rules={[{required: true, message: '请输入地址'}]}>
               <Input placeholder="例如：小寨地铁站" />
             </Form.Item>
             <Row gutter={8}>
-              <Col span={12}><Form.Item name="radius_meters" label="分析范围"><InputNumber min={200} max={5000} style={{width: '100%'}} /></Form.Item></Col>
+              <Col span={12}>
+                <Form.Item name="radius_meters" label="分析范围（米）">
+                  <InputNumber min={200} max={5000} addonAfter="米" style={{width: '100%'}} />
+                </Form.Item>
+              </Col>
               <Col span={12}><Form.Item name="business_type" label="经营类型"><Input /></Form.Item></Col>
             </Row>
             <Row gutter={8}>
-              <Col span={12}><Form.Item name="expected_area_sqm" label="预计面积"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col>
-              <Col span={12}><Form.Item name="investment_budget" label="投资预算"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col>
+              <Col span={12}>
+                <Form.Item name="expected_area_sqm" label="预计面积（㎡）">
+                  <InputNumber min={0} addonAfter="㎡" style={{width: '100%'}} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="investment_budget" label="投资预算（万元）">
+                  <InputNumber min={0} addonAfter="万元" style={{width: '100%'}} />
+                </Form.Item>
+              </Col>
             </Row>
             <Button type="primary" icon={<PlusOutlined />} htmlType="submit" loading={creating} block>创建项目</Button>
           </Form>
@@ -315,16 +399,34 @@ export default function WorkbenchPage() {
           <Space direction="vertical" size={4}>
             <Typography.Title level={3} style={{margin: 0}}>{projectTitle(selectedProject)}</Typography.Title>
             <Typography.Text type="secondary">
-              {selectedProject ? `${selectedProject.city || '-'} · ${selectedProject.address || '-'} · ${selectedProject.radius_meters || 1000}米 · ${selectedProject.business_type || '电竞馆'}` : '选择项目后开始分析'}
+              {selectedProject
+                ? `${selectedProject.city || '-'} · ${selectedProject.address || '-'} · ${selectedProject.radius_meters || 1000} 米 · ${selectedProject.business_type || '电竞馆'}`
+                : '选择项目后开始分析'}
             </Typography.Text>
           </Space>
         </Card>
 
         <Card title="选址操作" className="v11-action-card">
           <Space wrap>
-            <Button icon={<CloudDownloadOutlined />} loading={actionLoading === 'amap'} onClick={() => runAction('amap', () => collectProjectAmap(selectedProjectId), '高德 POI 采集完成')}>采集高德 POI</Button>
-            <Button loading={actionLoading === 'competitor'} onClick={() => runAction('competitor', () => collectProjectCompetitors(selectedProjectId), '竞品采集完成')}>获取竞品</Button>
-            <Button loading={actionLoading === 'supporting'} onClick={() => runAction('supporting', () => collectProjectSupporting(selectedProjectId), '周边配套采集完成')}>获取配套</Button>
+            <Button
+              icon={<CloudDownloadOutlined />}
+              loading={actionLoading === 'amap'}
+              onClick={() => runAction('amap', '高德 POI 采集', () => collectProjectAmap(selectedProjectId))}
+            >
+              采集高德 POI
+            </Button>
+            <Button
+              loading={actionLoading === 'competitor'}
+              onClick={() => runAction('competitor', '竞品采集', () => collectProjectCompetitors(selectedProjectId))}
+            >
+              获取竞品
+            </Button>
+            <Button
+              loading={actionLoading === 'supporting'}
+              onClick={() => runAction('supporting', '周边配套采集', () => collectProjectSupporting(selectedProjectId))}
+            >
+              获取配套
+            </Button>
             <Button loading={actionLoading === 'quality'} onClick={checkQuality}>数据核验</Button>
             <Button type="primary" loading={actionLoading === 'score'} onClick={runScore}>评分分析</Button>
             <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport}>生成报告</Button>
@@ -371,6 +473,9 @@ export default function WorkbenchPage() {
                     <Statistic title="数据完整度" value={qualityScore} suffix="%" />
                     <Progress percent={qualityScore} status={qualityScore >= 80 ? 'success' : 'active'} />
                     <Typography.Text type="secondary">缺失：{Array.isArray(quality.missing) ? quality.missing.length : 0} 项</Typography.Text>
+                    {Array.isArray(quality.warnings) && quality.warnings.length > 0 && (
+                      <Alert style={{marginTop: 8}} type="warning" showIcon message={`风险提示：${quality.warnings.length} 项`} />
+                    )}
                   </Card>
                 </Col>
               )}
@@ -379,6 +484,17 @@ export default function WorkbenchPage() {
                   <Card size="small">
                     <Statistic title="综合评分" value={score.total_score ?? '--'} suffix="分" />
                     <Typography.Text>等级：{score.level || '-'}</Typography.Text>
+                    {scoreDimensions.length > 0 && (
+                      <List
+                        size="small"
+                        dataSource={scoreDimensions.slice(0, 5)}
+                        renderItem={([key, value]) => (
+                          <List.Item>
+                            <Typography.Text>{value?.label || value?.name || key}：{value?.score ?? '--'} / {value?.max ?? '--'}</Typography.Text>
+                          </List.Item>
+                        )}
+                      />
+                    )}
                   </Card>
                 </Col>
               )}
@@ -432,7 +548,7 @@ export default function WorkbenchPage() {
                       {item.status === 'available' ? '可用' : item.status === 'disabled' ? '停用' : '未配置'}
                     </Tag>
                   </Space>
-                  <Typography.Text type="secondary">{item.capabilities.join('、') || item.description}</Typography.Text>
+                  <Typography.Text type="secondary">{item.capabilities?.join('、') || item.description}</Typography.Text>
                 </Space>
               </List.Item>
             )}
