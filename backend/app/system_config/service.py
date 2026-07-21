@@ -13,7 +13,13 @@ from app.system_config.crypto import ConfigCryptoError, decrypt_value, encrypt_v
 from app.system_config.schemas import SystemConfigUpdate
 
 
-SECRET_KEYS = {"deepseek_api_key", "amap_web_service_key"}
+SECRET_KEYS = {
+    "deepseek_api_key",
+    "amap_web_service_key",
+    "amap_js_key",
+    "amap_security_js_code",
+    "third_party_api_key",
+}
 SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"}
 
 
@@ -83,6 +89,9 @@ def config_status(db: Session) -> dict[str, Any]:
     warnings: list[str] = []
     deepseek_key, deepseek_source = _effective(db, "deepseek_api_key", settings.deepseek_api_key, warnings)
     amap_key, amap_source = _effective(db, "amap_web_service_key", settings.amap_web_service_key, warnings)
+    amap_js_key, amap_js_source = _effective(db, "amap_js_key", "", warnings)
+    amap_security_code, amap_security_source = _effective(db, "amap_security_js_code", "", warnings)
+    third_party_key, third_party_source = _effective(db, "third_party_api_key", "", warnings)
     base_url, _ = _effective(db, "deepseek_base_url", settings.deepseek_base_url, warnings)
     model, _ = _effective(db, "deepseek_model", settings.deepseek_model, warnings)
     return {
@@ -96,6 +105,21 @@ def config_status(db: Session) -> dict[str, Any]:
             "configured": bool(amap_key) or settings.amap_mock,
             "source": amap_source if amap_key else ("mock" if settings.amap_mock else "none"),
             "masked": mask_secret(amap_key),
+        },
+        "amap_js": {
+            "configured": bool(amap_js_key),
+            "source": amap_js_source,
+            "masked": mask_secret(amap_js_key),
+        },
+        "amap_security": {
+            "configured": bool(amap_security_code),
+            "source": amap_security_source,
+            "masked": mask_secret(amap_security_code),
+        },
+        "third_party": {
+            "configured": bool(third_party_key),
+            "source": third_party_source,
+            "masked": mask_secret(third_party_key),
         },
         "deepseek_base_url": base_url or "https://api.deepseek.com",
         "deepseek_model": model or "deepseek-chat",

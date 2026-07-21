@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.llm.client import DeepSeekClient, DeepSeekConfigError
 from app.llm.schemas import AIAnalysisInput
 from app.models import AICallLogRecord, AIReportRecord, SiteScoreRecord
+from app.memory.service import relevant_memory_context
 from app.projects.service import data_quality, dataset, get_project
 from app.scoring_engine.service import score_project
 
@@ -60,6 +61,11 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
     if score is None:
         score = score_project(db, project_id)
     quality = data_quality(db, project_id)
+    memories = relevant_memory_context(
+        db,
+        project_id,
+        tags=[project.city, project.business_type, "电竞馆", "竞品", "租金", "夜经济"],
+    )
     pois = project_dataset.get("pois", [])
     confirmed_food_businesses = [
         row for row in project_dataset.get("food_businesses", []) if row.get("status") == "confirmed"
@@ -105,6 +111,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         rent={},
         score_result=score,
         data_quality=quality,
+        memory_context=memories,
         risks=list(score.get("risks") or []) + list(quality.get("warnings") or []),
     )
 

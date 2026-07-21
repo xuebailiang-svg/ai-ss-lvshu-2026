@@ -306,3 +306,51 @@ class SystemConfigRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now, onupdate=now
     )
+
+
+class MemoryItemRecord(Base):
+    __tablename__ = "memory_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(30), index=True)
+    memory_type: Mapped[str] = mapped_column(String(50), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    source: Mapped[str] = mapped_column(String(80), default="manual")
+    confidence: Mapped[float] = mapped_column(Float, default=.7)
+    status: Mapped[str] = mapped_column(String(50), default="pending_review", index=True)
+    project_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    raw_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ScoringDimensionRecord(Base):
+    __tablename__ = "scoring_dimensions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    weight: Mapped[float] = mapped_column(Float, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    data_sources: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ScoringFactorRecord(Base):
+    __tablename__ = "scoring_factors"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dimension_key: Mapped[str] = mapped_column(String(80), index=True)
+    key: Mapped[str] = mapped_column(String(120), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    weight: Mapped[float] = mapped_column(Float, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    data_sources: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

@@ -352,6 +352,10 @@ server {
     root ${APP_ROOT}/frontend/dist;
     index index.html;
     client_max_body_size 2m;
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
 
     location = /config.json {
         alias ${APP_ROOT}/frontend/dist/config.json;
@@ -368,8 +372,8 @@ server {
     location /assets/ {
         try_files \$uri =404;
         access_log off;
-        expires 1d;
-        add_header Cache-Control "public, max-age=86400";
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable";
     }
 
     location /api/ {

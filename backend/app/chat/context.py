@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.llm.service import latest_score
+from app.memory.service import relevant_memory_context
 from app.models import AIReportRecord, ChatMessageRecord, ChatSessionRecord
 from app.projects.service import dataset, get_project, row_to_dict
 
@@ -53,11 +54,17 @@ def build_project_chat_context(db: Session, session: ChatSessionRecord, user_mes
     score = latest_score(db, session.project_id) or {}
     report = latest_report(db, session.project_id)
     history = recent_messages(db, session.id)
+    memory_context = relevant_memory_context(
+        db,
+        session.project_id,
+        tags=[project.city, project.business_type, "电竞馆", "竞品", "租金", "夜经济"],
+    )
     context = {
         "project": project_dataset.get("project", {}),
         "dataset": project_dataset,
         "score": score,
         "latest_report": report,
+        "memory_context": memory_context,
         "conversation_summary": session.conversation_summary,
         "chat_history": [
             {"role": item.get("role"), "content": item.get("content")}

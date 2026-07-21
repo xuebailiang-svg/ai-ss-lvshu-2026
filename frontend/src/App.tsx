@@ -1,10 +1,11 @@
 import {Layout, Menu} from 'antd';
-import {EnvironmentOutlined, FolderOpenOutlined, HistoryOutlined, SettingOutlined} from '@ant-design/icons';
+import {ControlOutlined, DesktopOutlined, EnvironmentOutlined} from '@ant-design/icons';
 import {Link, Route, Routes, useLocation} from 'react-router-dom';
+import WorkbenchPage from './pages/Workbench';
+import SystemConfig from './pages/SystemConfig';
 import NewEvaluation from './pages/NewEvaluation';
 import History from './pages/History';
 import ReportPage from './pages/Report';
-import SystemConfig from './pages/SystemConfig';
 import AgentAnalysis from './pages/AgentAnalysis';
 import ProjectsPage from './pages/Projects';
 import ProjectCreatePage from './pages/Projects/Create';
@@ -16,7 +17,9 @@ import './styles/app.css';
 
 export default function App() {
   const location = useLocation();
-  const selectedKey = location.pathname.startsWith('/projects') ? '/projects' : location.pathname;
+  const selectedKey = location.pathname.startsWith('/settings') || location.pathname.startsWith('/system-config')
+    ? '/settings'
+    : '/workbench';
 
   return (
     <Layout className="app">
@@ -27,17 +30,29 @@ export default function App() {
           mode="horizontal"
           selectedKeys={[selectedKey]}
           items={[
-            {key: '/', label: <Link to="/">新地址评估</Link>},
-            {key: '/projects', icon: <FolderOpenOutlined />, label: <Link to="/projects">项目工作台</Link>},
-            {key: '/agent', label: <Link to="/agent">Agent 分析</Link>},
-            {key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">历史评估</Link>},
-            {key: '/system-config', icon: <SettingOutlined />, label: <Link to="/system-config">系统配置</Link>},
+            {key: '/workbench', icon: <DesktopOutlined />, label: <Link to="/">工作台</Link>},
+            {key: '/settings', icon: <ControlOutlined />, label: <Link to="/settings">配置</Link>},
           ]}
         />
       </Layout.Header>
       <Layout.Content>
         <Routes>
-          <Route path="/" element={<NewEvaluation />} />
+          <Route path="/" element={<WorkbenchPage />} />
+          <Route path="/workbench" element={<WorkbenchPage />} />
+          <Route path="/settings" element={<SystemConfig />} />
+
+          <Route path="/legacy/new-evaluation" element={<NewEvaluation />} />
+          <Route path="/legacy/agent" element={<AgentAnalysis />} />
+          <Route path="/legacy/projects" element={<ProjectsPage />} />
+          <Route path="/legacy/projects/create" element={<ProjectCreatePage />} />
+          <Route path="/legacy/projects/:projectId/supplement" element={<ProjectSupplementPage />} />
+          <Route path="/legacy/projects/:projectId/upload" element={<ProjectUploadPage />} />
+          <Route path="/legacy/projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="/legacy/projects/:projectId/chat" element={<ProjectChat />} />
+          <Route path="/legacy/evaluations/:id" element={<NewEvaluation />} />
+          <Route path="/legacy/history" element={<History />} />
+          <Route path="/legacy/reports/:id" element={<ReportPage />} />
+
           <Route path="/agent" element={<AgentAnalysis />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/create" element={<ProjectCreatePage />} />

@@ -155,6 +155,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
         "rent",
         "score_result",
         "data_quality",
+        "memory_context",
         "risks",
     }
     assert data["project"]["project_id"] == project_id

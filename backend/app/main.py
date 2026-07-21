@@ -14,7 +14,9 @@ from app.manual_input import router as manual_input_router
 from app.map_data import router as map_data_router
 from app.projects import router as projects_router
 from app.scoring_engine import router as scoring_engine_router
+from app.scoring_engine.config_router import router as scoring_config_router
 from app.system_config import router as system_config_router
+from app.memory import router as memory_router
 import app.models
 @asynccontextmanager
 async def lifespan(app):
@@ -32,6 +34,8 @@ app.include_router(projects_router)
 app.include_router(map_data_router)
 app.include_router(manual_input_router)
 app.include_router(scoring_engine_router)
+app.include_router(scoring_config_router)
 app.include_router(llm_router)
 app.include_router(chat_router)
 app.include_router(system_config_router)
+app.include_router(memory_router)

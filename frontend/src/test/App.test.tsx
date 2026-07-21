@@ -40,6 +40,25 @@ const apiMocks = vi.hoisted(() => ({
   getProjectDataQuality: vi.fn(() => Promise.resolve({project_id: 'proj_1', quality_score: 60, missing: ['真实租金'], warnings: []})),
   getProjectMissingData: vi.fn(() => Promise.resolve({project_id: 'proj_1', missing: []})),
   collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
+  collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
+  collectProjectSupporting: vi.fn(() => Promise.resolve({success: true, food_count: 1, entertainment_count: 1, night_business_count: 0})),
+  listProjectCompetitors: vi.fn(() => Promise.resolve({items: [], total: 0})),
+  listProjectSupporting: vi.fn(() => Promise.resolve({items: [], total: 0, effective_count: 0, stats: {}})),
+  listProjectRent: vi.fn(() => Promise.resolve({items: [], total: 0, incomplete_count: 0, confirmed_count: 0, detail_completed_count: 0})),
+  getDataSourceStatus: vi.fn(() => Promise.resolve({items: [
+    {name: 'amap', display_name: '高德 POI', status: 'available', description: '高德地图基础数据', capabilities: ['poi'], check_supported: true},
+    {name: 'manual', display_name: '人工上传', status: 'available', description: '人工补充数据', capabilities: ['manual'], check_supported: true},
+  ]})),
+  checkDataSourceConnectivity: vi.fn(() => Promise.resolve({name: 'amap', configured: true, reachable: true, status: 'ok', message: 'ok', latency_ms: 10, checked_at: 'now'})),
+  getScoringConfig: vi.fn(() => Promise.resolve({dimensions: [
+    {key: 'redline_compliance', name: '红线合规', description: '红线检查', weight: 10, enabled: true, data_sources: ['amap'], sort_order: 0, factors: []},
+    {key: 'competitor_operation', name: '竞品经营', description: '竞品经营信息', weight: 10, enabled: true, data_sources: ['manual'], sort_order: 1, factors: []},
+  ], total_weight: 20, normalized: false})),
+  updateScoringConfig: vi.fn(() => Promise.resolve({dimensions: [], total_weight: 0, normalized: false})),
+  resetScoringConfig: vi.fn(() => Promise.resolve({dimensions: [], total_weight: 0, normalized: false})),
+  listMemory: vi.fn(() => Promise.resolve({items: [], total: 0})),
+  createMemory: vi.fn(() => Promise.resolve({id: 1})),
+  reviewMemory: vi.fn(() => Promise.resolve({id: 1})),
   submitManualInput: vi.fn(() => Promise.resolve({success: true})),
   listManualInputs: vi.fn(() => Promise.resolve({items: []})),
   scoreProject: vi.fn(() => Promise.resolve({total_score: 70, level: '推荐', confidence: 0.8, dimensions: {population: {score: 20, max: 30}}})),
@@ -64,6 +83,37 @@ vi.mock('../api/projects', () => ({
   getProjectDataQuality: apiMocks.getProjectDataQuality,
   getProjectMissingData: apiMocks.getProjectMissingData,
   collectProjectAmap: apiMocks.collectProjectAmap,
+  collectProjectCompetitors: apiMocks.collectProjectCompetitors,
+  collectProjectSupporting: apiMocks.collectProjectSupporting,
+  listProjectCompetitors: apiMocks.listProjectCompetitors,
+  listProjectSupporting: apiMocks.listProjectSupporting,
+  listProjectRent: apiMocks.listProjectRent,
+  reviewProjectCompetitor: vi.fn(() => Promise.resolve({})),
+  getProjectCompetitor: vi.fn(() => Promise.resolve({})),
+  updateProjectCompetitor: vi.fn(() => Promise.resolve({})),
+  reviewProjectSupporting: vi.fn(() => Promise.resolve({})),
+  getProjectSupportingDetail: vi.fn(() => Promise.resolve({manual_detail: {}})),
+  updateProjectSupportingDetail: vi.fn(() => Promise.resolve({})),
+  reviewProjectRent: vi.fn(() => Promise.resolve({})),
+  getProjectRentDetail: vi.fn(() => Promise.resolve({manual_detail: {}})),
+  updateProjectRentDetail: vi.fn(() => Promise.resolve({})),
+}));
+
+vi.mock('../api/dataSources', () => ({
+  getDataSourceStatus: apiMocks.getDataSourceStatus,
+  checkDataSourceConnectivity: apiMocks.checkDataSourceConnectivity,
+}));
+
+vi.mock('../api/scoringConfig', () => ({
+  getScoringConfig: apiMocks.getScoringConfig,
+  updateScoringConfig: apiMocks.updateScoringConfig,
+  resetScoringConfig: apiMocks.resetScoringConfig,
+}));
+
+vi.mock('../api/memory', () => ({
+  listMemory: apiMocks.listMemory,
+  createMemory: apiMocks.createMemory,
+  reviewMemory: apiMocks.reviewMemory,
 }));
 
 vi.mock('../api/data', () => ({
@@ -108,10 +158,10 @@ afterEach(() => {
 
 test('renders new evaluation workflow', () => {
   render(<MemoryRouter><App /></MemoryRouter>);
-  expect(screen.getByText('候选地址')).toBeInTheDocument();
-  expect(screen.getByTestId('evaluation-name-input')).toBeEnabled();
-  expect(screen.getByRole('button', {name: '1 定位地址'})).toBeDisabled();
-  expect(screen.getByRole('button', {name: '4 查看报告'})).toBeDisabled();
+  expect(screen.getByText('聊天式工作区')).toBeInTheDocument();
+  expect(screen.getByText('新建选址项目')).toBeInTheDocument();
+  expect(screen.getByText('选址维度')).toBeInTheDocument();
+  expect(screen.getByRole('button', {name: /采集高德 POI/})).toBeInTheDocument();
 });
 
 test('renders history loading and empty-capable page', async () => {
@@ -122,8 +172,9 @@ test('renders history loading and empty-capable page', async () => {
 
 test('renders system config page', async () => {
   render(<MemoryRouter initialEntries={['/system-config']}><App /></MemoryRouter>);
-  expect(screen.getByRole('heading', {name: '系统配置'})).toBeInTheDocument();
-  expect(await screen.findByText('/etc/esports-site-selection/backend.env')).toBeInTheDocument();
+  expect(screen.getByRole('heading', {name: '配置'})).toBeInTheDocument();
+  expect(await screen.findByText('Key 和模型配置')).toBeInTheDocument();
+  expect(screen.getByText('评分维度和权重')).toBeInTheDocument();
 });
 
 test('renders agent analysis page', () => {
@@ -134,35 +185,49 @@ test('renders agent analysis page', () => {
 
 test('renders projects page and empty list', async () => {
   render(<MemoryRouter initialEntries={['/projects']}><App /></MemoryRouter>);
-  expect(screen.getByRole('heading', {name: '选址项目工作台'})).toBeInTheDocument();
-  expect(await screen.findByText('项目列表')).toBeInTheDocument();
+  expect(screen.getByRole('heading', {name: '选址项目'})).toBeInTheDocument();
+  expect(await screen.findByText('创建项目')).toBeInTheDocument();
   expect(apiMocks.listProjects).toHaveBeenCalled();
 });
 
 test('submits create project form', async () => {
-  render(<MemoryRouter initialEntries={['/projects']}><App /></MemoryRouter>);
-  fireEvent.change(screen.getByPlaceholderText('西安小寨电竞馆'), {target: {value: '西安小寨电竞馆'}});
-  fireEvent.change(screen.getByPlaceholderText('西安市'), {target: {value: '西安市'}});
-  fireEvent.change(screen.getByPlaceholderText('雁塔区'), {target: {value: '雁塔区'}});
-  fireEvent.change(screen.getByPlaceholderText('小寨地铁站'), {target: {value: '小寨地铁站'}});
-  fireEvent.click(screen.getByRole('button', {name: '创建并进入项目'}));
+  render(<MemoryRouter><App /></MemoryRouter>);
+  fireEvent.change(screen.getByPlaceholderText('例如：小寨电竞馆选址'), {target: {value: '西安小寨电竞馆'}});
+  fireEvent.change(screen.getByPlaceholderText('例如：小寨地铁站'), {target: {value: '小寨地铁站'}});
+  fireEvent.click(screen.getByRole('button', {name: /创建项目/}));
   await waitFor(() => expect(apiMocks.createProject).toHaveBeenCalled());
 });
 
-test('renders project detail workspace', async () => {
-  render(<MemoryRouter initialEntries={['/projects/proj_1']}><App /></MemoryRouter>);
-  expect(await screen.findByRole('heading', {name: '项目详情工作台'})).toBeInTheDocument();
-  expect(await screen.findByText('测试项目')).toBeInTheDocument();
-  expect(screen.getByText('开始高德采集')).toBeInTheDocument();
-  expect(screen.getByText('生成AI报告')).toBeInTheDocument();
+test('renders v1.1 workbench with selected project context', async () => {
+  apiMocks.listProjects.mockResolvedValueOnce({items: [{
+    project_id: 'proj_1',
+    name: '测试项目',
+    city: '西安市',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+  }]} as any);
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
+  expect(screen.getByText('聊天式工作区')).toBeInTheDocument();
+  expect(screen.getByText('选址维度')).toBeInTheDocument();
+  expect(screen.getByText('已确认记忆')).toBeInTheDocument();
 });
 
-test('project detail action buttons call APIs', async () => {
-  render(<MemoryRouter initialEntries={['/projects/proj_1']}><App /></MemoryRouter>);
-  expect(await screen.findByText('开始高德采集')).toBeInTheDocument();
-  fireEvent.click(screen.getByText('开始高德采集'));
-  fireEvent.click(screen.getByText('开始评分'));
-  fireEvent.click(screen.getByText('生成AI报告'));
+test('v1.1 workbench action buttons call APIs', async () => {
+  apiMocks.listProjects.mockResolvedValueOnce({items: [{
+    project_id: 'proj_1',
+    name: '测试项目',
+    city: '西安市',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+  }]} as any);
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByText('采集高德 POI'));
+  fireEvent.click(screen.getByText('评分分析'));
+  fireEvent.click(screen.getByText('生成报告'));
   await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
@@ -188,7 +253,7 @@ test('renders rate limit message instead of key permission message', () => {
 
 test('shows restore prompt without locking new evaluation inputs', async () => {
   localStorage.setItem('m2a:current-evaluation-id', '7');
-  render(<MemoryRouter><App /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/legacy/new-evaluation']}><App /></MemoryRouter>);
   expect(await screen.findByTestId('restore-evaluation-alert')).toBeInTheDocument();
   expect(screen.getByTestId('evaluation-name-input')).toBeEnabled();
   expect(apiMocks.getEvaluation).not.toHaveBeenCalled();

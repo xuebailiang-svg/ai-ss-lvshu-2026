@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models import RentDataRecord, SiteScoreRecord
 from app.projects.service import dataset, get_project, row_to_dict, rows_for_project
 from app.scoring_engine.calculator import ProjectScoreCalculator
+from app.scoring_engine.config_service import rules_with_db_weights
 from app.scoring_engine.rules import load_rules
 
 
@@ -21,6 +22,8 @@ def score_project(db: Session, project_id: str, *, rules_path: str | Path | None
     if not project:
         raise ProjectNotFoundError("Project not found")
     rules = load_rules(rules_path)
+    if rules_path is None:
+        rules = rules_with_db_weights(db, rules)
     project_dataset = dataset(db, project)
     # 评分使用完整租金样本集；项目 dataset 的 rent_data 仍保留为兼容旧调用的最新记录。
     project_dataset["rent_records"] = rows_for_project(db, RentDataRecord, project.project_id)
@@ -44,6 +47,7 @@ def score_project(db: Session, project_id: str, *, rules_path: str | Path | None
         **result,
         "score_id": record.id,
         "created_at": record.created_at,
+        "scoring_config": rules.get("scoring_config", {}),
     }
 
 

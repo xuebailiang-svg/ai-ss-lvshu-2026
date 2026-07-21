@@ -31,7 +31,7 @@ def run_upgrade(database_path: Path) -> None:
 def assert_head(database_path: Path) -> None:
     engine = create_engine(f"sqlite:///{database_path.as_posix()}")
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar() == "0010_system_configs"
+        assert connection.execute(text("select version_num from alembic_version")).scalar() == "0011_memory_and_scoring_config"
     tables = set(inspect(engine).get_table_names())
     assert {"site_projects", "poi_enrichments", "site_scores", "ai_reports", "system_configs"}.issubset(tables)
     engine.dispose()
