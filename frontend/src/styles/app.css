@@ -66,6 +66,11 @@
 .v11-action-card .ant-btn{min-width:116px}
 .v11-step-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .v11-step-grid>.ant-card{height:100%}
+.v11-step-card{border-left:4px solid #d9dee8}
+.v11-step-card.active{border-left-color:#1677ff;background:#fbfdff}
+.v11-step-card.done{border-left-color:#52c41a;background:#fbfff7}
+.v11-step-card .ant-card-head{min-height:46px}
+.v11-step-card .ant-alert-description .ant-typography{font-size:13px}
 .v11-message-list{min-height:300px;max-height:46vh;overflow:auto;border:1px solid #e5eaf1;border-radius:12px;padding:12px;background:#fbfcfe;margin-bottom:12px}
 .v11-message{max-width:86%;padding:10px 12px;border-radius:12px;margin-bottom:10px;background:#fff;border:1px solid #edf1f6}
 .v11-message.user{margin-left:auto;background:#eef6ff;border-color:#cde4ff}

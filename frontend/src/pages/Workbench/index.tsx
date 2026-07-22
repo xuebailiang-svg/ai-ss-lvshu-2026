@@ -14,12 +14,12 @@ import {
   Row,
   Space,
   Statistic,
-  Steps,
   Tag,
   Typography,
   message,
 } from 'antd';
 import {
+  CheckCircleOutlined,
   CloudDownloadOutlined,
   DeleteOutlined,
   FileTextOutlined,
@@ -112,6 +112,11 @@ function errorText(error: any, fallback: string) {
 function countText(value: unknown) {
   if (value === undefined || value === null || value === '') return '--';
   return String(value);
+}
+
+function doneTag(done: boolean, doing = false) {
+  if (doing) return <Tag color="processing">进行中</Tag>;
+  return done ? <Tag color="green" icon={<CheckCircleOutlined />}>已完成</Tag> : <Tag color="default">待处理</Tag>;
 }
 
 function shortProjectId(projectId: string) {
@@ -630,6 +635,12 @@ export default function WorkbenchPage() {
   const projectFoodCount = selectedProject ? numberFromStats(selectedProject, 'food_count') : 0;
   const projectEntertainmentCount = selectedProject ? numberFromStats(selectedProject, 'entertainment_count') : 0;
   const projectRentCount = selectedProject ? numberFromStats(selectedProject, 'rent_count') : 0;
+  const hasAmapData = projectPoiCount > 0;
+  const hasCompetitorData = projectCompetitorCount > 0;
+  const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
+  const hasQualityResult = Boolean(quality);
+  const hasScoreResult = Boolean(score);
+  const hasReportResult = Boolean(reportContent);
   const inlineResult = (key: string) => {
     const item = actionResults[key];
     if (!item) return null;
@@ -780,20 +791,9 @@ export default function WorkbenchPage() {
             description="系统会先采集和整理数据，再做 AI 数据核验、人工补充、评分分析和 AI 报告。数据核验会明确标记已有数据、缺失数据和建议补充项。"
             style={{marginBottom: 12}}
           />
-          <Steps
-            size="small"
-            current={currentWorkflowIndex}
-            items={workflowSteps.map(item => ({
-              title: item.title,
-              description: item.description,
-              status: item.status,
-            }))}
-          />
-
-          <Divider />
 
           <div className="v11-step-grid">
-            <Card size="small" title="Step 1：新建或选择项目">
+            <Card size="small" className={selectedProject ? 'v11-step-card done' : 'v11-step-card active'} title="Step 1：新建或选择项目" extra={doneTag(Boolean(selectedProject))}>
               <Space direction="vertical" size={8} style={{width: '100%'}}>
                 <Alert
                   type={selectedProject ? 'success' : 'info'}
@@ -805,7 +805,7 @@ export default function WorkbenchPage() {
               </Space>
             </Card>
 
-            <Card size="small" title="Step 2：确认地址和范围">
+            <Card size="small" className={hasProjectLocation(selectedProject) ? 'v11-step-card done' : 'v11-step-card'} title="Step 2：确认地址和范围" extra={doneTag(hasProjectLocation(selectedProject))}>
               <Space direction="vertical" size={8} style={{width: '100%'}}>
                 <Space size={[4, 4]} wrap>
                   <Tag>{selectedProject?.city || '城市未填'}</Tag>
@@ -818,7 +818,7 @@ export default function WorkbenchPage() {
               </Space>
             </Card>
 
-            <Card size="small" title="Step 3：采集基础数据">
+            <Card size="small" className={hasAmapData ? 'v11-step-card done' : selectedProject ? 'v11-step-card active' : 'v11-step-card'} title="Step 3：采集基础数据" extra={doneTag(hasAmapData, actionLoading === 'amap' || actionLoading === 'competitor' || actionLoading === 'supporting')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Space size={[4, 4]} wrap>
                     <Tag color={projectPoiCount > 0 ? 'green' : 'default'}>POI {projectPoiCount}</Tag>
@@ -828,25 +828,30 @@ export default function WorkbenchPage() {
                   </Space>
                   <Button
                     icon={<CloudDownloadOutlined />}
+                    type={hasAmapData ? 'default' : 'primary'}
                     loading={actionLoading === 'amap'}
                     onClick={() => runAction('amap', '高德 POI 采集', () => collectProjectAmap(selectedProjectId))}
                     block
                   >
-                    采集高德 POI
+                    {hasAmapData ? '高德 POI 已完成 / 重新采集' : '采集高德 POI'}
                   </Button>
                   <Button
+                    type={hasCompetitorData ? 'default' : 'primary'}
+                    icon={hasCompetitorData ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'competitor'}
                     onClick={() => runAction('competitor', '竞品采集', () => collectProjectCompetitors(selectedProjectId))}
                     block
                   >
-                    获取竞品
+                    {hasCompetitorData ? '竞品已获取 / 重新获取' : '获取竞品'}
                   </Button>
                   <Button
+                    type={hasSupportingData ? 'default' : 'primary'}
+                    icon={hasSupportingData ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'supporting'}
                     onClick={() => runAction('supporting', '周边配套采集', () => collectProjectSupporting(selectedProjectId))}
                     block
                   >
-                    获取配套
+                    {hasSupportingData ? '配套已获取 / 重新获取' : '获取配套'}
                   </Button>
                   {inlineResult('amap')}
                   {inlineResult('competitor')}
@@ -854,7 +859,7 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" title="Step 4：人工确认和补充">
+            <Card size="small" className={(projectCompetitorCount > 0 || projectRentCount > 0) ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：人工确认和补充" extra={<Tag color="orange">需人工确认</Tag>}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type="info"
@@ -871,7 +876,7 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" title="Step 5：AI 数据核验">
+            <Card size="small" className={hasQualityResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 5：AI 数据核验" extra={doneTag(hasQualityResult, actionLoading === 'quality' || actionLoading === 'ai-review')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type={quality ? (qualityScore >= 80 ? 'success' : 'warning') : 'info'}
@@ -883,18 +888,30 @@ export default function WorkbenchPage() {
                         : '关键数据暂未发现明显缺失。'
                       : `当前已有租金 ${projectRentCount} 条。建议先补充竞品经营、租金、夜间营业等人工数据。`}
                   />
-                  <Button loading={actionLoading === 'quality' || actionLoading === 'ai-review'} onClick={checkQuality} block>
-                    AI 数据核验
+                  <Button
+                    type={hasQualityResult ? 'default' : 'primary'}
+                    icon={hasQualityResult ? <CheckCircleOutlined /> : undefined}
+                    loading={actionLoading === 'quality' || actionLoading === 'ai-review'}
+                    onClick={checkQuality}
+                    block
+                  >
+                    {hasQualityResult ? '数据已核验 / 重新核验' : 'AI 数据核验'}
                   </Button>
                   {inlineResult('quality')}
                   {inlineResult('aiReview')}
                 </Space>
             </Card>
 
-            <Card size="small" title="Step 6：评分分析">
+            <Card size="small" className={hasScoreResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 6：评分分析" extra={doneTag(hasScoreResult, actionLoading === 'score')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
-                  <Button type="primary" loading={actionLoading === 'score'} onClick={runScore} block>
-                    开始评分分析
+                  <Button
+                    type={hasScoreResult ? 'default' : 'primary'}
+                    icon={hasScoreResult ? <CheckCircleOutlined /> : undefined}
+                    loading={actionLoading === 'score'}
+                    onClick={runScore}
+                    block
+                  >
+                    {hasScoreResult ? '评分已完成 / 重新评分' : '开始评分分析'}
                   </Button>
                   <Alert
                     type={score ? 'success' : 'info'}
@@ -906,10 +923,16 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" title="Step 7：生成报告和继续咨询">
+            <Card size="small" className={hasReportResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 7：生成报告和继续咨询" extra={doneTag(hasReportResult, actionLoading === 'report')}>
               <Space direction="vertical" size={8} style={{width: '100%'}}>
-                <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport} block>
-                  生成 AI 报告
+                <Button
+                  type={hasReportResult ? 'default' : 'primary'}
+                  icon={hasReportResult ? <CheckCircleOutlined /> : <FileTextOutlined />}
+                  loading={actionLoading === 'report'}
+                  onClick={runReport}
+                  block
+                >
+                  {hasReportResult ? '报告已生成 / 重新生成' : '生成 AI 报告'}
                 </Button>
                 <Alert
                   type={reportContent ? 'success' : 'info'}
