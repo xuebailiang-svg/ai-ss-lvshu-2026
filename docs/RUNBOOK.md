@@ -57,6 +57,12 @@ npm run build
 | `DEEPSEEK_API_KEY` | 空 | DeepSeek 环境变量备用 Key。配置中心数据库值优先。 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API 地址。 |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek 模型名称。 |
+| `CRAWLER_ENABLED` | `false` | 是否启用爬虫补充。默认关闭，启用后也只抓取允许访问的公开页面。 |
+| `CRAWLER_PROVIDER` | `crawl4ai` | 爬虫执行层 Provider。第一版仅支持 `crawl4ai`。 |
+| `CRAWLER_TIMEOUT_SECONDS` | `60` | 单个爬虫任务超时时间。 |
+| `CRAWLER_MAX_TASKS_PER_PROJECT` | `50` | 单个项目最大爬虫任务数。 |
+| `CRAWLER_ALLOWED_DOMAINS` | 空 | 允许抓取的域名白名单，逗号分隔；为空表示不启用白名单限制。 |
+| `CRAWLER_BLOCKED_DOMAINS` | 空 | 禁止抓取的域名，逗号分隔。 |
 | `SYSTEM_CONFIG_ENCRYPTION_KEY` | 空 | 配置中心加密主密钥，生产至少32位；不能通过 Web 修改。 |
 | `ADMIN_CONFIG_TOKEN` | 空 | 配置中心写入和连接测试的管理员 Token。 |
 

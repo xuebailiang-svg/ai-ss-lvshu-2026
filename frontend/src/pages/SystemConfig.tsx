@@ -106,6 +106,7 @@ export default function SystemConfig() {
   );
   const deepseekConfigured = Boolean(managedConfig?.deepseek?.configured);
   const amapConfigured = Boolean(managedConfig?.amap?.configured || managedConfig?.amap_js?.configured);
+  const crawlerConfigured = Boolean(managedConfig?.crawler?.configured);
 
   const loadAll = async () => {
     setLoading(true);
@@ -123,6 +124,14 @@ export default function SystemConfig() {
       configForm.setFieldsValue({
         deepseek_base_url: config?.deepseek_base_url || 'https://api.deepseek.com',
         deepseek_model: config?.deepseek_model || 'deepseek-chat',
+        crawler_enabled: Boolean(config?.crawler_enabled),
+        crawler_provider: config?.crawler_provider || 'crawl4ai',
+        crawler_timeout_seconds: Number(config?.crawler_timeout_seconds || 60),
+        crawler_max_pages_per_task: Number(config?.crawler_max_pages_per_task || 5),
+        crawler_max_tasks_per_project: Number(config?.crawler_max_tasks_per_project || 50),
+        crawler_rate_limit_seconds: Number(config?.crawler_rate_limit_seconds || 5),
+        crawler_allowed_domains: config?.crawler_allowed_domains || '',
+        crawler_blocked_domains: config?.crawler_blocked_domains || '',
       });
     } finally {
       setLoading(false);
@@ -151,7 +160,7 @@ export default function SystemConfig() {
   };
 
   const saveConfigPatch = async (
-    patch: Record<string, string | undefined>,
+    patch: Record<string, string | number | boolean | undefined>,
     options: {showEmptyMessage?: boolean} = {showEmptyMessage: true},
   ) => {
     if (!token.trim()) {
@@ -163,9 +172,11 @@ export default function SystemConfig() {
       message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return false;
     }
-    const payload: Record<string, string> = Object.fromEntries(
-      Object.entries(patch).filter(([, value]) => typeof value === 'string' && value.trim()),
-    ) as Record<string, string>;
+    const payload = Object.fromEntries(
+      Object.entries(patch)
+        .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
+        .map(([key, value]) => [key, typeof value === 'boolean' ? (value ? 'true' : 'false') : value]),
+    ) as Record<string, string | number | boolean>;
     if (!Object.keys(payload).length) {
       if (options.showEmptyMessage) {
         setConfigSaveFeedback({
@@ -229,6 +240,20 @@ export default function SystemConfig() {
 
   const saveThirdPartyConfig = () => {
     const values = configForm.getFieldsValue(['third_party_api_key']);
+    return saveConfigPatch(values);
+  };
+
+  const saveCrawlerConfig = () => {
+    const values = configForm.getFieldsValue([
+      'crawler_enabled',
+      'crawler_provider',
+      'crawler_timeout_seconds',
+      'crawler_max_pages_per_task',
+      'crawler_max_tasks_per_project',
+      'crawler_rate_limit_seconds',
+      'crawler_allowed_domains',
+      'crawler_blocked_domains',
+    ]);
     return saveConfigPatch(values);
   };
 
@@ -491,6 +516,85 @@ export default function SystemConfig() {
                   <Input.Password placeholder="预留：美团、消费数据等第三方平台" />
                 </Form.Item>
                 <Button loading={savingConfig} onClick={saveThirdPartyConfig}>保存第三方配置</Button>
+              </Card>
+            </Col>
+            <Col span={24}>
+              <Card
+                size="small"
+                title="爬虫数据源"
+                extra={crawlerConfigured ? <Tag color="green">已启用</Tag> : <Tag color="orange">默认关闭</Tag>}
+              >
+                <Alert
+                  style={{marginBottom: 12}}
+                  type="warning"
+                  showIcon
+                  message="合规限制"
+                  description="只抓取允许访问的公开页面，不绕过登录、验证码、反爬或付费墙；结果默认待人工确认。"
+                />
+                <Row gutter={12}>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_enabled" label="启用爬虫" valuePropName="checked">
+                      <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_provider" label="Provider">
+                      <Input placeholder="crawl4ai" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_timeout_seconds" label="单任务超时（秒）">
+                      <InputNumber min={10} max={300} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_max_tasks_per_project" label="单项目最大任务数">
+                      <InputNumber min={1} max={200} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_max_pages_per_task" label="单任务最大页数">
+                      <InputNumber min={1} max={20} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_rate_limit_seconds" label="请求间隔（秒）">
+                      <InputNumber min={0} max={60} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_allowed_domains" label="允许域名">
+                      <Input placeholder="example.com,example.cn" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_blocked_domains" label="禁用域名">
+                      <Input placeholder="禁止访问的域名，逗号分隔" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Space>
+                  <Button
+                    type={crawlerConfigured ? 'default' : 'primary'}
+                    icon={crawlerConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
+                    loading={savingConfig}
+                    onClick={saveCrawlerConfig}
+                  >
+                    {crawlerConfigured ? '已保存爬虫配置' : '保存爬虫配置'}
+                  </Button>
+                  <Button onClick={() => testDataSource('crawler_competitor')} loading={checks.crawler_competitor === 'loading'}>
+                    测试竞品爬虫
+                  </Button>
+                  <Button onClick={() => testDataSource('crawler_supporting')} loading={checks.crawler_supporting === 'loading'}>
+                    测试配套爬虫
+                  </Button>
+                  <Button onClick={() => testDataSource('crawler_rent')} loading={checks.crawler_rent === 'loading'}>
+                    测试租金爬虫
+                  </Button>
+                </Space>
+                {checkAlert('竞品爬虫', checks.crawler_competitor)}
+                {checkAlert('配套爬虫', checks.crawler_supporting)}
+                {checkAlert('租金爬虫', checks.crawler_rent)}
               </Card>
             </Col>
           </Row>

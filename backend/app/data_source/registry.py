@@ -5,7 +5,8 @@ from app.map_data.amap_client import AmapMapDataClient
 from .amap import AmapProvider
 from .base import DataProvider, DataSourceName, ProviderAvailability, ProviderDescriptor
 from .manual_upload import ManualUploadProvider
-from .competitor import AmapCompetitorProvider, CrawlerCompetitorProvider
+from .competitor import AmapCompetitorProvider
+from .crawler import CrawlerCompetitorProvider, CrawlerRentProvider, CrawlerSupportingProvider
 from .rent import ManualRentProvider
 from .supporting import AmapSupportingProvider
 
@@ -59,6 +60,8 @@ def build_default_registry(*, amap_client: AmapMapDataClient | None = None) -> D
     registry.register(ManualRentProvider())
     registry.register(AmapCompetitorProvider(AmapProvider(amap_client)))
     registry.register(CrawlerCompetitorProvider())
+    registry.register(CrawlerSupportingProvider())
+    registry.register(CrawlerRentProvider())
     registry.register(AmapSupportingProvider(AmapProvider(amap_client)))
     registry.register(
         PlaceholderProvider(

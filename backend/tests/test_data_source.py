@@ -94,6 +94,8 @@ def test_data_source_status_api_returns_all_registered_providers(client):
         "manual_rent",
         "amap_competitor",
         "crawler_competitor",
+        "crawler_supporting",
+        "crawler_rent",
         "amap_supporting",
         "crawler",
         "third_party",
@@ -110,6 +112,8 @@ def test_data_source_status_api_returns_all_registered_providers(client):
     assert items["amap_competitor"]["status"] == "available"
     assert items["amap_competitor"]["capabilities"] == ["competitor"]
     assert items["crawler_competitor"]["status"] == "disabled"
+    assert items["crawler_supporting"]["status"] == "disabled"
+    assert items["crawler_rent"]["status"] == "disabled"
     assert items["amap_supporting"]["status"] == "available"
     assert items["amap_supporting"]["capabilities"] == ["food", "entertainment", "night_economy"]
     assert items["third_party"]["status"] == "not_configured"

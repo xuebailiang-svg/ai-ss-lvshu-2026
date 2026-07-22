@@ -354,3 +354,22 @@ class ScoringFactorRecord(Base):
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CrawlTaskRecord(Base):
+    __tablename__ = "crawl_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(80), index=True)
+    task_type: Mapped[str] = mapped_column(String(40), index=True)
+    target_name: Mapped[str | None] = mapped_column(String(200))
+    target_address: Mapped[str | None] = mapped_column(String(300))
+    target_url: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(80), default="crawl4ai")
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    source_domain: Mapped[str | None] = mapped_column(String(200), index=True)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

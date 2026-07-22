@@ -31,6 +31,14 @@ class Settings(BaseModel):
     deepseek_model: str
     system_config_encryption_key: str
     admin_config_token: str
+    crawler_enabled: bool
+    crawler_provider: str
+    crawler_timeout_seconds: int
+    crawler_max_pages_per_task: int
+    crawler_max_tasks_per_project: int
+    crawler_rate_limit_seconds: int
+    crawler_allowed_domains: str
+    crawler_blocked_domains: str
 
 @lru_cache
 def get_settings() -> Settings:
@@ -56,4 +64,12 @@ def get_settings() -> Settings:
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         system_config_encryption_key=os.getenv("SYSTEM_CONFIG_ENCRYPTION_KEY", ""),
         admin_config_token=os.getenv("ADMIN_CONFIG_TOKEN", ""),
+        crawler_enabled=env_bool("CRAWLER_ENABLED", False),
+        crawler_provider=os.getenv("CRAWLER_PROVIDER", "crawl4ai"),
+        crawler_timeout_seconds=int(os.getenv("CRAWLER_TIMEOUT_SECONDS", "60")),
+        crawler_max_pages_per_task=int(os.getenv("CRAWLER_MAX_PAGES_PER_TASK", "5")),
+        crawler_max_tasks_per_project=int(os.getenv("CRAWLER_MAX_TASKS_PER_PROJECT", "50")),
+        crawler_rate_limit_seconds=int(os.getenv("CRAWLER_RATE_LIMIT_SECONDS", "5")),
+        crawler_allowed_domains=os.getenv("CRAWLER_ALLOWED_DOMAINS", ""),
+        crawler_blocked_domains=os.getenv("CRAWLER_BLOCKED_DOMAINS", ""),
     )

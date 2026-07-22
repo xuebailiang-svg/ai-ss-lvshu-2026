@@ -54,7 +54,7 @@ export const getManagedSystemConfig = () => api.get('/system/config').then(respo
 export const verifyManagedSystemConfigToken = (adminToken: string) => api
   .get('/system/config/verify', {headers: {'X-Admin-Token': adminToken}})
   .then(response => response.data);
-export const updateManagedSystemConfig = (data: Record<string, string>, adminToken: string) => api
+export const updateManagedSystemConfig = (data: Record<string, string | number | boolean>, adminToken: string) => api
   .put('/system/config', data, {headers: {'X-Admin-Token': adminToken}})
   .then(response => response.data);
 export const testManagedSystemConfig = (provider: 'deepseek' | 'amap', adminToken: string) => api

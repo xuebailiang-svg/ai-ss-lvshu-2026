@@ -20,7 +20,17 @@ SECRET_KEYS = {
     "amap_security_js_code",
     "third_party_api_key",
 }
-SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"}
+CRAWLER_KEYS = {
+    "crawler_enabled",
+    "crawler_provider",
+    "crawler_timeout_seconds",
+    "crawler_max_pages_per_task",
+    "crawler_max_tasks_per_project",
+    "crawler_rate_limit_seconds",
+    "crawler_allowed_domains",
+    "crawler_blocked_domains",
+}
+SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"} | CRAWLER_KEYS
 
 
 def mask_secret(value: str) -> str | None:
@@ -94,6 +104,20 @@ def config_status(db: Session) -> dict[str, Any]:
     third_party_key, third_party_source = _effective(db, "third_party_api_key", "", warnings)
     base_url, _ = _effective(db, "deepseek_base_url", settings.deepseek_base_url, warnings)
     model, _ = _effective(db, "deepseek_model", settings.deepseek_model, warnings)
+    crawler_enabled_raw, crawler_enabled_source = _effective(
+        db,
+        "crawler_enabled",
+        "true" if settings.crawler_enabled else "false",
+        warnings,
+    )
+    crawler_provider, _ = _effective(db, "crawler_provider", settings.crawler_provider, warnings)
+    crawler_timeout, _ = _effective(db, "crawler_timeout_seconds", str(settings.crawler_timeout_seconds), warnings)
+    crawler_max_pages, _ = _effective(db, "crawler_max_pages_per_task", str(settings.crawler_max_pages_per_task), warnings)
+    crawler_max_tasks, _ = _effective(db, "crawler_max_tasks_per_project", str(settings.crawler_max_tasks_per_project), warnings)
+    crawler_rate_limit, _ = _effective(db, "crawler_rate_limit_seconds", str(settings.crawler_rate_limit_seconds), warnings)
+    crawler_allowed_domains, _ = _effective(db, "crawler_allowed_domains", settings.crawler_allowed_domains, warnings)
+    crawler_blocked_domains, _ = _effective(db, "crawler_blocked_domains", settings.crawler_blocked_domains, warnings)
+    crawler_enabled = str(crawler_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
     return {
         "management_enabled": bool(settings.admin_config_token and len(settings.system_config_encryption_key) >= 32),
         "deepseek": {
@@ -121,7 +145,20 @@ def config_status(db: Session) -> dict[str, Any]:
             "source": third_party_source,
             "masked": mask_secret(third_party_key),
         },
+        "crawler": {
+            "configured": crawler_enabled,
+            "source": crawler_enabled_source,
+            "masked": None,
+        },
         "deepseek_base_url": base_url or "https://api.deepseek.com",
         "deepseek_model": model or "deepseek-chat",
+        "crawler_enabled": crawler_enabled,
+        "crawler_provider": crawler_provider or "crawl4ai",
+        "crawler_timeout_seconds": int(crawler_timeout or 60),
+        "crawler_max_pages_per_task": int(crawler_max_pages or 5),
+        "crawler_max_tasks_per_project": int(crawler_max_tasks or 50),
+        "crawler_rate_limit_seconds": int(crawler_rate_limit or 5),
+        "crawler_allowed_domains": crawler_allowed_domains or "",
+        "crawler_blocked_domains": crawler_blocked_domains or "",
         "warnings": warnings,
     }

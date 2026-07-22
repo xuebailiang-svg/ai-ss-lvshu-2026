@@ -25,6 +25,20 @@ export const collectProjectCompetitors = (projectId: string) => api.post(`/proje
 export const collectProjectSupporting = (projectId: string) => api.post(`/projects/${projectId}/collect/supporting`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const generateProjectAiReview = (projectId: string) => api.post(`/projects/${projectId}/ai-review`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 
+export type CrawlerEnrichType = 'competitor' | 'supporting' | 'rent';
+
+export const enrichProjectCrawler = (
+  projectId: string,
+  types: CrawlerEnrichType[],
+  maxItems = 20,
+) => api
+  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems}, {timeout: LONG_REQUEST_TIMEOUT_MS})
+  .then(response => response.data);
+
+export const listProjectCrawlTasks = (projectId: string) => api
+  .get(`/projects/${projectId}/crawl/tasks`)
+  .then(response => response.data);
+
 export type ProjectSupportingStatus = 'pending_review' | 'confirmed' | 'rejected';
 export type ProjectSupportingCategory = 'food' | 'entertainment' | 'night_business';
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.data_model import normalize_data
 from app.models import (
+    CrawlTaskRecord,
     EntertainmentRecord,
     FoodBusinessRecord,
     PopulationDataRecord,
@@ -419,6 +420,44 @@ def rent_data_quality(rent_rows: list[RentDataRecord]) -> tuple[dict[str, Any], 
     }, penalty
 
 
+def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
+    rows = list(
+        db.scalars(
+            select(CrawlTaskRecord).where(CrawlTaskRecord.project_id == project_id)
+        ).all()
+    )
+    success_statuses = {"success", "partial"}
+    failed_statuses = {"failed"}
+    skipped_statuses = {"skipped"}
+
+    def count_task(task_type: str, statuses: set[str] | None = None) -> int:
+        return sum(
+            1
+            for row in rows
+            if row.task_type == task_type and (statuses is None or row.status in statuses)
+        )
+
+    completed_count = sum(1 for row in rows if row.status in success_statuses)
+    failed_count = sum(1 for row in rows if row.status in failed_statuses)
+    skipped_count = sum(1 for row in rows if row.status in skipped_statuses)
+    warnings = []
+    if completed_count:
+        warnings.append("爬虫数据尚未人工确认，不能作为最终事实")
+    if failed_count:
+        warnings.append("部分爬虫任务失败，建议人工补充或检查公开来源链接")
+
+    return {
+        "competitor_crawler_count": count_task("competitor", success_statuses),
+        "supporting_crawler_count": count_task("supporting", success_statuses),
+        "rent_crawler_count": count_task("rent", success_statuses),
+        "pending_review_count": completed_count,
+        "failed_task_count": failed_count,
+        "skipped_task_count": skipped_count,
+        "total_task_count": len(rows),
+        "warnings": warnings,
+    }
+
+
 def data_quality(db: Session, project_id: str) -> dict[str, Any]:
     missing: list[str] = []
     warnings: list[str] = []
@@ -443,6 +482,7 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
         db.scalars(select(RentDataRecord).where(RentDataRecord.project_id == project_id)).all()
     )
     rent_quality, rent_penalty = rent_data_quality(rent_rows)
+    crawler_quality = crawler_data_quality(db, project_id)
     pois = count_rows(db, UnifiedPOIRecord, project_id)
     food = count_rows(db, FoodBusinessRecord, project_id) or count_pois_by_category(db, project_id, "food")
     entertainment = count_rows(db, EntertainmentRecord, project_id) or count_pois_by_category(db, project_id, "entertainment")
@@ -470,6 +510,7 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
         warnings.append("已确认租金缺少地址、面积或月租金，成本数据依据仍不完整")
     if any(item.get("missing_fields") for item in rent_quality["incomplete_items"]):
         warnings.append("已确认租金仍有建议补充信息，请核实物业类型、来源、发布日期和楼层")
+    warnings.extend(crawler_quality.get("warnings", []))
     if pois == 0:
         missing.append("周边 POI")
     if food == 0:
@@ -496,4 +537,5 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
         "competitor_detail_quality": detail_quality,
         "supporting_detail_quality": supporting_quality,
         "rent_quality": rent_quality,
+        "crawler_quality": crawler_quality,
     }

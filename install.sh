@@ -190,6 +190,14 @@ ENABLE_DEBUG_ENDPOINTS=false
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
+CRAWLER_ENABLED=false
+CRAWLER_PROVIDER=crawl4ai
+CRAWLER_TIMEOUT_SECONDS=60
+CRAWLER_MAX_PAGES_PER_TASK=5
+CRAWLER_MAX_TASKS_PER_PROJECT=50
+CRAWLER_RATE_LIMIT_SECONDS=5
+CRAWLER_ALLOWED_DOMAINS=
+CRAWLER_BLOCKED_DOMAINS=
 SYSTEM_CONFIG_ENCRYPTION_KEY=${encryption_key}
 ADMIN_CONFIG_TOKEN=${admin_token}
 SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
@@ -318,6 +326,14 @@ install_backend() {
   "${APP_ROOT}/backend/.venv/bin/python" -m pip install --upgrade pip
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
+  if grep -Eiq '^CRAWLER_ENABLED=(true|1|yes|on)$' "${ENV_FILE}"; then
+    log "准备 crawl4ai 运行时"
+    if [[ -x "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" ]]; then
+      "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup"
+    else
+      echo "WARN: crawl4ai-setup 未找到；爬虫连接检测可能失败，请检查 crawl4ai 安装。"
+    fi
+  fi
   runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
 }
 

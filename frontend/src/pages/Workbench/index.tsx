@@ -34,6 +34,7 @@ import {
   collectProjectSupporting,
   createProject,
   deleteProject,
+  enrichProjectCrawler,
   generateProjectAiReview,
   getProjectDataQuality,
   listProjects,
@@ -102,6 +103,13 @@ function statusText(status?: string) {
   return STATUS_TEXT[status || ''] || '初始化';
 }
 
+function providerStatusText(status: string) {
+  if (status === 'available') return '可用';
+  if (status === 'disabled') return '未启用';
+  if (status === 'not_configured') return '未配置';
+  return status;
+}
+
 function errorText(error: any, fallback: string) {
   const detail = error?.response?.data?.detail;
   if (typeof detail === 'string') return detail;
@@ -163,6 +171,7 @@ function buildWorkflowSteps(
   quality: any,
   score: any,
   reportContent: string,
+  crawlerDone = false,
 ): WorkflowStep[] {
   const hasProject = Boolean(project);
   const poiCount = project ? numberFromStats(project, 'poi_count') : 0;
@@ -197,18 +206,25 @@ function buildWorkflowSteps(
       status: hasBaseData ? 'finish' : hasProject ? 'process' : 'wait',
     },
     {
+      title: '爬虫补充数据',
+      description: crawlerDone
+        ? '爬虫已尝试补充公开网页中的竞品、配套或租金线索，结果需要人工确认。'
+        : '基于已有候选对象，尝试抓取允许访问的公开页面补充经营、配套和租金线索。',
+      status: crawlerDone ? 'finish' : hasBaseData ? 'process' : 'wait',
+    },
+    {
       title: '人工确认和补充',
       description: hasSupplementData
         ? '已有部分竞品或租金数据，建议继续确认有效性并补充经营信息。'
         : '确认疑似竞品、配套是否真实有效，并补充租金、价格、配置、上座率等人工数据。',
-      status: hasSupplementData ? 'finish' : hasBaseData ? 'process' : 'wait',
+      status: hasSupplementData ? 'finish' : crawlerDone ? 'process' : 'wait',
     },
     {
       title: '数据核验',
       description: quality
         ? `当前完整度 ${qualityScore}%，缺失 ${Array.isArray(quality.missing) ? quality.missing.length : 0} 项。`
         : '点击 AI 数据核验，系统会先检查已有数据和缺失数据，再给出 AI 初审结论和补充建议。',
-      status: quality ? 'finish' : hasBaseData ? 'process' : 'wait',
+      status: quality ? 'finish' : hasSupplementData ? 'process' : 'wait',
     },
     {
       title: '评分分析',
@@ -324,6 +340,21 @@ function summarizeAction(action: string, result: any) {
       `餐饮：${countText(result?.food_count)}`,
       `娱乐：${countText(result?.entertainment_count)}`,
       `夜间商业候选：${countText(result?.night_business_count)}`,
+    ].join('\n');
+  }
+
+  if (action.startsWith('爬虫补充')) {
+    const saved = result?.saved || {};
+    return [
+      `${action}完成。`,
+      `任务数：${countText(result?.task_count)}`,
+      `成功：${countText(result?.completed_count)}`,
+      `失败：${countText(result?.failed_count)}`,
+      `跳过：${countText(result?.skipped_count)}`,
+      `补充竞品：${countText(saved.competitors)}`,
+      `补充配套：${countText(saved.supporting)}`,
+      `补充租金：${countText(saved.rent)}`,
+      '下一步建议：进入人工确认和补充，确认爬虫数据是否可信。',
     ].join('\n');
   }
 
@@ -628,7 +659,14 @@ export default function WorkbenchPage() {
     ? Object.entries(score.dimensions as Record<string, any>)
     : [];
   const supplementSuggestions = buildSupplementSuggestions(quality);
-  const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent);
+  const crawlerQuality = quality?.crawler_quality || {};
+  const hasCrawlerResult = Boolean(
+    actionResults.crawlerCompetitor
+    || actionResults.crawlerSupporting
+    || actionResults.crawlerRent
+    || Number(crawlerQuality.total_task_count || 0) > 0,
+  );
+  const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent, hasCrawlerResult);
   const currentWorkflowIndex = Math.max(0, workflowSteps.findIndex(item => item.status !== 'finish'));
   const activeWorkflowStep = workflowSteps[currentWorkflowIndex] || workflowSteps[workflowSteps.length - 1];
   const projectPoiCount = selectedProject ? numberFromStats(selectedProject, 'poi_count') : 0;
@@ -639,6 +677,11 @@ export default function WorkbenchPage() {
   const hasAmapData = projectPoiCount > 0;
   const hasCompetitorData = projectCompetitorCount > 0;
   const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
+  const crawlerSources = dataSources.filter(source => source.name.startsWith('crawler_'));
+  const crawlerAvailable = crawlerSources.some(source => source.status === 'available');
+  const crawlerDisabledReason = crawlerSources.length
+    ? crawlerSources.map(source => `${source.display_name}：${source.status === 'available' ? '可用' : providerStatusText(source.status)}`).join('；')
+    : '爬虫数据源尚未注册';
   const hasQualityResult = Boolean(quality);
   const hasScoreResult = Boolean(score);
   const hasReportResult = Boolean(reportContent);
@@ -860,7 +903,47 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" className={(projectCompetitorCount > 0 || projectRentCount > 0) ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：人工确认和补充" extra={<Tag color="orange">需人工确认</Tag>}>
+            <Card size="small" className={hasCrawlerResult ? 'v11-step-card done' : hasAmapData ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：爬虫补充数据" extra={doneTag(hasCrawlerResult, actionLoading.startsWith('crawler'))}>
+                <Space direction="vertical" size={8} style={{width: '100%'}}>
+                  <Alert
+                    type={crawlerAvailable ? 'info' : 'warning'}
+                    showIcon
+                    message={crawlerAvailable ? '从公开网页补充经营线索' : '爬虫默认关闭'}
+                    description={crawlerAvailable
+                      ? '爬虫只处理允许访问的公开页面；补充结果默认待人工确认，不直接作为最终事实。'
+                      : `请先在配置页启用爬虫数据源。${crawlerDisabledReason}`}
+                  />
+                  <Button
+                    disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
+                    loading={actionLoading === 'crawlerCompetitor'}
+                    onClick={() => runAction('crawlerCompetitor', '爬虫补充竞品信息', () => enrichProjectCrawler(selectedProjectId, ['competitor']))}
+                    block
+                  >
+                    爬虫补充竞品信息
+                  </Button>
+                  <Button
+                    disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
+                    loading={actionLoading === 'crawlerSupporting'}
+                    onClick={() => runAction('crawlerSupporting', '爬虫补充配套信息', () => enrichProjectCrawler(selectedProjectId, ['supporting']))}
+                    block
+                  >
+                    爬虫补充配套信息
+                  </Button>
+                  <Button
+                    disabled={!selectedProjectId || !crawlerAvailable}
+                    loading={actionLoading === 'crawlerRent'}
+                    onClick={() => runAction('crawlerRent', '爬虫补充租金信息', () => enrichProjectCrawler(selectedProjectId, ['rent']))}
+                    block
+                  >
+                    爬虫补充租金信息
+                  </Button>
+                  {inlineResult('crawlerCompetitor')}
+                  {inlineResult('crawlerSupporting')}
+                  {inlineResult('crawlerRent')}
+                </Space>
+            </Card>
+
+            <Card size="small" className={(projectCompetitorCount > 0 || projectRentCount > 0) ? 'v11-step-card active' : 'v11-step-card'} title="Step 5：人工确认和补充" extra={<Tag color="orange">需人工确认</Tag>}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type="info"
@@ -877,7 +960,7 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" className={hasQualityResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 5：AI 数据核验" extra={doneTag(hasQualityResult, actionLoading === 'quality' || actionLoading === 'ai-review')}>
+            <Card size="small" className={hasQualityResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 6：AI 数据核验" extra={doneTag(hasQualityResult, actionLoading === 'quality' || actionLoading === 'ai-review')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type={quality ? (qualityScore >= 80 ? 'success' : 'warning') : 'info'}
@@ -903,7 +986,7 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" className={hasScoreResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 6：评分分析" extra={doneTag(hasScoreResult, actionLoading === 'score')}>
+            <Card size="small" className={hasScoreResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 7：评分分析" extra={doneTag(hasScoreResult, actionLoading === 'score')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Button
                     type={hasScoreResult ? 'default' : 'primary'}
@@ -924,7 +1007,7 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" className={hasReportResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 7：生成报告和继续咨询" extra={doneTag(hasReportResult, actionLoading === 'report')}>
+            <Card size="small" className={hasReportResult ? 'v11-step-card done' : 'v11-step-card'} title="Step 8：生成报告和继续咨询" extra={doneTag(hasReportResult, actionLoading === 'report')}>
               <Space direction="vertical" size={8} style={{width: '100%'}}>
                 <Button
                   type={hasReportResult ? 'default' : 'primary'}
@@ -965,6 +1048,15 @@ export default function WorkbenchPage() {
                     )}
                     {Array.isArray(quality.warnings) && quality.warnings.length > 0 && (
                       <Alert style={{marginTop: 8}} type="warning" showIcon message={`风险提示：${quality.warnings.length} 项`} />
+                    )}
+                    {quality.crawler_quality && Number(quality.crawler_quality.total_task_count || 0) > 0 && (
+                      <Alert
+                        style={{marginTop: 8}}
+                        type="info"
+                        showIcon
+                        message="爬虫补充数据"
+                        description={`任务 ${countText(quality.crawler_quality.total_task_count)} 个，待人工确认 ${countText(quality.crawler_quality.pending_review_count)} 条，失败 ${countText(quality.crawler_quality.failed_task_count)} 条。`}
+                      />
                     )}
                   </Card>
                 </Col>

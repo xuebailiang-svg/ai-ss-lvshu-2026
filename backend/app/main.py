@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.core.database import Base, engine
 from app.data_source.router import router as data_source_router
 from app.data_source.competitor.router import router as competitor_data_router
+from app.data_source.crawler.router import router as crawler_data_router
 from app.data_source.supporting.router import router as supporting_data_router
 from app.data_source.rent.router import router as rent_data_router
 from app.llm import router as llm_router
@@ -28,6 +29,7 @@ app.add_middleware(CORSMiddleware,allow_origins=["http://localhost:5173"],allow_
 app.include_router(router)
 app.include_router(data_source_router)
 app.include_router(competitor_data_router)
+app.include_router(crawler_data_router)
 app.include_router(supporting_data_router)
 app.include_router(rent_data_router)
 app.include_router(projects_router)

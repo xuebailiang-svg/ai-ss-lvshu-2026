@@ -44,6 +44,7 @@ const apiMocks = vi.hoisted(() => ({
   collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
   collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
   collectProjectSupporting: vi.fn(() => Promise.resolve({success: true, food_count: 1, entertainment_count: 1, night_business_count: 0})),
+  enrichProjectCrawler: vi.fn(() => Promise.resolve({success: true, task_count: 1, completed_count: 1, failed_count: 0, skipped_count: 0, saved: {competitors: 1, supporting: 0, rent: 0}})),
   listProjectCompetitors: vi.fn(() => Promise.resolve({items: [], total: 0})),
   listProjectSupporting: vi.fn(() => Promise.resolve({items: [], total: 0, effective_count: 0, stats: {}})),
   listProjectRent: vi.fn(() => Promise.resolve({items: [], total: 0, incomplete_count: 0, confirmed_count: 0, detail_completed_count: 0})),
@@ -89,6 +90,7 @@ vi.mock('../api/projects', () => ({
   collectProjectAmap: apiMocks.collectProjectAmap,
   collectProjectCompetitors: apiMocks.collectProjectCompetitors,
   collectProjectSupporting: apiMocks.collectProjectSupporting,
+  enrichProjectCrawler: apiMocks.enrichProjectCrawler,
   listProjectCompetitors: apiMocks.listProjectCompetitors,
   listProjectSupporting: apiMocks.listProjectSupporting,
   listProjectRent: apiMocks.listProjectRent,
@@ -162,7 +164,7 @@ afterEach(() => {
 
 test('renders new evaluation workflow', () => {
   render(<MemoryRouter><App /></MemoryRouter>);
-  expect(screen.getByText('聊天式工作区')).toBeInTheDocument();
+  expect(screen.getByText('AI 助手')).toBeInTheDocument();
   expect(screen.getByText('新建选址项目')).toBeInTheDocument();
   expect(screen.getByText('选址维度')).toBeInTheDocument();
   expect(screen.getByRole('button', {name: /采集高德 POI/})).toBeInTheDocument();
@@ -213,7 +215,7 @@ test('renders v1.1 workbench with selected project context', async () => {
   }]} as any);
   render(<MemoryRouter><App /></MemoryRouter>);
   expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
-  expect(screen.getByText('聊天式工作区')).toBeInTheDocument();
+  expect(screen.getByText('AI 助手')).toBeInTheDocument();
   expect(screen.getByText('选址维度')).toBeInTheDocument();
   expect(screen.getByText('已确认记忆')).toBeInTheDocument();
 });

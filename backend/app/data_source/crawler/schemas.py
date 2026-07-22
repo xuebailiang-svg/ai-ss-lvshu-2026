@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+CrawlTaskType = Literal["competitor", "supporting", "rent"]
+CrawlTaskStatus = Literal["pending", "running", "success", "partial", "failed", "skipped"]
+
+
+class CrawlEnrichRequest(BaseModel):
+    types: list[CrawlTaskType] = Field(default_factory=lambda: ["competitor", "supporting", "rent"])
+    max_items: int = Field(default=20, ge=1, le=100)
+
+
+class CrawlSavedCounts(BaseModel):
+    competitors: int = 0
+    supporting: int = 0
+    rent: int = 0
+
+
+class CrawlEnrichResponse(BaseModel):
+    success: bool
+    project_id: str
+    task_count: int
+    completed_count: int
+    failed_count: int
+    skipped_count: int = 0
+    saved: CrawlSavedCounts
+    message: str
+
+
+class CrawlTaskItem(BaseModel):
+    id: int
+    project_id: str
+    task_type: str
+    target_name: str | None = None
+    target_address: str | None = None
+    target_url: str | None = None
+    provider: str
+    status: str
+    source_domain: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class CrawlTaskListResponse(BaseModel):
+    items: list[CrawlTaskItem]
+    total: int
+
+
+class CrawlTaskDetailResponse(CrawlTaskItem):
+    input_snapshot: dict = Field(default_factory=dict)
+    result_snapshot: dict = Field(default_factory=dict)
