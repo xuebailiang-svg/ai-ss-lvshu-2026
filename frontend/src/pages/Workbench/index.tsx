@@ -46,7 +46,7 @@ import {getDataSourceStatus, type DataSourceStatus} from '../../api/dataSources'
 import {getScoringConfig, type ScoringDimensionConfig} from '../../api/scoringConfig';
 import {listMemory, type MemoryItem} from '../../api/memory';
 import MarkdownReport from '../../components/MarkdownReport';
-import {useNavigate} from 'react-router-dom';
+import {useNavigate, useSearchParams} from 'react-router-dom';
 
 type ProjectItem = {
   project_id: string;
@@ -368,6 +368,7 @@ h1,h2,h3{color:#102033}.report{white-space:pre-wrap;background:#fff;padding:24px
 
 export default function WorkbenchPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [projectForm] = Form.useForm<ProjectCreatePayload>();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
@@ -434,7 +435,7 @@ export default function WorkbenchPage() {
   };
 
   useEffect(() => {
-    void loadProjects();
+    void loadProjects(searchParams.get('projectId') || undefined);
     void loadSideContext();
   }, []);
 

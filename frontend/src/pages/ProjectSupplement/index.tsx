@@ -292,7 +292,7 @@ export default function ProjectSupplementPage() {
             补充高德和 AI 无法直接确认的经营、成本和客群信息。提交后会写入服务器，参与后续数据核验、评分和报告。
           </Typography.Paragraph>
         </div>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}`)}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/?projectId=${encodeURIComponent(projectId)}`)}>
           返回项目工作台
         </Button>
       </div>
