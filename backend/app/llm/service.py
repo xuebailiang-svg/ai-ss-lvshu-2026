@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.llm.client import DeepSeekClient, DeepSeekConfigError
+from app.llm.prompts import AI_DATA_REVIEW_PROMPT
 from app.llm.schemas import AIAnalysisInput
 from app.models import AICallLogRecord, AIReportRecord, SiteScoreRecord
 from app.memory.service import relevant_memory_context
@@ -114,6 +115,104 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         memory_context=memories,
         risks=list(score.get("risks") or []) + list(quality.get("warnings") or []),
     )
+
+
+def build_ai_review_input(db: Session, project_id: str) -> dict[str, Any]:
+    project = get_project(db, project_id)
+    if not project:
+        raise ProjectNotFoundError("Project not found")
+
+    project_dataset = dataset(db, project)
+    quality = data_quality(db, project_id)
+    score = latest_score(db, project_id)
+    pois = project_dataset.get("pois", [])
+    competitors = project_dataset.get("competitors", [])
+    food_businesses = project_dataset.get("food_businesses", [])
+    entertainments = project_dataset.get("entertainments", [])
+    rent_records = project_dataset.get("rent_data")
+
+    confirmed_competitors = [row for row in competitors if row.get("status") == "confirmed"]
+    pending_competitors = [row for row in competitors if row.get("status") == "pending_review"]
+    confirmed_food = [row for row in food_businesses if row.get("status") == "confirmed"]
+    confirmed_entertainments = [row for row in entertainments if row.get("status") == "confirmed"]
+
+    return _json_safe(
+        {
+            "project": project_dataset.get("project", {}),
+            "data_inventory": {
+                "poi_count": len(pois),
+                "transport_poi_count": len([row for row in pois if row.get("category") == "transport"]),
+                "education_poi_count": len([row for row in pois if row.get("category") == "education"]),
+                "residential_poi_count": len([row for row in pois if row.get("category") == "residential"]),
+                "competitor_count": len(competitors),
+                "confirmed_competitor_count": len(confirmed_competitors),
+                "pending_competitor_count": len(pending_competitors),
+                "food_business_count": len(food_businesses),
+                "confirmed_food_business_count": len(confirmed_food),
+                "entertainment_count": len(entertainments),
+                "confirmed_entertainment_count": len(confirmed_entertainments),
+                "rent_record_count": 1 if rent_records else 0,
+            },
+            "data_quality": quality,
+            "latest_score": score or {},
+            "existing_data": {
+                "sample_competitors": [
+                    {
+                        "name": row.get("name"),
+                        "status": row.get("status"),
+                        "distance_meters": row.get("distance_meters"),
+                        "source": row.get("source"),
+                    }
+                    for row in competitors[:10]
+                ],
+                "sample_food_businesses": [
+                    {
+                        "name": row.get("name"),
+                        "status": row.get("status"),
+                        "source": row.get("source"),
+                    }
+                    for row in food_businesses[:10]
+                ],
+                "sample_entertainments": [
+                    {
+                        "name": row.get("name"),
+                        "status": row.get("status"),
+                        "source": row.get("source"),
+                    }
+                    for row in entertainments[:10]
+                ],
+            },
+            "review_goal": "判断当前数据是否足够支持电竞馆选址报告，并输出人工补充清单。",
+        }
+    )
+
+
+def generate_ai_data_review(
+    db: Session,
+    project_id: str,
+    *,
+    client: DeepSeekClient | None = None,
+) -> dict[str, Any]:
+    project = get_project(db, project_id)
+    if not project:
+        raise ProjectNotFoundError("Project not found")
+
+    quality = data_quality(db, project_id)
+    deepseek = client or DeepSeekClient()
+    try:
+        deepseek.ensure_configured()
+    except DeepSeekConfigError:
+        return {"success": False, "message": "DeepSeek API Key未配置", "data_quality": quality}
+
+    review_input = build_ai_review_input(db, project_id)
+    result = deepseek.generate_report(review_input, prompt=AI_DATA_REVIEW_PROMPT)
+    return {
+        "success": True,
+        "content": result.content,
+        "model": result.model,
+        "reviewed_at": datetime.now(timezone.utc),
+        "data_quality": quality,
+    }
 
 
 def generate_ai_report(

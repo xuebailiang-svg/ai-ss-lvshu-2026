@@ -16,12 +16,14 @@ export type ProjectCreatePayload = {
 export const listProjects = () => api.get('/projects').then(response => response.data);
 export const createProject = (data: ProjectCreatePayload) => api.post('/projects', data).then(response => response.data);
 export const getProject = (projectId: string) => api.get(`/projects/${projectId}`).then(response => response.data);
+export const deleteProject = (projectId: string) => api.delete(`/projects/${projectId}`).then(response => response.data);
 export const getProjectDataset = (projectId: string) => api.get(`/projects/${projectId}/dataset`).then(response => response.data);
 export const getProjectDataQuality = (projectId: string) => api.get(`/projects/${projectId}/data-quality`).then(response => response.data);
 export const getProjectMissingData = (projectId: string) => api.get(`/projects/${projectId}/missing-data`).then(response => response.data);
 export const collectProjectAmap = (projectId: string) => api.post(`/projects/${projectId}/collect/amap`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectCompetitors = (projectId: string) => api.post(`/projects/${projectId}/collect/competitors`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectSupporting = (projectId: string) => api.post(`/projects/${projectId}/collect/supporting`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+export const generateProjectAiReview = (projectId: string) => api.post(`/projects/${projectId}/ai-review`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 
 export type ProjectSupportingStatus = 'pending_review' | 'confirmed' | 'rejected';
 export type ProjectSupportingCategory = 'food' | 'entertainment' | 'night_business';

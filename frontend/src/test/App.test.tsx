@@ -35,9 +35,11 @@ const apiMocks = vi.hoisted(() => ({
   getAgentTrace: vi.fn(),
   listProjects: vi.fn(() => Promise.resolve({items: []})),
   createProject: vi.fn(() => Promise.resolve({project_id: 'proj_new'})),
+  deleteProject: vi.fn(() => Promise.resolve({})),
   getProject: vi.fn(() => Promise.resolve({project: {project_id: 'proj_1', name: '测试项目', city: '西安市', address: '小寨地铁站', radius_meters: 1000, business_type: '电竞馆'}, stats: {}})),
   getProjectDataset: vi.fn(() => Promise.resolve({project: {project_id: 'proj_1'}, pois: [], competitors: [], food_businesses: [], entertainments: [], rent_data: {}, population_data: {}, supplements: []})),
   getProjectDataQuality: vi.fn(() => Promise.resolve({project_id: 'proj_1', quality_score: 60, missing: ['真实租金'], warnings: []})),
+  generateProjectAiReview: vi.fn(() => Promise.resolve({success: true, content: '# 数据核验结论\n\n建议补充租金。', model: 'deepseek-chat'})),
   getProjectMissingData: vi.fn(() => Promise.resolve({project_id: 'proj_1', missing: []})),
   collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
   collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
@@ -78,9 +80,11 @@ vi.mock('../api/client', () => ({
 vi.mock('../api/projects', () => ({
   listProjects: apiMocks.listProjects,
   createProject: apiMocks.createProject,
+  deleteProject: apiMocks.deleteProject,
   getProject: apiMocks.getProject,
   getProjectDataset: apiMocks.getProjectDataset,
   getProjectDataQuality: apiMocks.getProjectDataQuality,
+  generateProjectAiReview: apiMocks.generateProjectAiReview,
   getProjectMissingData: apiMocks.getProjectMissingData,
   collectProjectAmap: apiMocks.collectProjectAmap,
   collectProjectCompetitors: apiMocks.collectProjectCompetitors,
@@ -226,11 +230,28 @@ test('v1.1 workbench action buttons call APIs', async () => {
   render(<MemoryRouter><App /></MemoryRouter>);
   expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByText('采集高德 POI'));
-  fireEvent.click(screen.getByText('评分分析'));
-  fireEvent.click(screen.getByText('生成报告'));
+  fireEvent.click(screen.getByText('开始评分分析'));
+  fireEvent.click(screen.getByText('生成 AI 报告'));
   await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
+});
+
+test('project supplement saves manual input to backend and refreshes quality', async () => {
+  render(<MemoryRouter initialEntries={['/projects/proj_1/supplement?focus=rent']}><App /></MemoryRouter>);
+  expect(await screen.findByText('本次重点：补充租金成本信息')).toBeInTheDocument();
+
+  const rentInput = screen.getByLabelText('月租金');
+  fireEvent.change(rentInput, {target: {value: '30000'}});
+  fireEvent.click(screen.getByRole('button', {name: /保存到服务器并刷新核验/}));
+
+  await waitFor(() => expect(apiMocks.submitManualInput).toHaveBeenCalled());
+  expect(apiMocks.submitManualInput).toHaveBeenCalledTimes(1);
+  expect(apiMocks.submitManualInput).toHaveBeenCalledWith('proj_1', {
+    type: 'rent',
+    data: {monthly_rent: 30000},
+  });
+  await waitFor(() => expect(apiMocks.getProjectDataQuality).toHaveBeenCalledWith('proj_1'));
 });
 
 test('renders project chat page', async () => {

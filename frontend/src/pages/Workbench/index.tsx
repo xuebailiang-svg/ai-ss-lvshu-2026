@@ -9,16 +9,19 @@ import {
   Input,
   InputNumber,
   List,
+  Popconfirm,
   Progress,
   Row,
   Space,
   Statistic,
+  Steps,
   Tag,
   Typography,
   message,
 } from 'antd';
 import {
   CloudDownloadOutlined,
+  DeleteOutlined,
   FileTextOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -30,6 +33,8 @@ import {
   collectProjectCompetitors,
   collectProjectSupporting,
   createProject,
+  deleteProject,
+  generateProjectAiReview,
   getProjectDataQuality,
   listProjects,
   type ProjectCreatePayload,
@@ -41,6 +46,7 @@ import {getDataSourceStatus, type DataSourceStatus} from '../../api/dataSources'
 import {getScoringConfig, type ScoringDimensionConfig} from '../../api/scoringConfig';
 import {listMemory, type MemoryItem} from '../../api/memory';
 import MarkdownReport from '../../components/MarkdownReport';
+import {useNavigate} from 'react-router-dom';
 
 type ProjectItem = {
   project_id: string;
@@ -54,6 +60,7 @@ type ProjectItem = {
   radius_meters?: number;
   business_type?: string;
   status?: string;
+  created_at?: string | null;
   stats?: Record<string, unknown>;
 };
 
@@ -71,8 +78,8 @@ const QUICK_MESSAGES = [
 
 const STATUS_TEXT: Record<string, string> = {
   draft: '初始化',
-  pending_review: '初始化',
-  confirmed: '初始化',
+  pending_review: '待确认',
+  confirmed: '已创建',
   collecting: '数据采集中',
   data_ready: '数据已就绪',
   supplementing: '数据补充中',
@@ -101,6 +108,183 @@ function countText(value: unknown) {
   return String(value);
 }
 
+function shortProjectId(projectId: string) {
+  return projectId.length > 6 ? projectId.slice(-6) : projectId;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '创建时间未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '创建时间未知';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function numberFromStats(project: ProjectItem, key: string) {
+  const value = project.stats?.[key];
+  return typeof value === 'number' ? value : 0;
+}
+
+type WorkflowStep = {
+  title: string;
+  description: string;
+  status: 'wait' | 'process' | 'finish';
+};
+
+type SupplementSuggestion = {
+  focus: 'competitor' | 'rent' | 'support' | 'population' | 'property' | 'general';
+  category: string;
+  priority: '高' | '中' | '低';
+  reason: string;
+  fields: string[];
+};
+
+function hasProjectLocation(project?: ProjectItem | null) {
+  return typeof project?.longitude === 'number' && typeof project?.latitude === 'number';
+}
+
+function buildWorkflowSteps(
+  project: ProjectItem | null,
+  quality: any,
+  score: any,
+  reportContent: string,
+): WorkflowStep[] {
+  const hasProject = Boolean(project);
+  const poiCount = project ? numberFromStats(project, 'poi_count') : 0;
+  const competitorCount = project ? numberFromStats(project, 'competitor_count') : 0;
+  const foodCount = project ? numberFromStats(project, 'food_count') : 0;
+  const entertainmentCount = project ? numberFromStats(project, 'entertainment_count') : 0;
+  const rentCount = project ? numberFromStats(project, 'rent_count') : 0;
+  const hasBaseData = poiCount > 0 || competitorCount > 0 || foodCount > 0 || entertainmentCount > 0;
+  const hasSupplementData = competitorCount > 0 || rentCount > 0;
+  const qualityScore = Number(quality?.quality_score) || 0;
+
+  return [
+    {
+      title: '1. 新建或选择项目',
+      description: hasProject ? `当前项目：${projectTitle(project)}` : '先在左侧新建项目，或选择已有项目。',
+      status: hasProject ? 'finish' : 'process',
+    },
+    {
+      title: '2. 确认地址和范围',
+      description: hasProject
+        ? hasProjectLocation(project)
+          ? '项目已有经纬度，可直接采集周边数据。'
+          : '项目暂缺经纬度，采集高德 POI 时会先尝试根据城市和地址解析坐标。'
+        : '创建项目时填写城市、详细地址、分析半径、经营类型。',
+      status: !hasProject ? 'wait' : hasProjectLocation(project) ? 'finish' : 'process',
+    },
+    {
+      title: '3. 采集基础数据',
+      description: hasBaseData
+        ? `已采集：POI ${poiCount}、竞品 ${competitorCount}、餐饮 ${foodCount}、娱乐 ${entertainmentCount}。`
+        : '点击采集高德 POI、获取竞品、获取配套，建立基础数据底座。',
+      status: hasBaseData ? 'finish' : hasProject ? 'process' : 'wait',
+    },
+    {
+      title: '4. 人工确认和补充',
+      description: hasSupplementData
+        ? '已有部分竞品或租金数据，建议继续确认有效性并补充经营信息。'
+        : '确认疑似竞品、配套是否真实有效，并补充租金、价格、配置、上座率等人工数据。',
+      status: hasSupplementData ? 'finish' : hasBaseData ? 'process' : 'wait',
+    },
+    {
+      title: '5. 数据核验',
+      description: quality
+        ? `当前完整度 ${qualityScore}%，缺失 ${Array.isArray(quality.missing) ? quality.missing.length : 0} 项。`
+        : '先检查已有数据和缺失数据；后续将接入 AI 审核结论和补充建议。',
+      status: quality ? 'finish' : hasBaseData ? 'process' : 'wait',
+    },
+    {
+      title: '6. 评分分析',
+      description: score ? `综合评分 ${countText(score.total_score)}，评级 ${score.level || '--'}。` : '数据核验后执行评分，得到各维度得分和风险项。',
+      status: score ? 'finish' : quality ? 'process' : 'wait',
+    },
+    {
+      title: '7. 生成报告和继续咨询',
+      description: reportContent ? '报告已生成，可导出 HTML 或打印为 PDF。' : '生成客户可读报告，并围绕项目继续向 AI 咨询。',
+      status: reportContent ? 'finish' : score ? 'process' : 'wait',
+    },
+  ];
+}
+
+function buildSupplementSuggestions(quality: any): SupplementSuggestion[] {
+  const missing = Array.isArray(quality?.missing) ? quality.missing.map(String) : [];
+  const warnings = Array.isArray(quality?.warnings) ? quality.warnings.map(String) : [];
+  const combined = [...missing, ...warnings].join(' ');
+  const suggestions: SupplementSuggestion[] = [];
+
+  const add = (item: SupplementSuggestion) => {
+    if (!suggestions.some(existing => existing.category === item.category)) suggestions.push(item);
+  };
+
+  if (/竞品|竞争|价格|上座率|配置|机器|显卡|GPU/i.test(combined)) {
+    add({
+      focus: 'competitor',
+      category: '竞品经营信息',
+      priority: '高',
+      reason: '电竞馆选址需要判断周边竞品真实经营强度，只有名称和距离不足以支撑报告结论。',
+      fields: ['竞品是否真实有效', '价格', '机器数量', 'CPU/GPU/显示器', '上座率', '营业时间', '充值活动'],
+    });
+  }
+
+  if (/租金|成本|物业|转让|面积/i.test(combined)) {
+    add({
+      focus: 'rent',
+      category: '租金成本信息',
+      priority: '高',
+      reason: '租金和面积会直接影响成本压力判断，缺失时报告只能提示风险，不能判断成本是否合理。',
+      fields: ['月租金', '面积', '物业费', '转让费', '租金来源', '楼层/位置说明'],
+    });
+  }
+
+  if (/夜间|营业时间|24|便利店|餐饮|娱乐|配套/i.test(combined)) {
+    add({
+      focus: 'support',
+      category: '夜间消费和配套',
+      priority: '中',
+      reason: '电竞馆高度依赖夜间消费环境，需要人工确认商户是否真实夜间营业。',
+      fields: ['餐饮营业时间', '是否夜间营业', '24小时便利店', 'KTV/酒吧/台球等娱乐配套', '夜间人流观察'],
+    });
+  }
+
+  if (/人口|大学|技校|公寓|住宅|客群/i.test(combined)) {
+    add({
+      focus: 'population',
+      category: '客群人口信息',
+      priority: '中',
+      reason: '年轻客群密度会影响潜在消费能力，需要补充学校、公寓、年轻住宅等现场观察信息。',
+      fields: ['周边大学/高职/技校', '公寓数量', '年轻住宅/回迁房情况', '夜间年轻人流'],
+    });
+  }
+
+  if (/物业|消防|供电|网络|停车|门头|层高/i.test(combined)) {
+    add({
+      focus: 'property',
+      category: '物业条件',
+      priority: '高',
+      reason: '物业、消防、供电和网络条件属于开店落地风险，不能只靠 POI 判断。',
+      fields: ['可用面积', '层高', '供电容量', '网络运营商', '消防条件', '停车条件', '门头可见度'],
+    });
+  }
+
+  if (!suggestions.length && quality) {
+    add({
+      focus: 'general',
+      category: '常规人工复核',
+      priority: '低',
+      reason: '当前结构化核验未发现明确缺失项，但正式报告前仍建议人工复核关键数据真实性。',
+      fields: ['竞品真实性', '租金来源', '夜间营业情况', '物业落地条件'],
+    });
+  }
+
+  return suggestions;
+}
+
 function summarizeAction(action: string, result: any) {
   if (result?.success === false) {
     return `${action}失败：${result.message || '服务暂时不可用，请检查配置或稍后重试。'}`;
@@ -111,9 +295,10 @@ function summarizeAction(action: string, result: any) {
     return [
       '高德 POI 采集完成。',
       `POI：${countText(collected.poi_count)}`,
-      `竞品：${countText(collected.competitor_count)}`,
+      `疑似竞品：${countText(collected.competitor_count)}`,
       `餐饮：${countText(collected.food_count)}`,
       `娱乐：${countText(collected.entertainment_count)}`,
+      '下一步建议：确认竞品和配套是否有效，再做数据核验。',
     ].join('\n');
   }
 
@@ -132,9 +317,13 @@ function summarizeAction(action: string, result: any) {
   }
 
   if (action === '数据核验') {
-    const missing = Array.isArray(result?.missing) ? result.missing.length : 0;
-    const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0;
-    return `数据核验完成：完整度 ${countText(result?.quality_score)}%，缺失 ${missing} 项，风险提示 ${warnings} 项。`;
+    const missing = Array.isArray(result?.missing) ? result.missing : [];
+    const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+    return [
+      `数据核验完成：完整度 ${countText(result?.quality_score)}%。`,
+      missing.length ? `仍缺少：${missing.join('、')}` : '关键数据暂未发现明显缺失。',
+      warnings.length ? `风险提示：${warnings.join('、')}` : '暂无额外风险提示。',
+    ].join('\n');
   }
 
   if (action === '评分分析') {
@@ -167,13 +356,16 @@ h1,h2,h3{color:#102033}.report{white-space:pre-wrap;background:#fff;padding:24px
 }
 
 export default function WorkbenchPage() {
+  const navigate = useNavigate();
   const [projectForm] = Form.useForm<ProjectCreatePayload>();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [creating, setCreating] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [quality, setQuality] = useState<any>(null);
+  const [aiReview, setAiReview] = useState<any>(null);
   const [score, setScore] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
   const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
@@ -184,7 +376,7 @@ export default function WorkbenchPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'system',
-      content: '这是面向客户的选址工作台。可以创建项目、采集数据、补充信息、评分、生成报告，也可以围绕当前项目提问。',
+      content: '这是面向客户的选址工作台。先创建或选择项目，再按步骤采集数据、核验数据、评分和生成报告。',
     },
   ]);
 
@@ -193,13 +385,18 @@ export default function WorkbenchPage() {
     [projects, selectedProjectId],
   );
 
-  const loadProjects = async () => {
+  const loadProjects = async (preferredProjectId?: string) => {
     setLoadingProjects(true);
     try {
       const result = await listProjects();
-      const items = Array.isArray(result?.items) ? result.items : [];
+      const items: ProjectItem[] = Array.isArray(result?.items) ? result.items : [];
       setProjects(items);
-      if (!selectedProjectId && items[0]) setSelectedProjectId(items[0].project_id);
+      const nextId = preferredProjectId && items.some(item => item.project_id === preferredProjectId)
+        ? preferredProjectId
+        : items.some(item => item.project_id === selectedProjectId)
+          ? selectedProjectId
+          : items[0]?.project_id || '';
+      setSelectedProjectId(nextId);
     } catch (error: any) {
       message.error(errorText(error, '项目列表加载失败'));
     } finally {
@@ -232,6 +429,7 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (!selectedProjectId) return;
     setQuality(null);
+    setAiReview(null);
     setScore(null);
     setReport(null);
     setSessionId('');
@@ -245,14 +443,33 @@ export default function WorkbenchPage() {
     setCreating(true);
     try {
       const result = await createProject(values);
-      await loadProjects();
-      setSelectedProjectId(result.project_id);
-      setMessages(previous => [...previous, {role: 'system', content: `已创建项目：${values.name || values.address}`}]);
+      await loadProjects(result.project_id);
+      setMessages(previous => [
+        ...previous,
+        {
+          role: 'system',
+          content: `已创建项目：${values.name || values.address}\n下一步建议：点击“采集高德 POI”获取周边基础数据。`,
+        },
+      ]);
       projectForm.resetFields();
     } catch (error: any) {
       message.error(errorText(error, '创建项目失败'));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const removeProject = async (project: ProjectItem) => {
+    setDeletingProjectId(project.project_id);
+    try {
+      await deleteProject(project.project_id);
+      message.success('项目已删除');
+      setMessages(previous => [...previous, {role: 'system', content: `已删除项目：${projectTitle(project)}`}]);
+      await loadProjects(project.project_id === selectedProjectId ? undefined : selectedProjectId);
+    } catch (error: any) {
+      message.error(errorText(error, '删除项目失败'));
+    } finally {
+      setDeletingProjectId('');
     }
   };
 
@@ -272,7 +489,7 @@ export default function WorkbenchPage() {
       } else {
         message.success(`${actionName}完成`);
       }
-      await loadProjects();
+      await loadProjects(selectedProjectId);
       await loadSideContext(selectedProjectId);
       return result;
     } catch (error: any) {
@@ -287,7 +504,30 @@ export default function WorkbenchPage() {
 
   const checkQuality = async () => {
     const result = await runAction('quality', '数据核验', () => getProjectDataQuality(selectedProjectId));
-    if (result) setQuality(result);
+    if (!result) return;
+    setQuality(result);
+    setActionLoading('ai-review');
+    try {
+      const review = await generateProjectAiReview(selectedProjectId);
+      setAiReview(review);
+      if (review?.success === false) {
+        setMessages(previous => [
+          ...previous,
+          {role: 'system', content: `AI 数据审核暂未完成：${review.message || '请检查 DeepSeek 配置。'}\n已展示结构化数据核验结果。`},
+        ]);
+        message.warning(review.message || 'AI 数据审核暂不可用，已展示结构化核验结果');
+      } else {
+        setMessages(previous => [...previous, {role: 'system', content: 'AI 数据审核完成：已生成已有数据、缺失数据和人工补充建议。'}]);
+        message.success('AI 数据审核完成');
+      }
+    } catch (error: any) {
+      const reason = errorText(error, 'AI 数据审核失败');
+      setAiReview({success: false, message: reason});
+      setMessages(previous => [...previous, {role: 'system', content: `AI 数据审核失败：${reason}\n已展示结构化数据核验结果。`}]);
+      message.warning('AI 数据审核失败，已展示结构化核验结果');
+    } finally {
+      setActionLoading('');
+    }
   };
 
   const runScore = async () => {
@@ -329,26 +569,84 @@ export default function WorkbenchPage() {
   const scoreDimensions = score?.dimensions && typeof score.dimensions === 'object'
     ? Object.entries(score.dimensions as Record<string, any>)
     : [];
+  const supplementSuggestions = buildSupplementSuggestions(quality);
+  const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent);
+  const currentWorkflowIndex = Math.max(0, workflowSteps.findIndex(item => item.status !== 'finish'));
+  const activeWorkflowStep = workflowSteps[currentWorkflowIndex] || workflowSteps[workflowSteps.length - 1];
+  const projectPoiCount = selectedProject ? numberFromStats(selectedProject, 'poi_count') : 0;
+  const projectCompetitorCount = selectedProject ? numberFromStats(selectedProject, 'competitor_count') : 0;
+  const projectFoodCount = selectedProject ? numberFromStats(selectedProject, 'food_count') : 0;
+  const projectEntertainmentCount = selectedProject ? numberFromStats(selectedProject, 'entertainment_count') : 0;
+  const projectRentCount = selectedProject ? numberFromStats(selectedProject, 'rent_count') : 0;
 
   return (
     <div className="v11-workbench">
       <aside className="v11-left-panel">
-        <Card title="项目" extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadProjects} loading={loadingProjects}>刷新</Button>}>
+        <Card title="项目" extra={<Button size="small" icon={<ReloadOutlined />} onClick={() => loadProjects()} loading={loadingProjects}>刷新</Button>}>
           <List
             size="small"
             dataSource={projects}
             locale={{emptyText: '暂无项目，请先新建'}}
-            renderItem={item => (
-              <List.Item
-                className={item.project_id === selectedProjectId ? 'v11-project-item active' : 'v11-project-item'}
-                onClick={() => setSelectedProjectId(item.project_id)}
-              >
-                <List.Item.Meta
-                  title={projectTitle(item)}
-                  description={`${item.city || '-'} · ${item.address || '-'} · ${statusText(item.status)}`}
-                />
-              </List.Item>
-            )}
+            renderItem={item => {
+              const isActive = item.project_id === selectedProjectId;
+              const poiCount = numberFromStats(item, 'poi_count');
+              const competitorCount = numberFromStats(item, 'competitor_count');
+              const rentCount = numberFromStats(item, 'rent_count');
+              return (
+                <List.Item
+                  className={isActive ? 'v11-project-item active' : 'v11-project-item'}
+                  onClick={() => setSelectedProjectId(item.project_id)}
+                  actions={[
+                    <Popconfirm
+                      key="delete"
+                      title="确认删除该项目？"
+                      description="删除后默认不再显示，项目相关数据会保留在数据库中。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{danger: true}}
+                      onConfirm={event => {
+                        event?.stopPropagation?.();
+                        return removeProject(item);
+                      }}
+                    >
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        loading={deletingProjectId === item.project_id}
+                        onClick={event => event.stopPropagation()}
+                      >
+                        删除
+                      </Button>
+                    </Popconfirm>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={6} wrap>
+                        <span>{projectTitle(item)}</span>
+                        {isActive && <Tag color="blue">当前</Tag>}
+                      </Space>
+                    }
+                    description={
+                      <Space direction="vertical" size={4}>
+                        <Typography.Text type="secondary">
+                          {item.city || '-'} · {item.address || '-'}
+                        </Typography.Text>
+                        <Space size={[4, 4]} wrap>
+                          <Tag>{statusText(item.status)}</Tag>
+                          <Tag>ID：{shortProjectId(item.project_id)}</Tag>
+                          <Tag>{formatDateTime(item.created_at)}</Tag>
+                          <Tag color={poiCount > 0 ? 'green' : 'default'}>POI {poiCount}</Tag>
+                          <Tag color={competitorCount > 0 ? 'orange' : 'default'}>竞品 {competitorCount}</Tag>
+                          <Tag color={rentCount > 0 ? 'purple' : 'default'}>租金 {rentCount}</Tag>
+                        </Space>
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              );
+            }}
           />
         </Card>
 
@@ -400,37 +698,117 @@ export default function WorkbenchPage() {
             <Typography.Title level={3} style={{margin: 0}}>{projectTitle(selectedProject)}</Typography.Title>
             <Typography.Text type="secondary">
               {selectedProject
-                ? `${selectedProject.city || '-'} · ${selectedProject.address || '-'} · ${selectedProject.radius_meters || 1000} 米 · ${selectedProject.business_type || '电竞馆'}`
+                ? `${selectedProject.city || '-'} · ${selectedProject.address || '-'} · ${selectedProject.radius_meters || 1000} 米 · ${selectedProject.business_type || '电竞馆'} · ID ${shortProjectId(selectedProject.project_id)}`
                 : '选择项目后开始分析'}
             </Typography.Text>
           </Space>
         </Card>
 
-        <Card title="选址操作" className="v11-action-card">
-          <Space wrap>
-            <Button
-              icon={<CloudDownloadOutlined />}
-              loading={actionLoading === 'amap'}
-              onClick={() => runAction('amap', '高德 POI 采集', () => collectProjectAmap(selectedProjectId))}
-            >
-              采集高德 POI
-            </Button>
-            <Button
-              loading={actionLoading === 'competitor'}
-              onClick={() => runAction('competitor', '竞品采集', () => collectProjectCompetitors(selectedProjectId))}
-            >
-              获取竞品
-            </Button>
-            <Button
-              loading={actionLoading === 'supporting'}
-              onClick={() => runAction('supporting', '周边配套采集', () => collectProjectSupporting(selectedProjectId))}
-            >
-              获取配套
-            </Button>
-            <Button loading={actionLoading === 'quality'} onClick={checkQuality}>数据核验</Button>
-            <Button type="primary" loading={actionLoading === 'score'} onClick={runScore}>评分分析</Button>
-            <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport}>生成报告</Button>
-          </Space>
+        <Card
+          title="选址流程"
+          className="v11-action-card"
+          extra={<Tag color={activeWorkflowStep?.status === 'finish' ? 'green' : 'blue'}>{activeWorkflowStep?.title}</Tag>}
+        >
+          <Alert
+            type="info"
+            showIcon
+            message="按步骤完成选址分析"
+            description="系统会先采集和整理数据，再做数据核验、评分分析和 AI 报告。数据核验当前展示结构化缺口，下一阶段会接入 AI 审核结论和人工补充建议。"
+            style={{marginBottom: 12}}
+          />
+          <Steps
+            size="small"
+            current={currentWorkflowIndex}
+            items={workflowSteps.map(item => ({
+              title: item.title,
+              description: item.description,
+              status: item.status,
+            }))}
+          />
+
+          <Divider />
+
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={8}>
+              <Card size="small" title="Step 2-3：采集基础数据">
+                <Space direction="vertical" size={8} style={{width: '100%'}}>
+                  <Space size={[4, 4]} wrap>
+                    <Tag color={projectPoiCount > 0 ? 'green' : 'default'}>POI {projectPoiCount}</Tag>
+                    <Tag color={projectCompetitorCount > 0 ? 'orange' : 'default'}>竞品 {projectCompetitorCount}</Tag>
+                    <Tag color={projectFoodCount > 0 ? 'cyan' : 'default'}>餐饮 {projectFoodCount}</Tag>
+                    <Tag color={projectEntertainmentCount > 0 ? 'blue' : 'default'}>娱乐 {projectEntertainmentCount}</Tag>
+                  </Space>
+                  <Button
+                    icon={<CloudDownloadOutlined />}
+                    loading={actionLoading === 'amap'}
+                    onClick={() => runAction('amap', '高德 POI 采集', () => collectProjectAmap(selectedProjectId))}
+                    block
+                  >
+                    采集高德 POI
+                  </Button>
+                  <Button
+                    loading={actionLoading === 'competitor'}
+                    onClick={() => runAction('competitor', '竞品采集', () => collectProjectCompetitors(selectedProjectId))}
+                    block
+                  >
+                    获取竞品
+                  </Button>
+                  <Button
+                    loading={actionLoading === 'supporting'}
+                    onClick={() => runAction('supporting', '周边配套采集', () => collectProjectSupporting(selectedProjectId))}
+                    block
+                  >
+                    获取配套
+                  </Button>
+                </Space>
+              </Card>
+            </Col>
+
+            <Col xs={24} md={8}>
+              <Card size="small" title="Step 4-5：补充和核验">
+                <Space direction="vertical" size={8} style={{width: '100%'}}>
+                  <Alert
+                    type={quality ? (qualityScore >= 80 ? 'success' : 'warning') : 'info'}
+                    showIcon
+                    message={quality ? `数据完整度 ${qualityScore}%` : '尚未核验数据'}
+                    description={quality
+                      ? Array.isArray(quality.missing) && quality.missing.length > 0
+                        ? `需要补充：${quality.missing.join('、')}`
+                        : '关键数据暂未发现明显缺失。'
+                      : `当前已有租金 ${projectRentCount} 条。建议先补充竞品经营、租金、夜间营业等人工数据。`}
+                  />
+                  <Button loading={actionLoading === 'quality' || actionLoading === 'ai-review'} onClick={checkQuality} block>
+                    AI 数据核验
+                  </Button>
+                  <Button disabled={!selectedProjectId} onClick={() => navigate(`/projects/${selectedProjectId}/supplement?focus=general`)} block>
+                    进入人工补充
+                  </Button>
+                  <Typography.Text type="secondary">
+                    人工审核重点：竞品是否真实、价格/配置/上座率、真实租金、夜间营业情况。
+                  </Typography.Text>
+                </Space>
+              </Card>
+            </Col>
+
+            <Col xs={24} md={8}>
+              <Card size="small" title="Step 6-7：评分和报告">
+                <Space direction="vertical" size={8} style={{width: '100%'}}>
+                  <Button type="primary" loading={actionLoading === 'score'} onClick={runScore} block>
+                    开始评分分析
+                  </Button>
+                  <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport} block>
+                    生成 AI 报告
+                  </Button>
+                  <Alert
+                    type={score ? 'success' : 'info'}
+                    showIcon
+                    message={score ? `评分 ${countText(score.total_score)}，${score.level || '未评级'}` : '评分后再生成报告更准确'}
+                    description={reportContent ? '报告已生成，可在结果区导出或打印。' : 'AI 报告会基于项目数据、评分结果和已确认记忆生成。'}
+                  />
+                </Space>
+              </Card>
+            </Col>
+          </Row>
         </Card>
 
         <Card title={<Space><RobotOutlined />聊天式工作区</Space>} className="v11-chat-card">
@@ -464,7 +842,7 @@ export default function WorkbenchPage() {
           </Space.Compact>
         </Card>
 
-        {(quality || score || reportContent) && (
+        {(quality || aiReview || score || reportContent) && (
           <Card title="分析结果与报告" className="v11-result-card">
             <Row gutter={[12, 12]}>
               {quality && (
@@ -473,9 +851,29 @@ export default function WorkbenchPage() {
                     <Statistic title="数据完整度" value={qualityScore} suffix="%" />
                     <Progress percent={qualityScore} status={qualityScore >= 80 ? 'success' : 'active'} />
                     <Typography.Text type="secondary">缺失：{Array.isArray(quality.missing) ? quality.missing.length : 0} 项</Typography.Text>
+                    {Array.isArray(quality.missing) && quality.missing.length > 0 && (
+                      <List
+                        size="small"
+                        dataSource={quality.missing}
+                        renderItem={(item: string) => <List.Item>{item}</List.Item>}
+                      />
+                    )}
                     {Array.isArray(quality.warnings) && quality.warnings.length > 0 && (
                       <Alert style={{marginTop: 8}} type="warning" showIcon message={`风险提示：${quality.warnings.length} 项`} />
                     )}
+                  </Card>
+                </Col>
+              )}
+              {aiReview && (
+                <Col xs={24} md={8}>
+                  <Card size="small">
+                    <Statistic title="AI 数据核验" value={aiReview.success === false ? '未完成' : '已完成'} />
+                    <Alert
+                      type={aiReview.success === false ? 'warning' : 'success'}
+                      showIcon
+                      message={aiReview.success === false ? 'AI 审核暂不可用' : '已生成补充建议'}
+                      description={aiReview.message || '请查看下方 AI 数据核验结论。'}
+                    />
                   </Card>
                 </Col>
               )}
@@ -510,6 +908,46 @@ export default function WorkbenchPage() {
                 </Col>
               )}
             </Row>
+            {quality && supplementSuggestions.length > 0 && (
+              <>
+                <Divider />
+                <Typography.Title level={4}>人工补充建议</Typography.Title>
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{marginBottom: 12}}
+                  message="请先补齐关键数据，再生成正式投资报告"
+                  description="AI 数据核验负责指出缺口，最终仍需要人工确认和补充。补充页面会按竞品、租金、人口、配套分类填写。"
+                />
+                <Row gutter={[12, 12]}>
+                  {supplementSuggestions.map(item => (
+                    <Col xs={24} md={12} key={item.category}>
+                      <Card
+                        size="small"
+                        title={<Space><span>{item.category}</span><Tag color={item.priority === '高' ? 'red' : item.priority === '中' ? 'orange' : 'blue'}>{item.priority}优先级</Tag></Space>}
+                        extra={selectedProjectId ? (
+                          <Button size="small" type="primary" onClick={() => navigate(`/projects/${selectedProjectId}/supplement?focus=${item.focus}`)}>
+                            去补充
+                          </Button>
+                        ) : null}
+                      >
+                        <Typography.Paragraph type="secondary">{item.reason}</Typography.Paragraph>
+                        <Space size={[6, 6]} wrap>
+                          {item.fields.map(field => <Tag key={field}>{field}</Tag>)}
+                        </Space>
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+              </>
+            )}
+            {aiReview?.content && (
+              <>
+                <Divider />
+                <Typography.Title level={4}>AI 数据核验结论</Typography.Title>
+                <MarkdownReport content={String(aiReview.content)} />
+              </>
+            )}
             {reportContent && (
               <>
                 <Divider />
@@ -521,6 +959,31 @@ export default function WorkbenchPage() {
       </main>
 
       <aside className="v11-right-panel">
+        <Card title="当前项目状态">
+          {selectedProject ? (
+            <Space direction="vertical" size={8}>
+              <Typography.Text>{statusText(selectedProject.status)}</Typography.Text>
+              <Space size={[4, 4]} wrap>
+                <Tag color={numberFromStats(selectedProject, 'poi_count') > 0 ? 'green' : 'default'}>POI {numberFromStats(selectedProject, 'poi_count')}</Tag>
+                <Tag color={numberFromStats(selectedProject, 'competitor_count') > 0 ? 'orange' : 'default'}>竞品 {numberFromStats(selectedProject, 'competitor_count')}</Tag>
+                <Tag color={numberFromStats(selectedProject, 'food_count') > 0 ? 'cyan' : 'default'}>餐饮 {numberFromStats(selectedProject, 'food_count')}</Tag>
+                <Tag color={numberFromStats(selectedProject, 'entertainment_count') > 0 ? 'blue' : 'default'}>娱乐 {numberFromStats(selectedProject, 'entertainment_count')}</Tag>
+                <Tag color={numberFromStats(selectedProject, 'rent_count') > 0 ? 'purple' : 'default'}>租金 {numberFromStats(selectedProject, 'rent_count')}</Tag>
+              </Space>
+              {Array.isArray(selectedProject.stats?.missing_fields) && selectedProject.stats.missing_fields.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="仍需补充"
+                  description={(selectedProject.stats.missing_fields as string[]).join('、')}
+                />
+              )}
+            </Space>
+          ) : (
+            <Alert type="info" showIcon message="请先选择或创建项目" />
+          )}
+        </Card>
+
         <Card title="选址维度">
           <List
             size="small"

@@ -5,6 +5,8 @@ from typing import Any
 
 COMPETITOR_FIELDS = {
     "name",
+    "address",
+    "distance_meters",
     "area_sqm",
     "opening_date",
     "machine_count",
@@ -13,19 +15,23 @@ COMPETITOR_FIELDS = {
     "monitor",
     "hour_price",
     "member_price",
+    "business_hours",
     "occupancy_rate",
     "monthly_sales",
     "annual_sales",
     "recharge_amount",
+    "recharge_info",
     "remark",
 }
 
 RENT_FIELDS = {
+    "address",
     "monthly_rent",
     "area_sqm",
     "rent_per_sqm",
     "property_fee",
     "transfer_fee",
+    "location_type",
     "remark",
 }
 
@@ -34,6 +40,7 @@ POPULATION_FIELDS = {
     "nearby_school_count",
     "nearby_apartment_count",
     "nearby_residential_count",
+    "young_population_indicator",
     "target_customer_description",
 }
 

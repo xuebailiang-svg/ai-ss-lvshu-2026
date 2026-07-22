@@ -94,6 +94,11 @@ export default function SystemConfig() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [savingDimensions, setSavingDimensions] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [configSaveFeedback, setConfigSaveFeedback] = useState<{
+    type: 'success' | 'error' | 'info' | 'warning';
+    message: string;
+    description?: string;
+  } | null>(null);
 
   const totalWeight = useMemo(
     () => dimensions.filter(item => item.enabled).reduce((sum, item) => sum + Number(item.weight || 0), 0),
@@ -148,6 +153,11 @@ export default function SystemConfig() {
     options: {showEmptyMessage?: boolean} = {showEmptyMessage: true},
   ) => {
     if (!token.trim()) {
+      setConfigSaveFeedback({
+        type: 'warning',
+        message: '需要管理员 Token',
+        description: '只有管理员需要输入 ADMIN_CONFIG_TOKEN。Key 保存成功后会全局生效，普通使用者不需要输入 Token。',
+      });
       message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return false;
     }
@@ -155,7 +165,14 @@ export default function SystemConfig() {
       Object.entries(patch).filter(([, value]) => typeof value === 'string' && value.trim()),
     ) as Record<string, string>;
     if (!Object.keys(payload).length) {
-      if (options.showEmptyMessage) message.info('没有需要保存的配置');
+      if (options.showEmptyMessage) {
+        setConfigSaveFeedback({
+          type: 'info',
+          message: '没有需要保存的配置',
+          description: '如果状态已经显示“已配置”，普通用户可以直接在工作台使用相关能力。',
+        });
+        message.info('没有需要保存的配置');
+      }
       return true;
     }
     setSavingConfig(true);
@@ -169,10 +186,21 @@ export default function SystemConfig() {
         amap_security_js_code: undefined,
         third_party_api_key: undefined,
       });
+      setConfigSaveFeedback({
+        type: 'success',
+        message: '配置已加密保存并全局生效',
+        description: `保存时间：${new Date().toLocaleString('zh-CN')}。后续普通使用者进入工作台即可使用，不需要输入管理员 Token。`,
+      });
       message.success('配置已加密保存');
       return true;
     } catch (error: any) {
-      message.error(error?.response?.data?.detail || error.message || '配置保存失败');
+      const reason = error?.response?.data?.detail || error.message || '配置保存失败';
+      setConfigSaveFeedback({
+        type: 'error',
+        message: '配置保存失败',
+        description: reason,
+      });
+      message.error(reason);
       return false;
     } finally {
       setSavingConfig(false);
@@ -204,6 +232,11 @@ export default function SystemConfig() {
 
   const testManagedProvider = async (provider: 'deepseek' | 'amap') => {
     if (!token.trim()) {
+      setConfigSaveFeedback({
+        type: 'warning',
+        message: '测试连接需要管理员 Token',
+        description: '测试连接会先保存当前填写的 Key，因此需要管理员 Token。普通用户不需要执行此操作。',
+      });
       message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return;
     }
@@ -364,7 +397,7 @@ export default function SystemConfig() {
         <div>
           <Typography.Title level={2}>配置</Typography.Title>
           <Typography.Paragraph type="secondary">
-            集中管理 Key、模型、数据源、评分维度、权重和 memory。敏感 Key 加密保存，不回显完整值。
+            集中管理 Key、模型、数据源、评分维度、权重和 memory。管理员首次部署后配置一次即可，敏感 Key 会加密保存并全局生效，普通使用者进入工作台即可使用。
           </Typography.Paragraph>
         </div>
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadAll()}>刷新</Button>
@@ -386,7 +419,7 @@ export default function SystemConfig() {
         {tokenStatus === 'valid' && <Alert style={{marginTop: 8}} type="success" showIcon message="管理员 Token 验证成功，可以保存配置和测试连接。" />}
         {tokenStatus === 'invalid' && <Alert style={{marginTop: 8}} type="error" showIcon message="管理员 Token 验证失败，请检查 /etc/esports-site-selection/backend.env。" />}
         <Typography.Paragraph type="secondary" style={{marginTop: 8}}>
-          Token 只保存在当前浏览器内存中，不会写入本地存储。保存 Key、测试 DeepSeek 和高德连接时会使用它。
+          管理员 Token 只用于保护配置写入，不需要也不建议保存到浏览器。Key 保存成功后存入服务器加密配置，普通使用者不需要知道 Token，也不需要重复配置 Key。
         </Typography.Paragraph>
       </Card>
 
@@ -447,6 +480,15 @@ export default function SystemConfig() {
           </Row>
         </Form>
         {savingConfig && <Alert style={{marginTop: 12}} type="info" showIcon message="正在保存配置..." />}
+        {configSaveFeedback && (
+          <Alert
+            style={{marginTop: 12}}
+            type={configSaveFeedback.type}
+            showIcon
+            message={configSaveFeedback.message}
+            description={configSaveFeedback.description}
+          />
+        )}
       </Card>
 
       <Card title="评分维度和权重">

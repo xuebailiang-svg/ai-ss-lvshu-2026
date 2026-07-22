@@ -138,6 +138,30 @@ def test_manual_competitor_accepts_external_target_id(client):
     assert response.json()["updated"]["name"] == "外部POI竞品"
 
 
+def test_manual_competitor_accepts_workspace_form_fields(client):
+    project_id = create_project(client)
+    competitor_id = create_basic_competitor(client, project_id)
+
+    response = client.post(
+        f"/api/projects/{project_id}/manual-input",
+        json={
+            "type": "competitor",
+            "target_id": str(competitor_id),
+            "data": {
+                "distance_meters": 350,
+                "business_hours": "10:00-02:00",
+                "hour_price": 16,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    updated = response.json()["updated"]
+    assert updated["distance_meters"] == 350
+    assert updated["hour_price"] == 16
+    assert updated["raw_data"]["business_hours"] == "10:00-02:00"
+
+
 def test_manual_input_history_is_saved(client):
     project_id = create_project(client)
     competitor_id = create_basic_competitor(client, project_id)

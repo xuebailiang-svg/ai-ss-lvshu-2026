@@ -30,6 +30,15 @@ class AIReportResponse(BaseModel):
     message: str | None = None
 
 
+class AIReviewResponse(BaseModel):
+    success: bool = True
+    content: str | None = None
+    model: str | None = None
+    reviewed_at: Any | None = None
+    data_quality: dict[str, Any] | None = None
+    message: str | None = None
+
+
 class DeepSeekResult(BaseModel):
     content: str
     model: str

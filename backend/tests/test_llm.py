@@ -4,7 +4,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.llm.schemas import DeepSeekResult
 from app.llm.service import build_ai_input
-from app.llm.prompts import SITE_SELECTION_REPORT_PROMPT
+from app.llm.prompts import AI_DATA_REVIEW_PROMPT, SITE_SELECTION_REPORT_PROMPT
 from app.models import AICallLogRecord, AIReportRecord
 
 
@@ -102,6 +102,50 @@ def test_ai_report_without_api_key_returns_clear_message(client, monkeypatch):
     body = response.json()
     assert body["success"] is False
     assert body["message"] == "DeepSeek API Key未配置"
+
+
+def test_ai_review_without_api_key_returns_quality(client, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    get_settings.cache_clear()
+    project_id = create_project(client)
+
+    response = client.post(f"/api/projects/{project_id}/ai-review")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["message"] == "DeepSeek API Key未配置"
+    assert body["data_quality"]["project_id"] == project_id
+
+
+def test_mock_deepseek_returns_ai_review(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    def fake_generate_report(self, analysis_input, prompt=None):
+        assert prompt == AI_DATA_REVIEW_PROMPT
+        assert analysis_input["project"]["project_id"]
+        assert "data_quality" in analysis_input
+        assert "data_inventory" in analysis_input
+        return DeepSeekResult(
+            content="# 数据核验结论\n\n## 一、当前是否建议生成正式报告\n- 结论：暂不建议",
+            model="deepseek-chat",
+            duration_ms=10,
+            input_length=100,
+            output_length=50,
+        )
+
+    monkeypatch.setattr("app.llm.client.DeepSeekClient.generate_report", fake_generate_report)
+    project_id = seed_project_for_ai(client)
+
+    response = client.post(f"/api/projects/{project_id}/ai-review")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["model"] == "deepseek-chat"
+    assert "数据核验结论" in body["content"]
+    assert body["data_quality"]["project_id"] == project_id
 
 
 def test_mock_deepseek_returns_report(client, monkeypatch):

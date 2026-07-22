@@ -14,7 +14,9 @@ import {
   message,
 } from 'antd';
 import {ArrowLeftOutlined, DeleteOutlined, PlusOutlined, SaveOutlined} from '@ant-design/icons';
-import {useNavigate, useParams} from 'react-router-dom';
+import {useNavigate, useParams, useSearchParams} from 'react-router-dom';
+import {submitManualInput} from '../../api/data';
+import {getProjectDataQuality} from '../../api/projects';
 
 const {TextArea} = Input;
 
@@ -25,12 +27,111 @@ const EMPTY_VALUES = {
   supports: [{}],
 };
 
+const FOCUS_GUIDE: Record<string, {title: string; description: string; fields: string[]}> = {
+  competitor: {
+    title: '本次重点：补充竞品经营信息',
+    description: '优先核实哪些店是真正竞品，并补充价格、配置、机器数量、上座率和营业时间。',
+    fields: ['竞品名称', '距离', '面积', '机器数量', 'CPU/GPU', '价格', '营业时间', '上座率'],
+  },
+  rent: {
+    title: '本次重点：补充租金成本信息',
+    description: '优先补齐候选物业或周边商铺的真实租金样本，后续才能判断成本压力。',
+    fields: ['月租金', '面积', '物业费', '转让费', '租金来源', '位置说明'],
+  },
+  support: {
+    title: '本次重点：补充夜间消费和配套',
+    description: '优先确认餐饮、便利店、娱乐设施是否真实夜间营业，不能默认便利店就是 24 小时。',
+    fields: ['夜市', '24小时便利店', '餐饮营业时间', '娱乐设施', '夜间人流', '备注'],
+  },
+  population: {
+    title: '本次重点：补充客群人口信息',
+    description: '优先记录大学、高职、技校、公寓、年轻住宅和夜间年轻人流情况。',
+    fields: ['大学', '技校', '公寓', '住宅情况', '年轻人口情况'],
+  },
+  property: {
+    title: '本次重点：补充物业落地条件',
+    description: '优先核实面积、供电、网络、消防、停车、门头和其他开店落地风险。',
+    fields: ['可用面积', '供电', '网络', '消防', '停车', '门头', '备注'],
+  },
+  general: {
+    title: '人工补充建议',
+    description: '请根据现场调研结果补充高德和 AI 无法直接确认的数据，不确定的信息可以留空。',
+    fields: ['竞品经营', '租金成本', '客群人口', '夜间配套'],
+  },
+};
+
 function NumberField({name, label, suffix}: {name: string; label: string; suffix?: string}) {
   return (
     <Form.Item name={name} label={label}>
       <InputNumber min={0} style={{width: '100%'}} addonAfter={suffix} />
     </Form.Item>
   );
+}
+
+function cleanPayload(data: Record<string, any>) {
+  return Object.fromEntries(
+    Object.entries(data || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  );
+}
+
+function hasMeaningfulValue(data: Record<string, any>) {
+  return Object.keys(cleanPayload(data)).length > 0;
+}
+
+function competitorPayload(row: Record<string, any>) {
+  const payload = cleanPayload({
+    name: row.name,
+    distance_meters: row.distance_meters,
+    area_sqm: row.area_sqm,
+    machine_count: row.machine_count,
+    cpu: row.cpu,
+    gpu: row.gpu,
+    hour_price: row.hour_price,
+    business_hours: row.business_hours,
+    opening_date: row.opening_date,
+    occupancy_rate: row.occupancy_rate,
+    monthly_sales: row.monthly_revenue,
+  });
+  return payload;
+}
+
+function rentPayload(row: Record<string, any>) {
+  return cleanPayload({
+    monthly_rent: row.monthly_rent,
+    property_fee: row.property_fee,
+    area_sqm: row.area_sqm,
+    transfer_fee: row.transfer_fee,
+  });
+}
+
+function populationPayload(row: Record<string, any>) {
+  const description = [
+    row.universities ? `周边大学：${row.universities}` : '',
+    row.vocational_schools ? `技校/高职：${row.vocational_schools}` : '',
+    row.residential ? `住宅情况：${row.residential}` : '',
+    row.apartments ? `公寓情况：${row.apartments}` : '',
+    row.young_population ? `年轻人口情况：${row.young_population}` : '',
+  ].filter(Boolean).join('\n');
+  return cleanPayload({
+    target_customer_description: description,
+    young_population_indicator: row.young_population,
+  });
+}
+
+function supportPayload(row: Record<string, any>) {
+  const value = [
+    row.night_market ? `夜市：${row.night_market}` : '',
+    row.convenience_store_24h ? `24小时便利店：${row.convenience_store_24h}` : '',
+    row.entertainment ? `娱乐设施：${row.entertainment}` : '',
+    row.remark ? `备注：${row.remark}` : '',
+  ].filter(Boolean).join('\n');
+  if (!value) return {};
+  return cleanPayload({
+    target_type: 'support',
+    field_name: 'manual_support_note',
+    value,
+    remark: value,
+  });
 }
 
 function ListSection({
@@ -80,9 +181,14 @@ function ListSection({
 export default function ProjectSupplementPage() {
   const {projectId = ''} = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [form] = Form.useForm();
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{imported: number; failed: number; qualityScore?: number; errors: string[]} | null>(null);
   const storageKey = `project-supplement:${projectId}`;
+  const focus = searchParams.get('focus') || 'general';
+  const focusGuide = FOCUS_GUIDE[focus] || FOCUS_GUIDE.general;
 
   useEffect(() => {
     const stored = localStorage.getItem(storageKey);
@@ -95,10 +201,51 @@ export default function ProjectSupplementPage() {
     }
   }, [form, storageKey]);
 
-  const saveDraft = (values: typeof EMPTY_VALUES) => {
+  const saveDraft = async (values: typeof EMPTY_VALUES) => {
     localStorage.setItem(storageKey, JSON.stringify(values));
     setSaved(true);
-    message.success('人工补充完成，等待数据核验');
+    setSaving(true);
+    const errors: string[] = [];
+    let imported = 0;
+
+    const submit = async (
+      type: 'competitor' | 'rent' | 'population' | 'supplement',
+      data: Record<string, any>,
+    ) => {
+      if (!hasMeaningfulValue(data)) return;
+      try {
+        await submitManualInput(projectId, {type, data});
+        imported += 1;
+      } catch (error: any) {
+        errors.push(error?.response?.data?.detail || error.message || `${type} 保存失败`);
+      }
+    };
+
+    try {
+      for (const row of values.competitors || []) await submit('competitor', competitorPayload(row));
+      for (const row of values.rents || []) await submit('rent', rentPayload(row));
+      for (const row of values.populations || []) await submit('population', populationPayload(row));
+      for (const row of values.supports || []) await submit('supplement', supportPayload(row));
+
+      let qualityScore: number | undefined;
+      try {
+        const quality = await getProjectDataQuality(projectId);
+        qualityScore = Number(quality?.quality_score);
+      } catch (error: any) {
+        errors.push(error?.response?.data?.detail || error.message || '数据完整度刷新失败');
+      }
+
+      setSubmitResult({imported, failed: errors.length, qualityScore, errors});
+      if (imported > 0 && errors.length === 0) {
+        message.success('人工补充已保存到服务器，并已刷新数据核验');
+      } else if (imported > 0) {
+        message.warning('部分人工补充已保存，部分内容需要检查');
+      } else {
+        message.info('已保存本地草稿，没有可提交到服务器的数据');
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -107,7 +254,7 @@ export default function ProjectSupplementPage() {
         <div>
           <Typography.Title level={2}>人工补充数据</Typography.Title>
           <Typography.Paragraph type="secondary">
-            补充高德暂时无法提供的经营、成本和客群信息。当前内容仅保存在本浏览器，不会写入服务器。
+            补充高德和 AI 无法直接确认的经营、成本和客群信息。提交后会写入服务器，参与后续数据核验、评分和报告。
           </Typography.Paragraph>
         </div>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}`)}>
@@ -120,7 +267,39 @@ export default function ProjectSupplementPage() {
         showIcon
         style={{marginBottom: 16}}
         message={saved ? '已恢复本项目的人工补充草稿' : '请按实际调研结果填写，不确定的数据可以留空'}
-        description="提交后会保存到当前浏览器，后续阶段再接入服务器保存和数据核验。"
+        description="提交时会先保留本地草稿，再把有效内容保存到服务器；保存成功后会自动刷新数据完整度。"
+      />
+
+      {submitResult && (
+        <Alert
+          type={submitResult.failed > 0 ? 'warning' : 'success'}
+          showIcon
+          style={{marginBottom: 16}}
+          message={`服务器保存结果：成功 ${submitResult.imported} 条，失败 ${submitResult.failed} 条`}
+          description={(
+            <Space direction="vertical" size={4}>
+              {Number.isFinite(submitResult.qualityScore) && (
+                <Typography.Text>当前数据完整度：{submitResult.qualityScore}%</Typography.Text>
+              )}
+              {submitResult.errors.map((item, index) => <Typography.Text key={`${item}-${index}`} type="danger">{item}</Typography.Text>)}
+            </Space>
+          )}
+        />
+      )}
+
+      <Alert
+        type="warning"
+        showIcon
+        style={{marginBottom: 16}}
+        message={focusGuide.title}
+        description={(
+          <Space direction="vertical" size={8}>
+            <Typography.Text>{focusGuide.description}</Typography.Text>
+            <Space size={[6, 6]} wrap>
+              {focusGuide.fields.map(item => <Typography.Text key={item} code>{item}</Typography.Text>)}
+            </Space>
+          </Space>
+        )}
       />
 
       <Form form={form} layout="vertical" initialValues={EMPTY_VALUES} onFinish={saveDraft}>
@@ -207,8 +386,8 @@ export default function ProjectSupplementPage() {
 
           <Card className="supplement-submit-bar">
             <Space>
-              <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>保存人工补充草稿</Button>
-              <Typography.Text type="secondary">保存后可返回工作台，继续进行数据核验。</Typography.Text>
+              <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving}>保存到服务器并刷新核验</Button>
+              <Typography.Text type="secondary">保存成功后可返回工作台，继续进行 AI 数据核验、评分和报告。</Typography.Text>
             </Space>
           </Card>
         </Space>
