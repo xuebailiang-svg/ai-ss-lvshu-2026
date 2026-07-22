@@ -69,6 +69,12 @@ type ChatMessage = {
   content: string;
 };
 
+type ActionResult = {
+  type: 'success' | 'warning' | 'error' | 'info';
+  title: string;
+  content: string;
+};
+
 const QUICK_MESSAGES = [
   '西安市小寨地铁站 1000 米，电竞馆，帮我做一次选址分析',
   '这个项目当前缺哪些关键数据？',
@@ -373,6 +379,7 @@ export default function WorkbenchPage() {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
+  const [actionResults, setActionResults] = useState<Record<string, ActionResult>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'system',
@@ -433,6 +440,7 @@ export default function WorkbenchPage() {
     setScore(null);
     setReport(null);
     setSessionId('');
+    setActionResults({});
     void loadSideContext(selectedProjectId);
     createProjectChatSession(selectedProjectId)
       .then(result => setSessionId(String(result.session_id)))
@@ -444,6 +452,13 @@ export default function WorkbenchPage() {
     try {
       const result = await createProject(values);
       await loadProjects(result.project_id);
+      setActionResults({
+        create: {
+          type: 'success',
+          title: '项目已创建',
+          content: `已创建项目：${values.name || values.address}\n下一步：采集高德 POI，获取周边基础数据。`,
+        },
+      });
       setMessages(previous => [
         ...previous,
         {
@@ -483,7 +498,14 @@ export default function WorkbenchPage() {
     try {
       const result = await fn();
       const summary = summarizeAction(actionName, result);
-      setMessages(previous => [...previous, {role: 'system', content: summary}]);
+      setActionResults(previous => ({
+        ...previous,
+        [loadingKey]: {
+          type: result?.success === false ? 'warning' : 'success',
+          title: result?.success === false ? `${actionName}未完成` : `${actionName}完成`,
+          content: summary,
+        },
+      }));
       if (result?.success === false) {
         message.warning(result.message || `${actionName}失败`);
       } else {
@@ -494,7 +516,14 @@ export default function WorkbenchPage() {
       return result;
     } catch (error: any) {
       const reason = errorText(error, `${actionName}失败`);
-      setMessages(previous => [...previous, {role: 'system', content: `${actionName}失败：${reason}`}]);
+      setActionResults(previous => ({
+        ...previous,
+        [loadingKey]: {
+          type: 'error',
+          title: `${actionName}失败`,
+          content: reason,
+        },
+      }));
       message.error(reason);
       return null;
     } finally {
@@ -515,15 +544,38 @@ export default function WorkbenchPage() {
           ...previous,
           {role: 'system', content: `AI 数据审核暂未完成：${review.message || '请检查 DeepSeek 配置。'}\n已展示结构化数据核验结果。`},
         ]);
+        setActionResults(previous => ({
+          ...previous,
+          aiReview: {
+            type: 'warning',
+            title: 'AI 数据审核暂未完成',
+            content: `${review.message || '请检查 DeepSeek 配置。'}\n已展示结构化数据核验结果。`,
+          },
+        }));
         message.warning(review.message || 'AI 数据审核暂不可用，已展示结构化核验结果');
       } else {
         setMessages(previous => [...previous, {role: 'system', content: 'AI 数据审核完成：已生成已有数据、缺失数据和人工补充建议。'}]);
+        setActionResults(previous => ({
+          ...previous,
+          aiReview: {
+            type: 'success',
+            title: 'AI 数据审核完成',
+            content: '已生成已有数据、缺失数据和人工补充建议。请查看下方 AI 数据核验结论。',
+          },
+        }));
         message.success('AI 数据审核完成');
       }
     } catch (error: any) {
       const reason = errorText(error, 'AI 数据审核失败');
       setAiReview({success: false, message: reason});
-      setMessages(previous => [...previous, {role: 'system', content: `AI 数据审核失败：${reason}\n已展示结构化数据核验结果。`}]);
+      setActionResults(previous => ({
+        ...previous,
+        aiReview: {
+          type: 'warning',
+          title: 'AI 数据审核失败',
+          content: `${reason}\n已展示结构化数据核验结果。`,
+        },
+      }));
       message.warning('AI 数据审核失败，已展示结构化核验结果');
     } finally {
       setActionLoading('');
@@ -578,6 +630,18 @@ export default function WorkbenchPage() {
   const projectFoodCount = selectedProject ? numberFromStats(selectedProject, 'food_count') : 0;
   const projectEntertainmentCount = selectedProject ? numberFromStats(selectedProject, 'entertainment_count') : 0;
   const projectRentCount = selectedProject ? numberFromStats(selectedProject, 'rent_count') : 0;
+  const inlineResult = (key: string) => {
+    const item = actionResults[key];
+    if (!item) return null;
+    return (
+      <Alert
+        type={item.type}
+        showIcon
+        message={item.title}
+        description={<Typography.Paragraph style={{whiteSpace: 'pre-wrap', marginBottom: 0}}>{item.content}</Typography.Paragraph>}
+      />
+    );
+  };
 
   return (
     <div className="v11-workbench">
@@ -592,6 +656,7 @@ export default function WorkbenchPage() {
               const poiCount = numberFromStats(item, 'poi_count');
               const competitorCount = numberFromStats(item, 'competitor_count');
               const rentCount = numberFromStats(item, 'rent_count');
+              const completionCount = [poiCount > 0, competitorCount > 0, rentCount > 0].filter(Boolean).length;
               return (
                 <List.Item
                   className={isActive ? 'v11-project-item active' : 'v11-project-item'}
@@ -634,24 +699,18 @@ export default function WorkbenchPage() {
                 >
                   <List.Item.Meta
                     title={
-                      <Space size={6} wrap>
-                        <span>{projectTitle(item)}</span>
+                      <Space size={6} wrap className="v11-project-title-line">
+                        <span className="v11-project-title-text">{projectTitle(item)}</span>
                         {isActive && <Tag color="blue">当前</Tag>}
                       </Space>
                     }
                     description={
-                      <Space direction="vertical" size={4}>
-                        <Typography.Text type="secondary">
-                          {item.city || '-'} · {item.address || '-'}
-                        </Typography.Text>
-                        <Space size={[4, 4]} wrap>
-                          <Tag>{statusText(item.status)}</Tag>
-                          <Tag>ID：{shortProjectId(item.project_id)}</Tag>
-                          <Tag>{formatDateTime(item.created_at)}</Tag>
-                          <Tag color={poiCount > 0 ? 'green' : 'default'}>POI {poiCount}</Tag>
-                          <Tag color={competitorCount > 0 ? 'orange' : 'default'}>竞品 {competitorCount}</Tag>
-                          <Tag color={rentCount > 0 ? 'purple' : 'default'}>租金 {rentCount}</Tag>
-                        </Space>
+                      <Space size={[4, 4]} wrap>
+                        <Tag>{statusText(item.status)}</Tag>
+                        <Tag color={completionCount >= 2 ? 'green' : completionCount === 1 ? 'orange' : 'default'}>
+                          完成 {completionCount}/3
+                        </Tag>
+                        <Tag color={poiCount > 0 ? 'green' : 'default'}>POI {poiCount}</Tag>
                       </Space>
                     }
                   />
@@ -686,18 +745,12 @@ export default function WorkbenchPage() {
               </Col>
               <Col span={12}><Form.Item name="business_type" label="经营类型"><Input /></Form.Item></Col>
             </Row>
-            <Row gutter={8}>
-              <Col span={12}>
-                <Form.Item name="expected_area_sqm" label="预计面积（㎡）">
-                  <InputNumber min={0} addonAfter="㎡" style={{width: '100%'}} />
-                </Form.Item>
-              </Col>
-              <Col span={12}>
-                <Form.Item name="investment_budget" label="投资预算（万元）">
-                  <InputNumber min={0} addonAfter="万元" style={{width: '100%'}} />
-                </Form.Item>
-              </Col>
-            </Row>
+            <Form.Item name="expected_area_sqm" label="预计面积（㎡）">
+              <InputNumber min={0} addonAfter="㎡" style={{width: '100%'}} />
+            </Form.Item>
+            <Form.Item name="investment_budget" label="投资预算（万元）">
+              <InputNumber min={0} addonAfter="万元" style={{width: '100%'}} />
+            </Form.Item>
             <Button type="primary" icon={<PlusOutlined />} htmlType="submit" loading={creating} block>创建项目</Button>
           </Form>
         </Card>
@@ -739,9 +792,33 @@ export default function WorkbenchPage() {
 
           <Divider />
 
-          <Row gutter={[12, 12]}>
-            <Col xs={24} md={8}>
-              <Card size="small" title="Step 2-3：采集基础数据">
+          <div className="v11-step-grid">
+            <Card size="small" title="Step 1：新建或选择项目">
+              <Space direction="vertical" size={8} style={{width: '100%'}}>
+                <Alert
+                  type={selectedProject ? 'success' : 'info'}
+                  showIcon
+                  message={selectedProject ? `当前项目：${projectTitle(selectedProject)}` : '请先选择或创建项目'}
+                  description={selectedProject ? `${selectedProject.city || '-'} · ${selectedProject.address || '-'} · ${selectedProject.radius_meters || 1000} 米` : '左侧创建项目后会自动选中。'}
+                />
+                {inlineResult('create')}
+              </Space>
+            </Card>
+
+            <Card size="small" title="Step 2：确认地址和范围">
+              <Space direction="vertical" size={8} style={{width: '100%'}}>
+                <Space size={[4, 4]} wrap>
+                  <Tag>{selectedProject?.city || '城市未填'}</Tag>
+                  <Tag>{selectedProject?.radius_meters || 1000} 米</Tag>
+                  <Tag color={hasProjectLocation(selectedProject) ? 'green' : 'orange'}>
+                    {hasProjectLocation(selectedProject) ? '已有经纬度' : '待地址解析'}
+                  </Tag>
+                </Space>
+                <Typography.Text type="secondary">{selectedProject?.address || '创建项目时填写详细地址。'}</Typography.Text>
+              </Space>
+            </Card>
+
+            <Card size="small" title="Step 3：采集基础数据">
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Space size={[4, 4]} wrap>
                     <Tag color={projectPoiCount > 0 ? 'green' : 'default'}>POI {projectPoiCount}</Tag>
@@ -771,12 +848,30 @@ export default function WorkbenchPage() {
                   >
                     获取配套
                   </Button>
+                  {inlineResult('amap')}
+                  {inlineResult('competitor')}
+                  {inlineResult('supporting')}
                 </Space>
-              </Card>
-            </Col>
+            </Card>
 
-            <Col xs={24} md={8}>
-              <Card size="small" title="Step 4-5：补充和核验">
+            <Card size="small" title="Step 4：人工确认和补充">
+                <Space direction="vertical" size={8} style={{width: '100%'}}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="基于已采集数据补充"
+                    description="人工补充页会优先带出已采集的竞品名称、距离等基础信息，再填写价格、配置、上座率、租金和夜间营业情况。"
+                  />
+                  <Button disabled={!selectedProjectId} onClick={() => navigate(`/projects/${selectedProjectId}/supplement?focus=general`)} block>
+                    进入人工补充
+                  </Button>
+                  <Typography.Text type="secondary">
+                    人工审核重点：竞品是否真实、价格/配置/上座率、真实租金、夜间营业情况。
+                  </Typography.Text>
+                </Space>
+            </Card>
+
+            <Card size="small" title="Step 5：AI 数据核验">
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type={quality ? (qualityScore >= 80 ? 'success' : 'warning') : 'info'}
@@ -791,35 +886,41 @@ export default function WorkbenchPage() {
                   <Button loading={actionLoading === 'quality' || actionLoading === 'ai-review'} onClick={checkQuality} block>
                     AI 数据核验
                   </Button>
-                  <Button disabled={!selectedProjectId} onClick={() => navigate(`/projects/${selectedProjectId}/supplement?focus=general`)} block>
-                    进入人工补充
-                  </Button>
-                  <Typography.Text type="secondary">
-                    人工审核重点：竞品是否真实、价格/配置/上座率、真实租金、夜间营业情况。
-                  </Typography.Text>
+                  {inlineResult('quality')}
+                  {inlineResult('aiReview')}
                 </Space>
-              </Card>
-            </Col>
+            </Card>
 
-            <Col xs={24} md={8}>
-              <Card size="small" title="Step 6-7：评分和报告">
+            <Card size="small" title="Step 6：评分分析">
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Button type="primary" loading={actionLoading === 'score'} onClick={runScore} block>
                     开始评分分析
-                  </Button>
-                  <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport} block>
-                    生成 AI 报告
                   </Button>
                   <Alert
                     type={score ? 'success' : 'info'}
                     showIcon
                     message={score ? `评分 ${countText(score.total_score)}，${score.level || '未评级'}` : '评分后再生成报告更准确'}
-                    description={reportContent ? '报告已生成，可在结果区导出或打印。' : 'AI 报告会基于项目数据、评分结果和已确认记忆生成。'}
+                    description="评分会输出综合分、维度分、风险项和数据置信度。"
                   />
+                  {inlineResult('score')}
                 </Space>
-              </Card>
-            </Col>
-          </Row>
+            </Card>
+
+            <Card size="small" title="Step 7：生成报告和继续咨询">
+              <Space direction="vertical" size={8} style={{width: '100%'}}>
+                <Button icon={<FileTextOutlined />} loading={actionLoading === 'report'} onClick={runReport} block>
+                  生成 AI 报告
+                </Button>
+                <Alert
+                  type={reportContent ? 'success' : 'info'}
+                  showIcon
+                  message={reportContent ? '报告已生成' : 'AI 报告会基于项目数据、评分结果和已确认记忆生成。'}
+                  description={reportContent ? '可在下方结果区导出 HTML 或打印为 PDF。' : '建议先完成数据核验和评分后再生成正式报告。'}
+                />
+                {inlineResult('report')}
+              </Space>
+            </Card>
+          </div>
         </Card>
 
         <Card title={<Space><RobotOutlined />聊天式工作区</Space>} className="v11-chat-card">

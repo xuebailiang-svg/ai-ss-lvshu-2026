@@ -104,6 +104,8 @@ export default function SystemConfig() {
     () => dimensions.filter(item => item.enabled).reduce((sum, item) => sum + Number(item.weight || 0), 0),
     [dimensions],
   );
+  const deepseekConfigured = Boolean(managedConfig?.deepseek?.configured);
+  const amapConfigured = Boolean(managedConfig?.amap?.configured || managedConfig?.amap_js?.configured);
 
   const loadAll = async () => {
     setLoading(true);
@@ -440,7 +442,14 @@ export default function SystemConfig() {
                     <Input.Password placeholder="填写后点击保存 DeepSeek 配置" />
                   </Form.Item>
                   <Space>
-                    <Button type="primary" loading={savingConfig} onClick={saveDeepSeekConfig}>保存 DeepSeek 配置</Button>
+                    <Button
+                      type={deepseekConfigured ? 'default' : 'primary'}
+                      icon={deepseekConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
+                      loading={savingConfig}
+                      onClick={saveDeepSeekConfig}
+                    >
+                      {deepseekConfigured ? '已保存 DeepSeek 配置' : '保存 DeepSeek 配置'}
+                    </Button>
                     <Button onClick={() => testManagedProvider('deepseek')} loading={checks.deepseek === 'loading'}>测试 DeepSeek</Button>
                   </Space>
                   {checkAlert('DeepSeek', checks.deepseek)}
@@ -462,7 +471,14 @@ export default function SystemConfig() {
                     <Input.Password placeholder="高德 JS API 2.0 安全密钥" />
                   </Form.Item>
                   <Space>
-                    <Button type="primary" loading={savingConfig} onClick={saveAmapConfig}>保存高德配置</Button>
+                    <Button
+                      type={amapConfigured ? 'default' : 'primary'}
+                      icon={amapConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
+                      loading={savingConfig}
+                      onClick={saveAmapConfig}
+                    >
+                      {amapConfigured ? '已保存高德配置' : '保存高德配置'}
+                    </Button>
                     <Button onClick={() => testManagedProvider('amap')} loading={checks.amap === 'loading'}>测试高德</Button>
                   </Space>
                   {checkAlert('高德', checks.amap)}

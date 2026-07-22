@@ -16,7 +16,7 @@ import {
 import {ArrowLeftOutlined, DeleteOutlined, PlusOutlined, SaveOutlined} from '@ant-design/icons';
 import {useNavigate, useParams, useSearchParams} from 'react-router-dom';
 import {submitManualInput} from '../../api/data';
-import {getProjectDataQuality} from '../../api/projects';
+import {getProjectDataQuality, listProjectCompetitors, type ProjectCompetitor} from '../../api/projects';
 
 const {TextArea} = Input;
 
@@ -93,6 +93,23 @@ function competitorPayload(row: Record<string, any>) {
     monthly_sales: row.monthly_revenue,
   });
   return payload;
+}
+
+function competitorToFormRow(item: ProjectCompetitor) {
+  return cleanPayload({
+    competitor_id: item.id,
+    name: item.name,
+    distance_meters: item.distance_meters,
+    area_sqm: item.area_sqm,
+    machine_count: item.machine_count,
+    cpu: item.cpu,
+    gpu: item.gpu,
+    hour_price: item.hour_price,
+    business_hours: item.business_hours,
+    opening_date: item.opening_date,
+    occupancy_rate: item.occupancy_rate,
+    monthly_revenue: item.monthly_sales,
+  });
 }
 
 function rentPayload(row: Record<string, any>) {
@@ -185,6 +202,8 @@ export default function ProjectSupplementPage() {
   const [form] = Form.useForm();
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [prefillLoading, setPrefillLoading] = useState(false);
+  const [prefillCount, setPrefillCount] = useState(0);
   const [submitResult, setSubmitResult] = useState<{imported: number; failed: number; qualityScore?: number; errors: string[]} | null>(null);
   const storageKey = `project-supplement:${projectId}`;
   const focus = searchParams.get('focus') || 'general';
@@ -192,7 +211,19 @@ export default function ProjectSupplementPage() {
 
   useEffect(() => {
     const stored = localStorage.getItem(storageKey);
-    if (!stored) return;
+    if (!stored) {
+      setPrefillLoading(true);
+      listProjectCompetitors(projectId)
+        .then(result => {
+          const rows = (result.items || []).slice(0, 20).map(competitorToFormRow);
+          if (!rows.length) return;
+          form.setFieldsValue({competitors: rows});
+          setPrefillCount(rows.length);
+        })
+        .catch(() => undefined)
+        .finally(() => setPrefillLoading(false));
+      return;
+    }
     try {
       form.setFieldsValue(JSON.parse(stored));
       setSaved(true);
@@ -211,10 +242,11 @@ export default function ProjectSupplementPage() {
     const submit = async (
       type: 'competitor' | 'rent' | 'population' | 'supplement',
       data: Record<string, any>,
+      targetId?: string | number,
     ) => {
       if (!hasMeaningfulValue(data)) return;
       try {
-        await submitManualInput(projectId, {type, data});
+        await submitManualInput(projectId, {type, target_id: targetId != null ? String(targetId) : undefined, data});
         imported += 1;
       } catch (error: any) {
         errors.push(error?.response?.data?.detail || error.message || `${type} 保存失败`);
@@ -222,7 +254,10 @@ export default function ProjectSupplementPage() {
     };
 
     try {
-      for (const row of values.competitors || []) await submit('competitor', competitorPayload(row));
+      for (const row of values.competitors || []) {
+        const competitorRow = row as Record<string, any>;
+        await submit('competitor', competitorPayload(competitorRow), competitorRow.competitor_id);
+      }
       for (const row of values.rents || []) await submit('rent', rentPayload(row));
       for (const row of values.populations || []) await submit('population', populationPayload(row));
       for (const row of values.supports || []) await submit('supplement', supportPayload(row));
@@ -270,6 +305,25 @@ export default function ProjectSupplementPage() {
         description="提交时会先保留本地草稿，再把有效内容保存到服务器；保存成功后会自动刷新数据完整度。"
       />
 
+      {prefillLoading && (
+        <Alert
+          type="info"
+          showIcon
+          style={{marginBottom: 16}}
+          message="正在读取已采集的竞品数据..."
+        />
+      )}
+
+      {prefillCount > 0 && !saved && (
+        <Alert
+          type="success"
+          showIcon
+          style={{marginBottom: 16}}
+          message={`已带入 ${prefillCount} 条已采集竞品`}
+          description="已自动填入竞品名称和距离。请在对应行补充价格、配置、上座率、营业时间等人工调研信息。"
+        />
+      )}
+
       {submitResult && (
         <Alert
           type={submitResult.failed > 0 ? 'warning' : 'success'}
@@ -313,6 +367,7 @@ export default function ProjectSupplementPage() {
             {fieldName => (
               <>
                 <Col xs={24} md={8}><Form.Item name={[fieldName, 'name']} label="竞品名称"><Input placeholder="例如：XX电竞馆" /></Form.Item></Col>
+                <Form.Item name={[fieldName, 'competitor_id']} hidden><Input /></Form.Item>
                 <Col xs={24} md={8}><NumberField name={[fieldName, 'distance_meters'] as any} label="距离" suffix="米" /></Col>
                 <Col xs={24} md={8}><NumberField name={[fieldName, 'area_sqm'] as any} label="面积" suffix="㎡" /></Col>
                 <Col xs={24} md={8}><NumberField name={[fieldName, 'machine_count'] as any} label="机器数量" suffix="台" /></Col>
