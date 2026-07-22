@@ -788,8 +788,8 @@ export default function WorkbenchPage() {
           <Alert
             type="info"
             showIcon
-            message="按步骤完成选址分析"
-            description="系统会先采集和整理数据，再做 AI 数据核验、人工补充、评分分析和 AI 报告。数据核验会明确标记已有数据、缺失数据和建议补充项。"
+            message={`当前阶段：${activeWorkflowStep?.title || '新建或选择项目'}`}
+            description={`下一步：${activeWorkflowStep?.description || '先在左侧新建项目，或选择已有项目。'}`}
             style={{marginBottom: 12}}
           />
 
