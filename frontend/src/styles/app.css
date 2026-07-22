@@ -71,12 +71,19 @@
 .v11-step-card.done{border-left-color:#52c41a;background:#fbfff7}
 .v11-step-card .ant-card-head{min-height:46px}
 .v11-step-card .ant-alert-description .ant-typography{font-size:13px}
-.v11-message-list{min-height:300px;max-height:46vh;overflow:auto;border:1px solid #e5eaf1;border-radius:12px;padding:12px;background:#fbfcfe;margin-bottom:12px}
+.v11-center-panel>.v11-action-card{order:1}
+.v11-center-panel>.v11-result-card{order:2}
+.v11-chat-card .ant-card-body{display:flex;flex-direction:column}
+.v11-chat-hint{display:block;margin-bottom:8px}
+.v11-message-list{min-height:180px;height:260px;max-height:260px;overflow:auto;border:1px solid #e5eaf1;border-radius:12px;padding:12px;background:#fbfcfe;margin-bottom:10px}
 .v11-message{max-width:86%;padding:10px 12px;border-radius:12px;margin-bottom:10px;background:#fff;border:1px solid #edf1f6}
 .v11-message.user{margin-left:auto;background:#eef6ff;border-color:#cde4ff}
 .v11-message.assistant{background:#f4fbf6;border-color:#d4efd9}
 .v11-message.system{max-width:100%;background:#f8fafc}
+.v11-quick-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.v11-chat-input-row{flex:none}
 .v11-result-card .markdown-report{max-width:100%}
+.v11-report-export-card{margin-top:16px;border:1px solid #d6e4ff;background:#f7fbff}
 .v11-right-panel .ant-card-body{padding:14px}
 .v11-config-page{max-width:1320px;margin:18px auto;padding:0 18px 24px;display:flex;flex-direction:column;gap:14px}
 .v11-config-page>.ant-card{border-radius:14px;box-shadow:0 8px 22px rgba(15,23,42,.06)}

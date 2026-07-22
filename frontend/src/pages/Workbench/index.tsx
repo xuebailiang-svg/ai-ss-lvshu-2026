@@ -947,37 +947,6 @@ export default function WorkbenchPage() {
           </div>
         </Card>
 
-        <Card title={<Space><RobotOutlined />聊天式工作区</Space>} className="v11-chat-card">
-          <div className="v11-message-list">
-            {messages.map((item, index) => (
-              <div key={`${item.role}-${index}`} className={`v11-message ${item.role}`}>
-                <Tag color={item.role === 'user' ? 'blue' : item.role === 'assistant' ? 'green' : 'default'}>
-                  {item.role === 'user' ? '你' : item.role === 'assistant' ? 'AI助手' : '系统'}
-                </Tag>
-                <Typography.Paragraph style={{whiteSpace: 'pre-wrap', margin: '6px 0 0'}}>{item.content}</Typography.Paragraph>
-              </div>
-            ))}
-          </div>
-          <Space wrap style={{marginBottom: 10}}>
-            {QUICK_MESSAGES.map(item => <Button key={item} size="small" onClick={() => setChatInput(item)}>{item}</Button>)}
-          </Space>
-          <Space.Compact style={{width: '100%'}}>
-            <Input.TextArea
-              value={chatInput}
-              placeholder="输入地址、选址问题或报告要求，例如：为什么这个位置竞品风险高？"
-              autoSize={{minRows: 2, maxRows: 5}}
-              onChange={event => setChatInput(event.target.value)}
-              onPressEnter={event => {
-                if (!event.shiftKey) {
-                  event.preventDefault();
-                  void sendMessage();
-                }
-              }}
-            />
-            <Button type="primary" icon={<SendOutlined />} loading={actionLoading === 'chat'} onClick={sendMessage}>发送</Button>
-          </Space.Compact>
-        </Card>
-
         {(quality || aiReview || score || reportContent) && (
           <Card title="分析结果与报告" className="v11-result-card">
             <Row gutter={[12, 12]}>
@@ -1036,10 +1005,7 @@ export default function WorkbenchPage() {
                 <Col xs={24} md={8}>
                   <Card size="small">
                     <Statistic title="报告状态" value="已生成" />
-                    <Space wrap>
-                      <Button size="small" onClick={() => downloadHtml(`${projectTitle(selectedProject)}-选址报告.html`, reportContent)}>导出 HTML</Button>
-                      <Button size="small" onClick={() => window.print()}>打印 / PDF</Button>
-                    </Space>
+                    <Typography.Text type="secondary">导出入口已移到报告末尾，阅读确认后再导出。</Typography.Text>
                   </Card>
                 </Col>
               )}
@@ -1088,6 +1054,16 @@ export default function WorkbenchPage() {
               <>
                 <Divider />
                 <MarkdownReport content={reportContent} />
+                <Card size="small" className="v11-report-export-card">
+                  <Space direction="vertical" size={8}>
+                    <Typography.Text strong>报告导出</Typography.Text>
+                    <Typography.Text type="secondary">确认报告内容后，可导出 HTML 或使用浏览器打印为 PDF。</Typography.Text>
+                    <Space wrap>
+                      <Button type="primary" onClick={() => downloadHtml(`${projectTitle(selectedProject)}-选址报告.html`, reportContent)}>导出 HTML</Button>
+                      <Button onClick={() => window.print()}>打印 / PDF</Button>
+                    </Space>
+                  </Space>
+                </Card>
               </>
             )}
           </Card>
@@ -1118,6 +1094,38 @@ export default function WorkbenchPage() {
           ) : (
             <Alert type="info" showIcon message="请先选择或创建项目" />
           )}
+        </Card>
+
+        <Card title={<Space><RobotOutlined />AI 助手</Space>} className="v11-chat-card">
+          <Typography.Text type="secondary" className="v11-chat-hint">围绕当前项目提问，不会修改真实数据。</Typography.Text>
+          <div className="v11-message-list">
+            {messages.map((item, index) => (
+              <div key={`${item.role}-${index}`} className={`v11-message ${item.role}`}>
+                <Tag color={item.role === 'user' ? 'blue' : item.role === 'assistant' ? 'green' : 'default'}>
+                  {item.role === 'user' ? '你' : item.role === 'assistant' ? 'AI助手' : '系统'}
+                </Tag>
+                <Typography.Paragraph style={{whiteSpace: 'pre-wrap', margin: '6px 0 0'}}>{item.content}</Typography.Paragraph>
+              </div>
+            ))}
+          </div>
+          <div className="v11-quick-actions">
+            {QUICK_MESSAGES.map(item => <Button key={item} size="small" onClick={() => setChatInput(item)}>{item}</Button>)}
+          </div>
+          <Space.Compact className="v11-chat-input-row" style={{width: '100%'}}>
+            <Input.TextArea
+              value={chatInput}
+              placeholder="输入选址问题"
+              autoSize={{minRows: 2, maxRows: 4}}
+              onChange={event => setChatInput(event.target.value)}
+              onPressEnter={event => {
+                if (!event.shiftKey) {
+                  event.preventDefault();
+                  void sendMessage();
+                }
+              }}
+            />
+            <Button type="primary" icon={<SendOutlined />} loading={actionLoading === 'chat'} onClick={sendMessage}>发送</Button>
+          </Space.Compact>
         </Card>
 
         <Card title="选址维度">
