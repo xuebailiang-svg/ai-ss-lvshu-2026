@@ -165,12 +165,12 @@ function buildWorkflowSteps(
 
   return [
     {
-      title: '1. 新建或选择项目',
+      title: '新建或选择项目',
       description: hasProject ? `当前项目：${projectTitle(project)}` : '先在左侧新建项目，或选择已有项目。',
       status: hasProject ? 'finish' : 'process',
     },
     {
-      title: '2. 确认地址和范围',
+      title: '确认地址和范围',
       description: hasProject
         ? hasProjectLocation(project)
           ? '项目已有经纬度，可直接采集周边数据。'
@@ -179,33 +179,33 @@ function buildWorkflowSteps(
       status: !hasProject ? 'wait' : hasProjectLocation(project) ? 'finish' : 'process',
     },
     {
-      title: '3. 采集基础数据',
+      title: '采集基础数据',
       description: hasBaseData
         ? `已采集：POI ${poiCount}、竞品 ${competitorCount}、餐饮 ${foodCount}、娱乐 ${entertainmentCount}。`
         : '点击采集高德 POI、获取竞品、获取配套，建立基础数据底座。',
       status: hasBaseData ? 'finish' : hasProject ? 'process' : 'wait',
     },
     {
-      title: '4. 人工确认和补充',
+      title: '人工确认和补充',
       description: hasSupplementData
         ? '已有部分竞品或租金数据，建议继续确认有效性并补充经营信息。'
         : '确认疑似竞品、配套是否真实有效，并补充租金、价格、配置、上座率等人工数据。',
       status: hasSupplementData ? 'finish' : hasBaseData ? 'process' : 'wait',
     },
     {
-      title: '5. 数据核验',
+      title: '数据核验',
       description: quality
         ? `当前完整度 ${qualityScore}%，缺失 ${Array.isArray(quality.missing) ? quality.missing.length : 0} 项。`
-        : '先检查已有数据和缺失数据；后续将接入 AI 审核结论和补充建议。',
+        : '点击 AI 数据核验，系统会先检查已有数据和缺失数据，再给出 AI 初审结论和补充建议。',
       status: quality ? 'finish' : hasBaseData ? 'process' : 'wait',
     },
     {
-      title: '6. 评分分析',
+      title: '评分分析',
       description: score ? `综合评分 ${countText(score.total_score)}，评级 ${score.level || '--'}。` : '数据核验后执行评分，得到各维度得分和风险项。',
       status: score ? 'finish' : quality ? 'process' : 'wait',
     },
     {
-      title: '7. 生成报告和继续咨询',
+      title: '生成报告和继续咨询',
       description: reportContent ? '报告已生成，可导出 HTML 或打印为 PDF。' : '生成客户可读报告，并围绕项目继续向 AI 咨询。',
       status: reportContent ? 'finish' : score ? 'process' : 'wait',
     },
@@ -597,6 +597,17 @@ export default function WorkbenchPage() {
                   className={isActive ? 'v11-project-item active' : 'v11-project-item'}
                   onClick={() => setSelectedProjectId(item.project_id)}
                   actions={[
+                    <Button
+                      key="open"
+                      size="small"
+                      type={isActive ? 'primary' : 'default'}
+                      onClick={event => {
+                        event.stopPropagation();
+                        setSelectedProjectId(item.project_id);
+                      }}
+                    >
+                      {isActive ? '已打开' : '打开'}
+                    </Button>,
                     <Popconfirm
                       key="delete"
                       title="确认删除该项目？"
@@ -713,7 +724,7 @@ export default function WorkbenchPage() {
             type="info"
             showIcon
             message="按步骤完成选址分析"
-            description="系统会先采集和整理数据，再做数据核验、评分分析和 AI 报告。数据核验当前展示结构化缺口，下一阶段会接入 AI 审核结论和人工补充建议。"
+            description="系统会先采集和整理数据，再做 AI 数据核验、人工补充、评分分析和 AI 报告。数据核验会明确标记已有数据、缺失数据和建议补充项。"
             style={{marginBottom: 12}}
           />
           <Steps
