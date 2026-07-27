@@ -29,6 +29,11 @@ CRAWLER_KEYS = {
     "crawler_rate_limit_seconds",
     "crawler_allowed_domains",
     "crawler_blocked_domains",
+    "crawler_search_enabled",
+    "crawler_search_provider",
+    "crawler_search_max_results",
+    "crawler_search_timeout_seconds",
+    "crawler_search_allowed_domains",
 }
 SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"} | CRAWLER_KEYS
 
@@ -117,7 +122,18 @@ def config_status(db: Session) -> dict[str, Any]:
     crawler_rate_limit, _ = _effective(db, "crawler_rate_limit_seconds", str(settings.crawler_rate_limit_seconds), warnings)
     crawler_allowed_domains, _ = _effective(db, "crawler_allowed_domains", settings.crawler_allowed_domains, warnings)
     crawler_blocked_domains, _ = _effective(db, "crawler_blocked_domains", settings.crawler_blocked_domains, warnings)
+    crawler_search_enabled_raw, _ = _effective(
+        db,
+        "crawler_search_enabled",
+        "true" if settings.crawler_search_enabled else "false",
+        warnings,
+    )
+    crawler_search_provider, _ = _effective(db, "crawler_search_provider", settings.crawler_search_provider, warnings)
+    crawler_search_max_results, _ = _effective(db, "crawler_search_max_results", str(settings.crawler_search_max_results), warnings)
+    crawler_search_timeout, _ = _effective(db, "crawler_search_timeout_seconds", str(settings.crawler_search_timeout_seconds), warnings)
+    crawler_search_allowed_domains, _ = _effective(db, "crawler_search_allowed_domains", settings.crawler_search_allowed_domains, warnings)
     crawler_enabled = str(crawler_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+    crawler_search_enabled = str(crawler_search_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
     return {
         "management_enabled": bool(settings.admin_config_token and len(settings.system_config_encryption_key) >= 32),
         "deepseek": {
@@ -160,5 +176,10 @@ def config_status(db: Session) -> dict[str, Any]:
         "crawler_rate_limit_seconds": int(crawler_rate_limit or 5),
         "crawler_allowed_domains": crawler_allowed_domains or "",
         "crawler_blocked_domains": crawler_blocked_domains or "",
+        "crawler_search_enabled": crawler_search_enabled,
+        "crawler_search_provider": crawler_search_provider or "duckduckgo_html",
+        "crawler_search_max_results": int(crawler_search_max_results or 5),
+        "crawler_search_timeout_seconds": int(crawler_search_timeout or 10),
+        "crawler_search_allowed_domains": crawler_search_allowed_domains or "",
         "warnings": warnings,
     }

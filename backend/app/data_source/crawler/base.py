@@ -40,6 +40,11 @@ class CrawlerSettings:
     rate_limit_seconds: int
     allowed_domains: list[str]
     blocked_domains: list[str]
+    search_enabled: bool
+    search_provider: str
+    search_max_results: int
+    search_timeout_seconds: int
+    search_allowed_domains: list[str]
 
 
 def crawler_settings() -> CrawlerSettings:
@@ -53,6 +58,11 @@ def crawler_settings() -> CrawlerSettings:
         rate_limit_seconds=_int_config("crawler_rate_limit_seconds", settings.crawler_rate_limit_seconds),
         allowed_domains=_csv_config("crawler_allowed_domains", settings.crawler_allowed_domains),
         blocked_domains=_csv_config("crawler_blocked_domains", settings.crawler_blocked_domains),
+        search_enabled=_truthy(resolve_config_value("crawler_search_enabled", "true" if settings.crawler_search_enabled else "false")),
+        search_provider=resolve_config_value("crawler_search_provider", settings.crawler_search_provider) or "duckduckgo_html",
+        search_max_results=_int_config("crawler_search_max_results", settings.crawler_search_max_results),
+        search_timeout_seconds=_int_config("crawler_search_timeout_seconds", settings.crawler_search_timeout_seconds),
+        search_allowed_domains=_csv_config("crawler_search_allowed_domains", settings.crawler_search_allowed_domains),
     )
 
 

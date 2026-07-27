@@ -12,6 +12,7 @@ from app.llm.client import DeepSeekClient, DeepSeekConfigError
 from app.llm.prompts import AI_DATA_REVIEW_PROMPT
 from app.llm.schemas import AIAnalysisInput
 from app.models import AICallLogRecord, AIReportRecord, SiteScoreRecord
+from app.demo_data.service import simulation_data_summary
 from app.memory.service import relevant_memory_context
 from app.projects.service import data_quality, dataset, get_project
 from app.scoring_engine.service import score_project
@@ -62,6 +63,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
     if score is None:
         score = score_project(db, project_id)
     quality = data_quality(db, project_id)
+    simulation_summary = simulation_data_summary(db, project_id)
     memories = relevant_memory_context(
         db,
         project_id,
@@ -112,6 +114,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         rent={},
         score_result=score,
         data_quality=quality,
+        simulation_data_summary=simulation_summary,
         memory_context=memories,
         risks=list(score.get("risks") or []) + list(quality.get("warnings") or []),
     )
@@ -124,6 +127,7 @@ def build_ai_review_input(db: Session, project_id: str) -> dict[str, Any]:
 
     project_dataset = dataset(db, project)
     quality = data_quality(db, project_id)
+    simulation_summary = simulation_data_summary(db, project_id)
     score = latest_score(db, project_id)
     pois = project_dataset.get("pois", [])
     competitors = project_dataset.get("competitors", [])
@@ -154,6 +158,7 @@ def build_ai_review_input(db: Session, project_id: str) -> dict[str, Any]:
                 "rent_record_count": 1 if rent_records else 0,
             },
             "data_quality": quality,
+            "simulation_data_summary": simulation_summary,
             "latest_score": score or {},
             "existing_data": {
                 "sample_competitors": [

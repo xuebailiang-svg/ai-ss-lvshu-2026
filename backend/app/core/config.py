@@ -39,6 +39,11 @@ class Settings(BaseModel):
     crawler_rate_limit_seconds: int
     crawler_allowed_domains: str
     crawler_blocked_domains: str
+    crawler_search_enabled: bool
+    crawler_search_provider: str
+    crawler_search_max_results: int
+    crawler_search_timeout_seconds: int
+    crawler_search_allowed_domains: str
 
 @lru_cache
 def get_settings() -> Settings:
@@ -72,4 +77,9 @@ def get_settings() -> Settings:
         crawler_rate_limit_seconds=int(os.getenv("CRAWLER_RATE_LIMIT_SECONDS", "5")),
         crawler_allowed_domains=os.getenv("CRAWLER_ALLOWED_DOMAINS", ""),
         crawler_blocked_domains=os.getenv("CRAWLER_BLOCKED_DOMAINS", ""),
+        crawler_search_enabled=env_bool("CRAWLER_SEARCH_ENABLED", True),
+        crawler_search_provider=os.getenv("CRAWLER_SEARCH_PROVIDER", "duckduckgo_html"),
+        crawler_search_max_results=int(os.getenv("CRAWLER_SEARCH_MAX_RESULTS", "5")),
+        crawler_search_timeout_seconds=int(os.getenv("CRAWLER_SEARCH_TIMEOUT_SECONDS", "10")),
+        crawler_search_allowed_domains=os.getenv("CRAWLER_SEARCH_ALLOWED_DOMAINS", ""),
     )

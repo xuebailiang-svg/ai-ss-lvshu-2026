@@ -17,6 +17,9 @@ SITE_SELECTION_REPORT_PROMPT = """
 9. 租金成本分析只能使用 score_result / rent_analysis，不得推测城市租金水平，不得预测营业收入，不得根据租金直接判断盈利。
    旧版兼容要求：报告可以包含“## 六、租金成本分析”；只能使用输入中的 rent_analysis；必须说明有效租金样本数量、平均租金单价、租金压力等级和数据完整度；禁止推测城市租金水平；禁止预测营业收入；禁止根据租金直接判断项目是否盈利。
 10. 数据不足时直接说明“不足以判断”，并列出需要补充的数据。
+11. 如果输入中的 simulation_data_summary.has_simulation_data=true，报告开头必须增加“## 数据说明”，明确说明包含演示模拟数据，仅用于产品流程演示，不能作为真实投资决策依据。
+12. source=simulation、raw_data.demo_generated 或 demo_detail 中的数据只能标注为“演示模拟数据”；不得写成“真实调研”“已实地确认”或“来自第三方平台”。
+13. source=amap 只能描述为“高德采集候选数据”；pending_review 只能作为待确认线索；只有 status=confirmed 且非 simulation 的人工/爬虫/第三方数据，才能描述为已确认事实。
 
 报告必须使用 Markdown，并固定包含以下结构：
 
@@ -83,6 +86,7 @@ AI_DATA_REVIEW_PROMPT = """
 5. pending_review 只能作为待人工确认数据，不能作为确定事实。
 6. rejected 数据不得作为有效数据。
 7. 输出必须是 Markdown。
+8. 如果输入中的 simulation_data_summary.has_simulation_data=true，必须明确指出当前包含演示模拟数据，并建议正式测试前补充真实人工核实数据。
 
 输出结构固定为：
 

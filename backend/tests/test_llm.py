@@ -199,6 +199,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
         "rent",
         "score_result",
         "data_quality",
+        "simulation_data_summary",
         "memory_context",
         "risks",
     }
@@ -218,6 +219,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
     assert data["rent_analysis"]["average_rent_unit_price"] == 60
     assert data["rent_analysis"]["rent_pressure"] == "medium"
     assert data["rent"] == {}
+    assert data["simulation_data_summary"]["has_simulation_data"] is False
     assert data["score_result"]["total_score"] >= 0
 
 
@@ -302,6 +304,8 @@ def test_report_prompt_requires_competitor_evidence_and_missing_data_disclosure(
     assert "competitor_analysis" in SITE_SELECTION_REPORT_PROMPT
     assert "pending_review 只能作为数量参考" in SITE_SELECTION_REPORT_PROMPT
     assert "禁止补造价格、配置、上座率、机器数量或距离" in SITE_SELECTION_REPORT_PROMPT
+    assert "simulation_data_summary" in SITE_SELECTION_REPORT_PROMPT
+    assert "演示模拟数据" in SITE_SELECTION_REPORT_PROMPT
 
 
 def test_ai_input_handles_missing_supporting_details_without_guessing(client):

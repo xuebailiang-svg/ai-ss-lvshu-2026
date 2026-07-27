@@ -35,6 +35,7 @@ import {
   createProject,
   deleteProject,
   enrichProjectCrawler,
+  generateDemoData,
   generateProjectAiReview,
   getProjectDataQuality,
   listProjects,
@@ -148,6 +149,24 @@ function numberFromStats(project: ProjectItem, key: string) {
   return typeof value === 'number' ? value : 0;
 }
 
+function projectProgress(project: ProjectItem) {
+  const poiCount = numberFromStats(project, 'poi_count');
+  const competitorCount = numberFromStats(project, 'competitor_count');
+  const foodCount = numberFromStats(project, 'food_count');
+  const entertainmentCount = numberFromStats(project, 'entertainment_count');
+  const rentCount = numberFromStats(project, 'rent_count');
+  const completed = [
+    poiCount > 0,
+    competitorCount > 0,
+    foodCount > 0 || entertainmentCount > 0,
+    rentCount > 0,
+  ].filter(Boolean).length;
+  if (completed === 0) return {completed, total: 4, text: '待采集', color: 'default'};
+  if (completed >= 4) return {completed, total: 4, text: '数据较完整', color: 'green'};
+  if (completed >= 3 && rentCount === 0) return {completed, total: 4, text: '缺租金', color: 'orange'};
+  return {completed, total: 4, text: `进度 ${completed}/4`, color: completed >= 2 ? 'blue' : 'orange'};
+}
+
 type WorkflowStep = {
   title: string;
   description: string;
@@ -206,10 +225,10 @@ function buildWorkflowSteps(
       status: hasBaseData ? 'finish' : hasProject ? 'process' : 'wait',
     },
     {
-      title: '爬虫补充数据',
+      title: '搜索并补充公开数据',
       description: crawlerDone
-        ? '爬虫已尝试补充公开网页中的竞品、配套或租金线索，结果需要人工确认。'
-        : '基于已有候选对象，尝试抓取允许访问的公开页面补充经营、配套和租金线索。',
+        ? '系统已尝试搜索并抓取公开网页中的竞品、配套或租金线索，结果需要人工确认。'
+        : '基于名称、地址和项目位置，搜索允许访问的公开页面补充经营、配套和租金线索。',
       status: crawlerDone ? 'finish' : hasBaseData ? 'process' : 'wait',
     },
     {
@@ -343,18 +362,32 @@ function summarizeAction(action: string, result: any) {
     ].join('\n');
   }
 
-  if (action.startsWith('爬虫补充')) {
+  if (action.startsWith('爬虫补充') || action.startsWith('搜索并补充')) {
     const saved = result?.saved || {};
     return [
       `${action}完成。`,
-      `任务数：${countText(result?.task_count)}`,
-      `成功：${countText(result?.completed_count)}`,
+      `搜索到候选网页：${countText(result?.discovered_url_count)}`,
+      `成功抓取：${countText(result?.completed_count)}`,
+      `抽取到有效字段：${countText((saved.competitors || 0) + (saved.supporting || 0) + (saved.rent || 0))}`,
+      `待人工确认：${countText((saved.competitors || 0) + (saved.supporting || 0) + (saved.rent || 0))}`,
       `失败：${countText(result?.failed_count)}`,
       `跳过：${countText(result?.skipped_count)}`,
       `补充竞品：${countText(saved.competitors)}`,
       `补充配套：${countText(saved.supporting)}`,
       `补充租金：${countText(saved.rent)}`,
-      '下一步建议：进入人工确认和补充，确认爬虫数据是否可信。',
+      '下一步建议：进入 Step 5 人工确认，确认公开网页线索是否可信。',
+    ].join('\n');
+  }
+
+  if (action === '演示数据生成') {
+    const generated = result?.generated || {};
+    const updated = result?.updated || {};
+    return [
+      '演示模拟数据已生成。',
+      `补全竞品：${countText(updated.competitors)} 条，新增竞品样本：${countText(generated.competitors)} 条`,
+      `补全配套：${countText(updated.supporting)} 条，新增配套样本：${countText(generated.supporting)} 条`,
+      `新增租金样本：${countText(generated.rent)} 条`,
+      '注意：这些数据仅用于演示流程，正式测试前仍需人工核实。下一步建议：执行 AI 数据核验和评分分析。',
     ].join('\n');
   }
 
@@ -414,6 +447,7 @@ export default function WorkbenchPage() {
   const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
   const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [sideContextLoading, setSideContextLoading] = useState(false);
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [actionResults, setActionResults] = useState<Record<string, ActionResult>>({});
@@ -449,6 +483,7 @@ export default function WorkbenchPage() {
   };
 
   const loadSideContext = async (projectId?: string) => {
+    setSideContextLoading(true);
     try {
       const [sourceResult, configResult, memoryResult] = await Promise.all([
         getDataSourceStatus().catch(() => ({items: []})),
@@ -462,6 +497,8 @@ export default function WorkbenchPage() {
       setMemories(memoryResult.items || []);
     } catch {
       // 右侧上下文失败不阻断工作台主流程。
+    } finally {
+      setSideContextLoading(false);
     }
   };
 
@@ -633,6 +670,15 @@ export default function WorkbenchPage() {
     if (result) setReport(result);
   };
 
+  const runDemoData = async () => {
+    const result = await runAction('demoData', '演示数据生成', () => generateDemoData(selectedProjectId));
+    if (!result) return;
+    setQuality(null);
+    setAiReview(null);
+    setScore(null);
+    setReport(null);
+  };
+
   const sendMessage = async () => {
     const content = chatInput.trim();
     if (!content) return;
@@ -679,7 +725,9 @@ export default function WorkbenchPage() {
   const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
   const crawlerSources = dataSources.filter(source => source.name.startsWith('crawler_'));
   const crawlerAvailable = crawlerSources.some(source => source.status === 'available');
-  const crawlerDisabledReason = crawlerSources.length
+  const crawlerDisabledReason = sideContextLoading && crawlerSources.length === 0
+    ? '数据源状态加载中...'
+    : crawlerSources.length
     ? crawlerSources.map(source => `${source.display_name}：${source.status === 'available' ? '可用' : providerStatusText(source.status)}`).join('；')
     : '爬虫数据源尚未注册';
   const hasQualityResult = Boolean(quality);
@@ -709,9 +757,7 @@ export default function WorkbenchPage() {
             renderItem={item => {
               const isActive = item.project_id === selectedProjectId;
               const poiCount = numberFromStats(item, 'poi_count');
-              const competitorCount = numberFromStats(item, 'competitor_count');
-              const rentCount = numberFromStats(item, 'rent_count');
-              const completionCount = [poiCount > 0, competitorCount > 0, rentCount > 0].filter(Boolean).length;
+              const progress = projectProgress(item);
               return (
                 <List.Item
                   className={isActive ? 'v11-project-item active' : 'v11-project-item'}
@@ -762,9 +808,7 @@ export default function WorkbenchPage() {
                     description={
                       <Space size={[4, 4]} wrap>
                         <Tag>{statusText(item.status)}</Tag>
-                        <Tag color={completionCount >= 2 ? 'green' : completionCount === 1 ? 'orange' : 'default'}>
-                          完成 {completionCount}/3
-                        </Tag>
+                        <Tag color={progress.color}>{progress.text}</Tag>
                         <Tag color={poiCount > 0 ? 'green' : 'default'}>POI {poiCount}</Tag>
                       </Space>
                     }
@@ -903,39 +947,39 @@ export default function WorkbenchPage() {
                 </Space>
             </Card>
 
-            <Card size="small" className={hasCrawlerResult ? 'v11-step-card done' : hasAmapData ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：爬虫补充数据" extra={doneTag(hasCrawlerResult, actionLoading.startsWith('crawler'))}>
+            <Card size="small" className={hasCrawlerResult ? 'v11-step-card done' : hasAmapData ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：搜索并补充公开数据" extra={doneTag(hasCrawlerResult, actionLoading.startsWith('crawler'))}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
                     type={crawlerAvailable ? 'info' : 'warning'}
                     showIcon
-                    message={crawlerAvailable ? '从公开网页补充经营线索' : '爬虫默认关闭'}
+                    message={crawlerAvailable ? '按名称和地址搜索公开网页' : '爬虫搜索默认关闭'}
                     description={crawlerAvailable
-                      ? '爬虫只处理允许访问的公开页面；补充结果默认待人工确认，不直接作为最终事实。'
-                      : `请先在配置页启用爬虫数据源。${crawlerDisabledReason}`}
+                      ? '系统会优先抓取已有来源链接；没有链接时会尝试搜索公开网页。结果默认待人工确认，不直接作为最终事实。'
+                      : `请先在配置页启用爬虫搜索能力。${crawlerDisabledReason}`}
                   />
                   <Button
                     disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
                     loading={actionLoading === 'crawlerCompetitor'}
-                    onClick={() => runAction('crawlerCompetitor', '爬虫补充竞品信息', () => enrichProjectCrawler(selectedProjectId, ['competitor']))}
+                    onClick={() => runAction('crawlerCompetitor', '搜索并补充竞品信息', () => enrichProjectCrawler(selectedProjectId, ['competitor']))}
                     block
                   >
-                    爬虫补充竞品信息
+                    搜索并补充竞品信息
                   </Button>
                   <Button
                     disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
                     loading={actionLoading === 'crawlerSupporting'}
-                    onClick={() => runAction('crawlerSupporting', '爬虫补充配套信息', () => enrichProjectCrawler(selectedProjectId, ['supporting']))}
+                    onClick={() => runAction('crawlerSupporting', '搜索并补充周边配套', () => enrichProjectCrawler(selectedProjectId, ['supporting']))}
                     block
                   >
-                    爬虫补充配套信息
+                    搜索并补充周边配套
                   </Button>
                   <Button
                     disabled={!selectedProjectId || !crawlerAvailable}
                     loading={actionLoading === 'crawlerRent'}
-                    onClick={() => runAction('crawlerRent', '爬虫补充租金信息', () => enrichProjectCrawler(selectedProjectId, ['rent']))}
+                    onClick={() => runAction('crawlerRent', '搜索并补充租金信息', () => enrichProjectCrawler(selectedProjectId, ['rent']))}
                     block
                   >
-                    爬虫补充租金信息
+                    搜索并补充租金信息
                   </Button>
                   {inlineResult('crawlerCompetitor')}
                   {inlineResult('crawlerSupporting')}
@@ -954,9 +998,25 @@ export default function WorkbenchPage() {
                   <Button disabled={!selectedProjectId} onClick={() => navigate(`/projects/${selectedProjectId}/supplement?focus=general`)} block>
                     进入人工补充
                   </Button>
+                  <Popconfirm
+                    title="生成演示模拟数据？"
+                    description="系统会基于已采集的POI补齐一批示例竞品、配套和租金数据，仅用于演示，不代表真实调研。"
+                    okText="生成演示数据"
+                    cancelText="取消"
+                    onConfirm={runDemoData}
+                  >
+                    <Button
+                      disabled={!selectedProjectId}
+                      loading={actionLoading === 'demoData'}
+                      block
+                    >
+                      一键生成演示数据
+                    </Button>
+                  </Popconfirm>
                   <Typography.Text type="secondary">
                     人工审核重点：竞品是否真实、价格/配置/上座率、真实租金、夜间营业情况。
                   </Typography.Text>
+                  {inlineResult('demoData')}
                 </Space>
             </Card>
 
@@ -1054,7 +1114,7 @@ export default function WorkbenchPage() {
                         style={{marginTop: 8}}
                         type="info"
                         showIcon
-                        message="爬虫补充数据"
+                        message="公开网页补充数据"
                         description={`任务 ${countText(quality.crawler_quality.total_task_count)} 个，待人工确认 ${countText(quality.crawler_quality.pending_review_count)} 条，失败 ${countText(quality.crawler_quality.failed_task_count)} 条。`}
                       />
                     )}

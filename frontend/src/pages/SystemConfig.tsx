@@ -132,6 +132,11 @@ export default function SystemConfig() {
         crawler_rate_limit_seconds: Number(config?.crawler_rate_limit_seconds || 5),
         crawler_allowed_domains: config?.crawler_allowed_domains || '',
         crawler_blocked_domains: config?.crawler_blocked_domains || '',
+        crawler_search_enabled: config?.crawler_search_enabled ?? true,
+        crawler_search_provider: config?.crawler_search_provider || 'duckduckgo_html',
+        crawler_search_max_results: Number(config?.crawler_search_max_results || 5),
+        crawler_search_timeout_seconds: Number(config?.crawler_search_timeout_seconds || 10),
+        crawler_search_allowed_domains: config?.crawler_search_allowed_domains || '',
       });
     } finally {
       setLoading(false);
@@ -253,6 +258,11 @@ export default function SystemConfig() {
       'crawler_rate_limit_seconds',
       'crawler_allowed_domains',
       'crawler_blocked_domains',
+      'crawler_search_enabled',
+      'crawler_search_provider',
+      'crawler_search_max_results',
+      'crawler_search_timeout_seconds',
+      'crawler_search_allowed_domains',
     ]);
     return saveConfigPatch(values);
   };
@@ -570,6 +580,31 @@ export default function SystemConfig() {
                   <Col xs={24} md={6}>
                     <Form.Item name="crawler_blocked_domains" label="禁用域名">
                       <Input placeholder="禁止访问的域名，逗号分隔" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_search_enabled" label="启用搜索发现" valuePropName="checked">
+                      <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_search_provider" label="搜索 Provider">
+                      <Input placeholder="duckduckgo_html" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_search_max_results" label="单对象搜索结果数">
+                      <InputNumber min={1} max={20} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item name="crawler_search_timeout_seconds" label="搜索超时（秒）">
+                      <InputNumber min={3} max={60} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="crawler_search_allowed_domains" label="搜索允许域名">
+                      <Input placeholder="可留空；如 dianping.com,meituan.com,ke.com" />
                     </Form.Item>
                   </Col>
                 </Row>

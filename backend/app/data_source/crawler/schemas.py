@@ -13,6 +13,7 @@ CrawlTaskStatus = Literal["pending", "running", "success", "partial", "failed", 
 class CrawlEnrichRequest(BaseModel):
     types: list[CrawlTaskType] = Field(default_factory=lambda: ["competitor", "supporting", "rent"])
     max_items: int = Field(default=20, ge=1, le=100)
+    discover_urls: bool = True
 
 
 class CrawlSavedCounts(BaseModel):
@@ -28,6 +29,7 @@ class CrawlEnrichResponse(BaseModel):
     completed_count: int
     failed_count: int
     skipped_count: int = 0
+    discovered_url_count: int = 0
     saved: CrawlSavedCounts
     message: str
 

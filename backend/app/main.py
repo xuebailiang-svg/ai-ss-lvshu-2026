@@ -10,6 +10,7 @@ from app.data_source.competitor.router import router as competitor_data_router
 from app.data_source.crawler.router import router as crawler_data_router
 from app.data_source.supporting.router import router as supporting_data_router
 from app.data_source.rent.router import router as rent_data_router
+from app.demo_data.router import router as demo_data_router
 from app.llm import router as llm_router
 from app.manual_input import router as manual_input_router
 from app.map_data import router as map_data_router
@@ -32,6 +33,7 @@ app.include_router(competitor_data_router)
 app.include_router(crawler_data_router)
 app.include_router(supporting_data_router)
 app.include_router(rent_data_router)
+app.include_router(demo_data_router)
 app.include_router(projects_router)
 app.include_router(map_data_router)
 app.include_router(manual_input_router)

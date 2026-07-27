@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.data_source.crawler.base import crawler_settings
 from app.data_source.crawler.crawl4ai_client import Crawl4AIClient
+from app.data_source.crawler.search_discovery import (
+    SearchDiscoveryClient,
+    discover_urls_for_payload,
+)
 from app.models import (
     CrawlTaskRecord,
     EntertainmentRecord,
@@ -149,9 +153,14 @@ def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
     if unit is None and monthly is not None and area:
         unit = round(monthly / area, 2)
     return {
+        "address": _text(markdown, r"(?:地址|位置)[：:\s]{0,4}([^\n，,。；;]{4,80})"),
         "monthly_rent": monthly,
         "area_sqm": area,
         "rent_per_sqm": unit,
+        "property_fee": _num(markdown, r"(?:物业费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        "transfer_fee": _num(markdown, r"(?:转让费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        "floor": _text(markdown, r"(?:楼层)[：:\s]{0,4}([^\n，,。；;]{1,30})"),
+        "publish_date": _text(markdown, r"(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?)"),
         "source_url": url,
         "review_summary": markdown[:1000],
     }
@@ -159,6 +168,13 @@ def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
 
 def _has_value(data: dict[str, Any]) -> bool:
     return any(value not in (None, "", []) for key, value in data.items() if key not in {"source_url", "review_summary"})
+
+
+def _text(text: str, pattern: str) -> str | None:
+    match = re.search(pattern, text, flags=re.I)
+    if not match:
+        return None
+    return match.group(1).strip()
 
 
 def _merge_raw(row: Any, detail: dict[str, Any]) -> None:
@@ -212,6 +228,37 @@ def _apply_rent(row: RentDataRecord, detail: dict[str, Any]) -> bool:
     return changed or _has_value(detail)
 
 
+def _create_rent_from_crawler(db: Session, project_id: str, payload: dict[str, Any], detail: dict[str, Any]) -> bool:
+    if not _has_value(detail):
+        return False
+    raw = {
+        "crawler_detail": {key: value for key, value in detail.items() if value is not None},
+        "search_query": payload.get("search_query"),
+        "search_result": payload.get("search_result"),
+        "source_url": detail.get("source_url") or payload.get("url"),
+    }
+    manual_detail = {
+        key: detail.get(key)
+        for key in ("property_fee", "transfer_fee", "floor", "publish_date", "source_url")
+        if detail.get(key) is not None
+    }
+    if manual_detail:
+        raw["manual_detail"] = manual_detail
+    row = RentDataRecord(
+        project_id=project_id,
+        monthly_rent=detail.get("monthly_rent"),
+        area_sqm=detail.get("area_sqm"),
+        rent_per_sqm=detail.get("rent_per_sqm"),
+        location_type=detail.get("address") or payload.get("address"),
+        source="crawler",
+        confidence=0.5,
+        status="pending_review",
+        raw_data=raw,
+    )
+    db.add(row)
+    return True
+
+
 def _candidate_payload(row: Any, task_type: str, record_type: str | None = None) -> dict[str, Any]:
     raw = row.raw_data if isinstance(row.raw_data, dict) else {}
     return {
@@ -226,7 +273,23 @@ def _candidate_payload(row: Any, task_type: str, record_type: str | None = None)
     }
 
 
-def _load_candidates(db: Session, project_id: str, task_type: str, limit: int) -> list[dict[str, Any]]:
+def _project_rent_payload(project: SiteProjectRecord) -> dict[str, Any]:
+    raw = project.raw_data if isinstance(project.raw_data, dict) else {}
+    return {
+        "task_type": "rent",
+        "record_type": "project",
+        "record_id": None,
+        "name": f"{project.address or project.city}周边租金",
+        "address": project.address,
+        "url": None,
+        "source": "project",
+        "status": "pending_review",
+        "expected_area_sqm": raw.get("expected_area_sqm"),
+    }
+
+
+def _load_candidates(db: Session, project: SiteProjectRecord, task_type: str, limit: int) -> list[dict[str, Any]]:
+    project_id = project.project_id
     statuses = ("pending_review", "confirmed")
     if task_type == "competitor":
         rows = db.scalars(
@@ -261,7 +324,10 @@ def _load_candidates(db: Session, project_id: str, task_type: str, limit: int) -
             .order_by(RentDataRecord.timestamp.desc(), RentDataRecord.id.desc())
             .limit(limit)
         ).all()
-        return [_candidate_payload(row, "rent") for row in rows]
+        payloads = [_candidate_payload(row, "rent") for row in rows]
+        if not payloads:
+            payloads.append(_project_rent_payload(project))
+        return payloads
     return []
 
 
@@ -295,13 +361,61 @@ def _create_task(project_id: str, payload: dict[str, Any]) -> CrawlTaskRecord:
     )
 
 
+async def _expand_payloads_with_discovery(
+    project: SiteProjectRecord,
+    payloads: list[dict[str, Any]],
+    *,
+    discover_urls: bool,
+    settings: Any,
+    discovery_client: SearchDiscoveryClient,
+) -> tuple[list[dict[str, Any]], int]:
+    expanded: list[dict[str, Any]] = []
+    discovered_url_count = 0
+    seen_task_keys: set[tuple[str, int | None, str | None]] = set()
+    for payload in payloads:
+        if payload.get("url") or not discover_urls:
+            expanded.append(payload)
+            continue
+        discovered_payloads, queries, discovered_results, error_message = await discover_urls_for_payload(
+            project,
+            payload,
+            settings=settings,
+            client=discovery_client,
+        )
+        discovered_url_count += len(discovered_payloads)
+        if not discovered_payloads:
+            expanded.append(
+                {
+                    **payload,
+                    "discovery_attempted": True,
+                    "search_queries": queries,
+                    "search_results": discovered_results,
+                    "discovery_error": error_message,
+                }
+            )
+            continue
+        for discovered_payload in discovered_payloads:
+            key = (
+                str(discovered_payload.get("task_type")),
+                discovered_payload.get("record_id"),
+                discovered_payload.get("url"),
+            )
+            if key in seen_task_keys:
+                continue
+            seen_task_keys.add(key)
+            expanded.append(discovered_payload)
+    return expanded, discovered_url_count
+
+
 async def enrich_project_with_crawler(
     db: Session,
     project_id: str,
     *,
     types: list[str],
     max_items: int,
+    discover_urls: bool = True,
     client: Crawl4AIClient | None = None,
+    discovery_client: SearchDiscoveryClient | None = None,
 ) -> dict[str, Any]:
     project: SiteProjectRecord | None = get_project(db, project_id)
     if not project:
@@ -315,6 +429,7 @@ async def enrich_project_with_crawler(
             "completed_count": 0,
             "failed_count": 0,
             "skipped_count": 0,
+            "discovered_url_count": 0,
             "saved": {"competitors": 0, "supporting": 0, "rent": 0},
             "message": "爬虫能力未启用，请先在配置页启用",
         }
@@ -323,7 +438,14 @@ async def enrich_project_with_crawler(
     per_type_limit = max(1, min(max_items, settings.max_tasks_per_project))
     payloads: list[dict[str, Any]] = []
     for task_type in allowed_types:
-        payloads.extend(_load_candidates(db, project_id, task_type, per_type_limit))
+        payloads.extend(_load_candidates(db, project, task_type, per_type_limit))
+    payloads, discovered_url_count = await _expand_payloads_with_discovery(
+        project,
+        payloads,
+        discover_urls=discover_urls,
+        settings=settings,
+        discovery_client=discovery_client or SearchDiscoveryClient(),
+    )
     payloads = payloads[: settings.max_tasks_per_project]
 
     crawler = client or Crawl4AIClient()
@@ -338,7 +460,13 @@ async def enrich_project_with_crawler(
         ok, reason = _domain_allowed(url)
         if not ok:
             task.status = "skipped"
-            task.error_message = reason
+            task.error_message = payload.get("discovery_error") or reason
+            if payload.get("discovery_attempted"):
+                task.result_snapshot = {
+                    "search_queries": payload.get("search_queries") or [],
+                    "search_results": payload.get("search_results") or [],
+                    "message": "未发现可抓取的公开网页",
+                }
             task.finished_at = _now()
             skipped += 1
             continue
@@ -365,7 +493,16 @@ async def enrich_project_with_crawler(
                 else:
                     changed = _apply_rent(target, detail)
                     saved["rent"] += 1 if changed else 0
-            task.result_snapshot = {"url": url, "extracted": detail, "changed": changed}
+            elif payload["task_type"] == "rent":
+                changed = _create_rent_from_crawler(db, project_id, payload, detail)
+                saved["rent"] += 1 if changed else 0
+            task.result_snapshot = {
+                "url": url,
+                "search_query": payload.get("search_query"),
+                "search_result": payload.get("search_result"),
+                "extracted": detail,
+                "changed": changed,
+            }
             task.status = "success" if changed else "partial"
             task.finished_at = _now()
             completed += 1
@@ -382,6 +519,7 @@ async def enrich_project_with_crawler(
         "completed_count": completed,
         "failed_count": failed,
         "skipped_count": skipped,
+        "discovered_url_count": discovered_url_count,
         "saved": saved,
         "message": "爬虫补充完成，结果需要人工确认" if completed else "未发现可抓取的公开来源URL",
     }

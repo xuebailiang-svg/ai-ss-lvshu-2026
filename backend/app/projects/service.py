@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.data_model import normalize_data
+from app.demo_data.service import simulation_data_summary
 from app.models import (
     CrawlTaskRecord,
     EntertainmentRecord,
@@ -483,6 +484,7 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
     )
     rent_quality, rent_penalty = rent_data_quality(rent_rows)
     crawler_quality = crawler_data_quality(db, project_id)
+    simulation_summary = simulation_data_summary(db, project_id)
     pois = count_rows(db, UnifiedPOIRecord, project_id)
     food = count_rows(db, FoodBusinessRecord, project_id) or count_pois_by_category(db, project_id, "food")
     entertainment = count_rows(db, EntertainmentRecord, project_id) or count_pois_by_category(db, project_id, "entertainment")
@@ -511,6 +513,8 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
     if any(item.get("missing_fields") for item in rent_quality["incomplete_items"]):
         warnings.append("已确认租金仍有建议补充信息，请核实物业类型、来源、发布日期和楼层")
     warnings.extend(crawler_quality.get("warnings", []))
+    if simulation_summary.get("has_simulation_data"):
+        warnings.append("当前包含演示模拟数据，正式业务测试前需要替换为人工核实数据")
     if pois == 0:
         missing.append("周边 POI")
     if food == 0:
@@ -538,4 +542,5 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
         "supporting_detail_quality": supporting_quality,
         "rent_quality": rent_quality,
         "crawler_quality": crawler_quality,
+        "simulation_data_summary": simulation_summary,
     }

@@ -24,6 +24,12 @@ export const collectProjectAmap = (projectId: string) => api.post(`/projects/${p
 export const collectProjectCompetitors = (projectId: string) => api.post(`/projects/${projectId}/collect/competitors`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectSupporting = (projectId: string) => api.post(`/projects/${projectId}/collect/supporting`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const generateProjectAiReview = (projectId: string) => api.post(`/projects/${projectId}/ai-review`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+export const generateDemoData = (
+  projectId: string,
+  include: Array<'competitor' | 'supporting' | 'rent'> = ['competitor', 'supporting', 'rent'],
+) => api
+  .post(`/projects/${projectId}/demo-data/generate`, {include}, {timeout: LONG_REQUEST_TIMEOUT_MS})
+  .then(response => response.data);
 
 export type CrawlerEnrichType = 'competitor' | 'supporting' | 'rent';
 
@@ -31,8 +37,9 @@ export const enrichProjectCrawler = (
   projectId: string,
   types: CrawlerEnrichType[],
   maxItems = 20,
+  discoverUrls = true,
 ) => api
-  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems}, {timeout: LONG_REQUEST_TIMEOUT_MS})
+  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems, discover_urls: discoverUrls}, {timeout: LONG_REQUEST_TIMEOUT_MS})
   .then(response => response.data);
 
 export const listProjectCrawlTasks = (projectId: string) => api

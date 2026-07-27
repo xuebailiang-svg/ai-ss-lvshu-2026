@@ -34,6 +34,7 @@ async def crawl_enrich_project(
             project_id=project_id,
             types=list(payload.types),
             max_items=payload.max_items,
+            discover_urls=payload.discover_urls,
         )
         return CrawlEnrichResponse(**result)
     except CrawlProjectNotFoundError:

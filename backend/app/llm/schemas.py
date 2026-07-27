@@ -17,6 +17,7 @@ class AIAnalysisInput(BaseModel):
     rent: dict[str, Any]
     score_result: dict[str, Any]
     data_quality: dict[str, Any]
+    simulation_data_summary: dict[str, Any] = Field(default_factory=dict)
     memory_context: list[dict[str, Any]] = Field(default_factory=list)
     risks: list[Any] = Field(default_factory=list)
 
