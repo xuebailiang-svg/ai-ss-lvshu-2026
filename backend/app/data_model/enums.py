@@ -9,6 +9,7 @@ class DataSourceType(str, Enum):
     manual = "manual"
     user_upload = "user_upload"
     third_party = "third_party"
+    government_stats = "government_stats"
 
 
 class DataStatus(str, Enum):

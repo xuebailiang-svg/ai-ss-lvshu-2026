@@ -9,6 +9,7 @@ from .competitor import AmapCompetitorProvider
 from .crawler import CrawlerCompetitorProvider, CrawlerRentProvider, CrawlerSupportingProvider
 from .rent import ManualRentProvider
 from .supporting import AmapSupportingProvider
+from .government_stats import GovernmentStatsProvider
 
 
 class PlaceholderProvider(DataProvider):
@@ -63,6 +64,7 @@ def build_default_registry(*, amap_client: AmapMapDataClient | None = None) -> D
     registry.register(CrawlerSupportingProvider())
     registry.register(CrawlerRentProvider())
     registry.register(AmapSupportingProvider(AmapProvider(amap_client)))
+    registry.register(GovernmentStatsProvider())
     registry.register(
         PlaceholderProvider(
             DataSourceName.crawler,

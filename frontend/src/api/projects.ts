@@ -23,6 +23,72 @@ export const getProjectMissingData = (projectId: string) => api.get(`/projects/$
 export const collectProjectAmap = (projectId: string) => api.post(`/projects/${projectId}/collect/amap`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectCompetitors = (projectId: string) => api.post(`/projects/${projectId}/collect/competitors`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectSupporting = (projectId: string) => api.post(`/projects/${projectId}/collect/supporting`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+export const collectProjectGovernmentStats = (projectId: string) => api
+  .post(`/projects/${projectId}/collect/government-stats`)
+  .then(response => response.data);
+
+export type RegionalStatistic = {
+  id: number;
+  metric_code: string;
+  metric_name: string;
+  value_numeric?: number | null;
+  value_text?: string | null;
+  unit?: string | null;
+  scope_level: 'country' | 'province' | 'city' | 'district';
+  scope_code: string;
+  scope_name: string;
+  stat_period: string;
+  source_name: string;
+  source_url: string;
+  source_format: string;
+  status: string;
+  confidence: number;
+};
+
+export type CityInsight = {
+  project_id: string;
+  scope: {
+    city?: string | null;
+    city_code?: string | null;
+    district?: string | null;
+    district_code?: string | null;
+  };
+  status: 'ready' | 'collecting' | 'unavailable';
+  macro_context: Record<string, Record<string, RegionalStatistic[]>>;
+  trade_area_context: {
+    scope: {radius_meters?: number; address?: string; note?: string};
+    poi: Record<string, number>;
+    competitors: {effective_count: number};
+    supporting: {food_count: number; entertainment_count: number};
+    rent: {sample_count: number};
+  };
+  lbs_context: {available: boolean; missing: string[]; message?: string};
+  data_quality: {
+    confirmed_metric_count: number;
+    missing_metrics: Array<{metric_code: string; label: string}>;
+    latest_period?: string | null;
+    scope_warning?: string;
+  };
+  sources: Array<{
+    source_name: string;
+    source_url: string;
+    stat_period: string;
+    scope_name: string;
+  }>;
+  latest_sync?: {
+    status: string;
+    imported_count: number;
+    pending_review_count: number;
+    failed_count: number;
+    error_message?: string | null;
+    created_at?: string | null;
+    finished_at?: string | null;
+  } | null;
+};
+
+export const getProjectCityInsight = (projectId: string) => api
+  .get<CityInsight>(`/projects/${projectId}/city-insight`)
+  .then(response => response.data);
 export const generateProjectAiReview = (projectId: string) => api.post(`/projects/${projectId}/ai-review`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const generateDemoData = (
   projectId: string,

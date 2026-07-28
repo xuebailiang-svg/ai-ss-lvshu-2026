@@ -35,7 +35,14 @@ CRAWLER_KEYS = {
     "crawler_search_timeout_seconds",
     "crawler_search_allowed_domains",
 }
-SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"} | CRAWLER_KEYS
+GOV_DATA_KEYS = {
+    "gov_data_enabled",
+    "gov_data_sources",
+    "gov_data_timeout_seconds",
+    "gov_data_max_retries",
+    "gov_data_rate_limit_seconds",
+}
+SUPPORTED_KEYS = SECRET_KEYS | {"deepseek_base_url", "deepseek_model"} | CRAWLER_KEYS | GOV_DATA_KEYS
 
 
 def mask_secret(value: str) -> str | None:
@@ -132,8 +139,19 @@ def config_status(db: Session) -> dict[str, Any]:
     crawler_search_max_results, _ = _effective(db, "crawler_search_max_results", str(settings.crawler_search_max_results), warnings)
     crawler_search_timeout, _ = _effective(db, "crawler_search_timeout_seconds", str(settings.crawler_search_timeout_seconds), warnings)
     crawler_search_allowed_domains, _ = _effective(db, "crawler_search_allowed_domains", settings.crawler_search_allowed_domains, warnings)
+    gov_data_enabled_raw, _ = _effective(
+        db,
+        "gov_data_enabled",
+        "true" if settings.gov_data_enabled else "false",
+        warnings,
+    )
+    gov_data_sources, _ = _effective(db, "gov_data_sources", settings.gov_data_sources, warnings)
+    gov_data_timeout, _ = _effective(db, "gov_data_timeout_seconds", str(settings.gov_data_timeout_seconds), warnings)
+    gov_data_max_retries, _ = _effective(db, "gov_data_max_retries", str(settings.gov_data_max_retries), warnings)
+    gov_data_rate_limit, _ = _effective(db, "gov_data_rate_limit_seconds", str(settings.gov_data_rate_limit_seconds), warnings)
     crawler_enabled = str(crawler_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
     crawler_search_enabled = str(crawler_search_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+    gov_data_enabled = str(gov_data_enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
     return {
         "management_enabled": bool(settings.admin_config_token and len(settings.system_config_encryption_key) >= 32),
         "deepseek": {
@@ -181,5 +199,10 @@ def config_status(db: Session) -> dict[str, Any]:
         "crawler_search_max_results": int(crawler_search_max_results or 5),
         "crawler_search_timeout_seconds": int(crawler_search_timeout or 10),
         "crawler_search_allowed_domains": crawler_search_allowed_domains or "",
+        "gov_data_enabled": gov_data_enabled,
+        "gov_data_sources": gov_data_sources or "national,shaanxi,xian",
+        "gov_data_timeout_seconds": int(gov_data_timeout or 15),
+        "gov_data_max_retries": int(gov_data_max_retries or 2),
+        "gov_data_rate_limit_seconds": int(gov_data_rate_limit or 1),
         "warnings": warnings,
     }

@@ -16,6 +16,7 @@ from app.demo_data.service import simulation_data_summary
 from app.memory.service import relevant_memory_context
 from app.projects.service import data_quality, dataset, get_project
 from app.scoring_engine.service import score_project
+from app.data_source.government_stats.service import city_insight as build_city_insight
 
 
 class ProjectNotFoundError(RuntimeError):
@@ -64,6 +65,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         score = score_project(db, project_id)
     quality = data_quality(db, project_id)
     simulation_summary = simulation_data_summary(db, project_id)
+    city_context = build_city_insight(db, project)
     memories = relevant_memory_context(
         db,
         project_id,
@@ -110,6 +112,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         competitor_analysis=score.get("competitor_analysis") or {},
         supporting_analysis=score.get("supporting_analysis") or {},
         rent_analysis=score.get("rent_analysis") or {},
+        city_insight=city_context,
         # 不向 AI 发送未经评分过滤的原始租金记录，保留空字段仅用于结构兼容。
         rent={},
         score_result=score,
@@ -158,6 +161,7 @@ def build_ai_review_input(db: Session, project_id: str) -> dict[str, Any]:
                 "rent_record_count": 1 if rent_records else 0,
             },
             "data_quality": quality,
+            "city_insight": build_city_insight(db, project),
             "simulation_data_summary": simulation_summary,
             "latest_score": score or {},
             "existing_data": {

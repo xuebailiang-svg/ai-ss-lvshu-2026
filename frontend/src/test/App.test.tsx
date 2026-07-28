@@ -44,6 +44,24 @@ const apiMocks = vi.hoisted(() => ({
   collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
   collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
   collectProjectSupporting: vi.fn(() => Promise.resolve({success: true, food_count: 1, entertainment_count: 1, night_business_count: 0})),
+  collectProjectGovernmentStats: vi.fn(() => Promise.resolve({success: true, status: 'collecting'})),
+  getProjectCityInsight: vi.fn(() => Promise.resolve({
+    project_id: 'proj_1',
+    scope: {city: '西安市', city_code: '610100', district: '雁塔区', district_code: '610113'},
+    status: 'unavailable',
+    macro_context: {population: {}, economy: {}, consumption: {}, employment: {}},
+    trade_area_context: {
+      scope: {radius_meters: 1000, address: '小寨地铁站', note: '以下为项目分析半径内的POI与人工确认数据，不是政府宏观统计。'},
+      poi: {total: 0, transport: 0, education: 0, residential: 0},
+      competitors: {effective_count: 0},
+      supporting: {food_count: 0, entertainment_count: 0},
+      rent: {sample_count: 0},
+    },
+    lbs_context: {available: false, missing: ['1km居住人口', '小时客流'], message: '暂未接入商业LBS数据。'},
+    data_quality: {confirmed_metric_count: 0, missing_metrics: [], latest_period: null, scope_warning: '宏观数据不代表项目1km商圈。'},
+    sources: [],
+    latest_sync: null,
+  })),
   enrichProjectCrawler: vi.fn(() => Promise.resolve({success: true, task_count: 1, completed_count: 1, failed_count: 0, skipped_count: 0, saved: {competitors: 1, supporting: 0, rent: 0}})),
   listProjectCompetitors: vi.fn(() => Promise.resolve({items: [], total: 0})),
   listProjectSupporting: vi.fn(() => Promise.resolve({items: [], total: 0, effective_count: 0, stats: {}})),
@@ -90,6 +108,8 @@ vi.mock('../api/projects', () => ({
   collectProjectAmap: apiMocks.collectProjectAmap,
   collectProjectCompetitors: apiMocks.collectProjectCompetitors,
   collectProjectSupporting: apiMocks.collectProjectSupporting,
+  collectProjectGovernmentStats: apiMocks.collectProjectGovernmentStats,
+  getProjectCityInsight: apiMocks.getProjectCityInsight,
   enrichProjectCrawler: apiMocks.enrichProjectCrawler,
   listProjectCompetitors: apiMocks.listProjectCompetitors,
   listProjectSupporting: apiMocks.listProjectSupporting,
@@ -237,6 +257,63 @@ test('v1.1 workbench action buttons call APIs', async () => {
   await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
   await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
+});
+
+test('workbench displays city insight scope and collects government data', async () => {
+  apiMocks.listProjects.mockResolvedValueOnce({items: [{
+    project_id: 'proj_1',
+    name: '测试项目',
+    city: '西安市',
+    district: '雁塔区',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+  }]} as any);
+  apiMocks.getProjectCityInsight.mockResolvedValue({
+    project_id: 'proj_1',
+    scope: {city: '西安市', city_code: '610100', district: '雁塔区', district_code: '610113'},
+    status: 'ready',
+    macro_context: {
+      population: {city: [{
+        id: 1,
+        metric_code: 'resident_population',
+        metric_name: '常住人口',
+        value_numeric: 1316.76,
+        unit: '万人',
+        scope_level: 'city',
+        scope_code: '610100',
+        scope_name: '西安市',
+        stat_period: '2025',
+        source_name: '西安市统计局',
+        source_url: 'https://tjj.xa.gov.cn/example.html',
+        source_format: 'html',
+        status: 'confirmed',
+        confidence: 0.85,
+      }]},
+      economy: {},
+      consumption: {},
+      employment: {},
+    },
+    trade_area_context: {
+      scope: {radius_meters: 1000, address: '小寨地铁站', note: '以下为项目分析半径内的POI与人工确认数据，不是政府宏观统计。'},
+      poi: {total: 20, transport: 4, education: 3, residential: 5},
+      competitors: {effective_count: 2},
+      supporting: {food_count: 8, entertainment_count: 3},
+      rent: {sample_count: 0},
+    },
+    lbs_context: {available: false, missing: ['1km居住人口', '小时客流'], message: '未接入真实客流数据。'},
+    data_quality: {confirmed_metric_count: 1, missing_metrics: [], latest_period: '2025', scope_warning: '城市统计只作为宏观背景。'},
+    sources: [{source_name: '西安市统计局', source_url: 'https://tjj.xa.gov.cn/example.html', stat_period: '2025', scope_name: '西安市'}],
+    latest_sync: null,
+  } as any);
+
+  render(<MemoryRouter><App /></MemoryRouter>);
+
+  expect(await screen.findByText('城市洞察')).toBeInTheDocument();
+  expect(screen.getAllByText(/西安市宏观背景已加载/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/未接入真实客流数据/).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole('button', {name: /城市公开数据已获取/}));
+  await waitFor(() => expect(apiMocks.collectProjectGovernmentStats).toHaveBeenCalledWith('proj_1'));
 });
 
 test('project supplement saves manual input to backend and refreshes quality', async () => {

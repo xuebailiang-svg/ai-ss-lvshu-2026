@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   Button,
@@ -33,6 +33,7 @@ import {
 import {
   collectProjectAmap,
   collectProjectCompetitors,
+  collectProjectGovernmentStats,
   collectProjectSupporting,
   createProject,
   createCrawlerManualUrlTask,
@@ -41,9 +42,11 @@ import {
   generateDemoData,
   generateProjectAiReview,
   getProjectDataQuality,
+  getProjectCityInsight,
   listProjectCrawlTasks,
   listProjects,
   type ProjectCreatePayload,
+  type CityInsight,
 } from '../../api/projects';
 import {scoreProject} from '../../api/score';
 import {generateAiReport} from '../../api/report';
@@ -52,6 +55,7 @@ import {getDataSourceStatus, type DataSourceStatus} from '../../api/dataSources'
 import {getScoringConfig, type ScoringDimensionConfig} from '../../api/scoringConfig';
 import {listMemory, type MemoryItem} from '../../api/memory';
 import MarkdownReport from '../../components/MarkdownReport';
+import CityInsightPanel from '../../components/CityInsightPanel';
 import {useNavigate, useSearchParams} from 'react-router-dom';
 
 type ProjectItem = {
@@ -122,6 +126,12 @@ function projectTitle(project?: ProjectItem | null) {
 
 function statusText(status?: string) {
   return STATUS_TEXT[status || ''] || '初始化';
+}
+
+function formatReportDate(value?: string | null) {
+  if (!value) return new Date().toLocaleString('zh-CN');
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN');
 }
 
 function providerStatusText(status: string) {
@@ -470,15 +480,80 @@ function summarizeAction(action: string, result: any) {
   return `${action}完成。`;
 }
 
-function downloadHtml(filename: string, markdown: string) {
-  const escaped = markdown
+function escapeHtml(value: string) {
+  return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>${filename}</title><style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Microsoft YaHei",Arial,sans-serif;max-width:960px;margin:32px auto;color:#1f2937;line-height:1.8}
-h1,h2,h3{color:#102033}.report{white-space:pre-wrap;background:#fff;padding:24px;border:1px solid #e5e7eb;border-radius:12px}
-</style></head><body><article class="report">${escaped}</article></body></html>`;
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function downloadReportHtml(filename: string, reportElement: HTMLElement) {
+  const cloned = reportElement.cloneNode(true) as HTMLElement;
+  cloned.querySelectorAll('[data-export-hidden="true"]').forEach(node => node.remove());
+  const title = filename.replace(/\.html$/i, '');
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#eef2f7;color:#263548;font-family:-apple-system,BlinkMacSystemFont,"Microsoft YaHei",Arial,sans-serif;line-height:1.8}
+    .v11-report-print-root{max-width:980px;margin:32px auto;background:#fff;padding:44px 52px;box-shadow:0 14px 42px rgba(15,23,42,.10)}
+    .v11-report-cover{padding-bottom:28px;margin-bottom:30px;border-bottom:3px solid #245b91}
+    .v11-report-kicker{color:#245b91;font-size:13px;font-weight:700;letter-spacing:.16em}
+    .v11-report-cover h1{font-size:32px;line-height:1.3;color:#102033;margin:10px 0}
+    .v11-report-meta{color:#64748b;font-size:14px}
+    .v11-report-badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+    .v11-report-badge{display:inline-block;padding:4px 10px;border-radius:999px;background:#eaf4ff;color:#1d4f7a;font-size:13px}
+    .v11-report-badge.warning{background:#fff4e5;color:#9a5b00}
+    .v11-report-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:22px 0 8px}
+    .v11-report-summary-item{border:1px solid #dfe7ef;border-radius:10px;padding:14px;background:#f8fafc}
+    .v11-report-summary-label{display:block;color:#64748b;font-size:12px;margin-bottom:4px}
+    .v11-report-summary-value{display:block;color:#102033;font-size:20px;font-weight:700}
+    .v11-report-summary-value.small{font-size:15px;line-height:1.5}
+    .markdown-report{max-width:none;color:#263548}
+    .v11-report-print-root .markdown-report>h1:first-of-type{display:none}
+    .markdown-report h1{font-size:28px;color:#102033;margin:0 0 24px}
+    .markdown-report h2{font-size:21px;color:#153b62;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid #d9e4ef}
+    .markdown-report h3{font-size:17px;color:#203c57;margin:24px 0 10px}
+    .markdown-report h4,.markdown-report h5{color:#263548;margin:20px 0 8px}
+    .markdown-report p{margin:8px 0 14px}
+    .markdown-report ul,.markdown-report ol{padding-left:24px;margin:8px 0 16px}
+    .markdown-report li{margin:5px 0}
+    .markdown-report a{color:#1769aa;text-decoration:none}
+    .markdown-report blockquote{margin:16px 0;padding:12px 16px;border-left:4px solid #4a86bd;background:#f5f9fd;color:#40566d}
+    .markdown-report code{padding:2px 5px;border-radius:4px;background:#f1f5f9}
+    .markdown-report hr{border:0;border-top:1px solid #d9e2ec;margin:24px 0}
+    .markdown-table-wrap{overflow-x:auto;margin:14px 0 22px}
+    .markdown-report table{width:100%;border-collapse:collapse;font-size:13px}
+    .markdown-report th,.markdown-report td{border:1px solid #dce4ec;padding:9px 10px;text-align:left;vertical-align:top}
+    .markdown-report th{background:#edf4fa;color:#173a5e;font-weight:700}
+    .markdown-report tr:nth-child(even) td{background:#fafcfe}
+    .markdown-report-toc{padding:18px 22px;margin:0 0 28px;border:1px solid #d9e6f2;border-radius:10px;background:#f7fbff}
+    .markdown-report-toc ol{columns:2;column-gap:36px;margin:10px 0 0}
+    .markdown-report-toc li{break-inside:avoid}
+    .markdown-report-toc .subsection{margin-left:14px}
+    .v11-report-footer{margin-top:36px;padding-top:18px;border-top:1px solid #d9e2ec;color:#64748b;font-size:12px}
+    @page{size:A4;margin:14mm}
+    @media print{
+      body{background:#fff}
+      .v11-report-print-root{max-width:none;margin:0;padding:0;box-shadow:none}
+      .markdown-report h2,.markdown-report h3{break-after:avoid;page-break-after:avoid}
+      .markdown-report table,.markdown-report blockquote,.v11-report-summary-item{break-inside:avoid;page-break-inside:avoid}
+    }
+    @media(max-width:700px){
+      .v11-report-print-root{margin:0;padding:24px 18px;box-shadow:none}
+      .v11-report-summary{grid-template-columns:1fr}
+      .markdown-report-toc ol{columns:1}
+    }
+  </style>
+</head>
+<body>${cloned.outerHTML}</body>
+</html>`;
   const blob = new Blob([html], {type: 'text/html;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -491,6 +566,7 @@ h1,h2,h3{color:#102033}.report{white-space:pre-wrap;background:#fff;padding:24px
 export default function WorkbenchPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const reportPrintRef = useRef<HTMLDivElement | null>(null);
   const [projectForm] = Form.useForm<ProjectCreatePayload>();
   const [manualUrlForm] = Form.useForm();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -503,6 +579,7 @@ export default function WorkbenchPage() {
   const [aiReview, setAiReview] = useState<any>(null);
   const [score, setScore] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
+  const [cityInsight, setCityInsight] = useState<CityInsight | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
   const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -580,6 +657,19 @@ export default function WorkbenchPage() {
     }
   };
 
+  const loadCityInsight = async (projectId = selectedProjectId, silent = false) => {
+    if (!projectId) {
+      setCityInsight(null);
+      return;
+    }
+    try {
+      setCityInsight(await getProjectCityInsight(projectId));
+    } catch {
+      setCityInsight(null);
+      if (!silent) message.warning('城市公开数据暂时不可用，不影响其他选址流程');
+    }
+  };
+
   useEffect(() => {
     void loadProjects(searchParams.get('projectId') || undefined);
     void loadSideContext();
@@ -591,14 +681,24 @@ export default function WorkbenchPage() {
     setAiReview(null);
     setScore(null);
     setReport(null);
+    setCityInsight(null);
     setSessionId('');
     setActionResults({});
     void loadSideContext(selectedProjectId);
     void loadCrawlTasks(selectedProjectId, true);
+    void loadCityInsight(selectedProjectId, true);
     createProjectChatSession(selectedProjectId)
       .then(result => setSessionId(String(result.session_id)))
       .catch(() => setSessionId(''));
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId || cityInsight?.status !== 'collecting') return;
+    const timer = window.setInterval(() => {
+      void loadCityInsight(selectedProjectId, true);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [selectedProjectId, cityInsight?.status]);
 
   useEffect(() => {
     if (!selectedProjectId) return;
@@ -698,6 +798,17 @@ export default function WorkbenchPage() {
     const result = await runAction(loadingKey, actionName, () => enrichProjectCrawler(selectedProjectId, types));
     if (result) {
       await loadCrawlTasks(selectedProjectId, true);
+    }
+  };
+
+  const collectGovernmentStats = async () => {
+    const result = await runAction(
+      'governmentStats',
+      '城市公开数据采集',
+      () => collectProjectGovernmentStats(selectedProjectId),
+    );
+    if (result) {
+      await loadCityInsight(selectedProjectId, true);
     }
   };
 
@@ -814,8 +925,28 @@ export default function WorkbenchPage() {
     }
   };
 
+  const printReport = () => {
+    if (!reportPrintRef.current) return;
+    const previousTitle = document.title;
+    document.title = `${projectTitle(selectedProject)}-电竞馆选址分析报告`;
+    document.body.classList.add('report-printing');
+    const cleanup = () => {
+      document.body.classList.remove('report-printing');
+      document.title = previousTitle;
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    window.print();
+    window.setTimeout(cleanup, 1000);
+  };
+
   const qualityScore = Number(quality?.quality_score) || 0;
   const reportContent = String(report?.content || '');
+  const hasSimulationData = Boolean(
+    quality?.simulation_data_summary?.has_simulation_data
+    || report?.simulation_data_summary?.has_simulation_data,
+  );
+  const reportCreatedAt = report?.created_at || report?.generated_at || new Date().toISOString();
   const scoreDimensions = score?.dimensions && typeof score.dimensions === 'object'
     ? Object.entries(score.dimensions as Record<string, any>)
     : [];
@@ -1030,7 +1161,7 @@ export default function WorkbenchPage() {
               </Space>
             </Card>
 
-            <Card size="small" className={hasAmapData ? 'v11-step-card done' : selectedProject ? 'v11-step-card active' : 'v11-step-card'} title="Step 3：采集基础数据" extra={doneTag(hasAmapData, actionLoading === 'amap' || actionLoading === 'competitor' || actionLoading === 'supporting')}>
+            <Card size="small" className={hasAmapData ? 'v11-step-card done' : selectedProject ? 'v11-step-card active' : 'v11-step-card'} title="Step 3：采集基础数据" extra={doneTag(hasAmapData, actionLoading === 'amap' || actionLoading === 'competitor' || actionLoading === 'supporting' || actionLoading === 'governmentStats')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Space size={[4, 4]} wrap>
                     <Tag color={projectPoiCount > 0 ? 'green' : 'default'}>POI {projectPoiCount}</Tag>
@@ -1065,9 +1196,32 @@ export default function WorkbenchPage() {
                   >
                     {hasSupportingData ? '配套已获取 / 重新获取' : '获取配套'}
                   </Button>
+                  <Button
+                    type={cityInsight?.status === 'ready' ? 'default' : 'primary'}
+                    icon={cityInsight?.status === 'ready' ? <CheckCircleOutlined /> : <CloudDownloadOutlined />}
+                    loading={actionLoading === 'governmentStats' || cityInsight?.status === 'collecting'}
+                    disabled={!selectedProjectId}
+                    onClick={collectGovernmentStats}
+                    block
+                  >
+                    {cityInsight?.status === 'ready' ? '城市公开数据已获取 / 刷新' : '获取城市公开数据'}
+                  </Button>
+                  {cityInsight && (
+                    <Alert
+                      type={cityInsight.status === 'ready' ? 'success' : cityInsight.status === 'collecting' ? 'info' : 'warning'}
+                      showIcon
+                      message={cityInsight.status === 'ready'
+                        ? `城市公开数据已就绪：${cityInsight.data_quality.confirmed_metric_count} 项已确认指标`
+                        : cityInsight.status === 'collecting'
+                          ? '政府公开数据正在后台同步'
+                          : '尚无可用城市公开指标'}
+                      description={`最新统计期：${cityInsight.data_quality.latest_period || '--'}；口径：${cityInsight.scope.district || cityInsight.scope.city || '--'}。宏观数据不代表项目1km商圈。`}
+                    />
+                  )}
                   {inlineResult('amap')}
                   {inlineResult('competitor')}
                   {inlineResult('supporting')}
+                  {inlineResult('governmentStats')}
                 </Space>
             </Card>
 
@@ -1260,6 +1414,7 @@ export default function WorkbenchPage() {
           </div>
         </Card>
 
+        {cityInsight && <CityInsightPanel insight={cityInsight} />}
         {(quality || aiReview || score || reportContent) && (
           <Card title="分析结果与报告" className="v11-result-card">
             <Row gutter={[12, 12]}>
@@ -1375,14 +1530,63 @@ export default function WorkbenchPage() {
             {reportContent && (
               <>
                 <Divider />
-                <MarkdownReport content={reportContent} />
+                <div ref={reportPrintRef} className="v11-report-print-root">
+                  <header className="v11-report-cover">
+                    <div className="v11-report-kicker">ESPORTS SITE SELECTION</div>
+                    <h1>{projectTitle(selectedProject)} · 电竞馆选址分析报告</h1>
+                    <div className="v11-report-meta">
+                      {selectedProject?.city || '城市待补充'}
+                      {selectedProject?.district ? ` · ${selectedProject.district}` : ''}
+                      {selectedProject?.address ? ` · ${selectedProject.address}` : ''}
+                      {selectedProject?.radius_meters ? ` · 分析半径 ${selectedProject.radius_meters} 米` : ''}
+                    </div>
+                    <div className="v11-report-badges">
+                      <span className="v11-report-badge">AI 分析报告</span>
+                      <span className="v11-report-badge">数据完整度 {quality ? `${qualityScore}%` : '待核验'}</span>
+                      {hasSimulationData && <span className="v11-report-badge warning">包含演示模拟数据</span>}
+                      {Number(crawlerQuality.pending_review_count || 0) > 0 && (
+                        <span className="v11-report-badge warning">
+                          爬虫线索待确认 {countText(crawlerQuality.pending_review_count)} 条
+                        </span>
+                      )}
+                    </div>
+                    <div className="v11-report-summary">
+                      <div className="v11-report-summary-item">
+                        <span className="v11-report-summary-label">综合评分</span>
+                        <span className="v11-report-summary-value">{score?.total_score ?? '--'} 分</span>
+                      </div>
+                      <div className="v11-report-summary-item">
+                        <span className="v11-report-summary-label">推荐等级</span>
+                        <span className="v11-report-summary-value">{score?.level || '待评分'}</span>
+                      </div>
+                      <div className="v11-report-summary-item">
+                        <span className="v11-report-summary-label">报告生成时间</span>
+                        <span className="v11-report-summary-value small">{formatReportDate(reportCreatedAt)}</span>
+                      </div>
+                    </div>
+                  </header>
+                  <MarkdownReport content={reportContent} showToc />
+                  <footer className="v11-report-footer">
+                    <strong>数据使用说明：</strong>
+                    本报告仅依据系统中已采集、已确认及明确标注的数据生成。待确认线索和演示模拟数据不能替代现场调查，
+                    最终投资决策前应完成人工核实。
+                  </footer>
+                </div>
                 <Card size="small" className="v11-report-export-card">
                   <Space direction="vertical" size={8}>
                     <Typography.Text strong>报告导出</Typography.Text>
-                    <Typography.Text type="secondary">确认报告内容后，可导出 HTML 或使用浏览器打印为 PDF。</Typography.Text>
+                    <Typography.Text type="secondary">导出文件会保留标题、目录、表格和数据状态标识；打印只包含正式报告。</Typography.Text>
                     <Space wrap>
-                      <Button type="primary" onClick={() => downloadHtml(`${projectTitle(selectedProject)}-选址报告.html`, reportContent)}>导出 HTML</Button>
-                      <Button onClick={() => window.print()}>打印 / PDF</Button>
+                      <Button
+                        type="primary"
+                        onClick={() => reportPrintRef.current && downloadReportHtml(
+                          `${projectTitle(selectedProject)}-选址报告.html`,
+                          reportPrintRef.current,
+                        )}
+                      >
+                        导出 HTML
+                      </Button>
+                      <Button onClick={printReport}>打印 / PDF</Button>
                     </Space>
                   </Space>
                 </Card>

@@ -105,6 +105,22 @@ class PopulationData(BaseDataSource):
     young_population_indicator: float | None = None
 
 
+class RegionalStatisticData(BaseDataSource):
+    metric_code: str
+    metric_name: str
+    value_numeric: float | None = None
+    value_text: str | None = None
+    unit: str | None = None
+    scope_level: str
+    scope_code: str
+    scope_name: str
+    stat_period: str
+    source_name: str
+    source_url: str
+    source_format: str
+    published_at: datetime | None = None
+
+
 class SupplementData(BaseDataSource):
     project_id: str | None = None
     target_type: str

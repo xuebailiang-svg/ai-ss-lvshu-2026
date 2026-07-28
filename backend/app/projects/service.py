@@ -14,6 +14,7 @@ from app.models import (
     EntertainmentRecord,
     FoodBusinessRecord,
     PopulationDataRecord,
+    RegionalStatisticRecord,
     RentDataRecord,
     SiteProjectRecord,
     SupplementRecord,
@@ -503,6 +504,36 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
     )
     rent_quality, rent_penalty = rent_data_quality(rent_rows)
     crawler_quality = crawler_data_quality(db, project_id)
+    project = get_project(db, project_id)
+    regional_rows: list[RegionalStatisticRecord] = []
+    if project:
+        scope_names = [name for name in (project.city, project.district, "陕西省", "全国") if name]
+        regional_rows = list(
+            db.scalars(
+                select(RegionalStatisticRecord).where(
+                    RegionalStatisticRecord.scope_name.in_(scope_names),
+                )
+            ).all()
+        )
+    confirmed_regional = [row for row in regional_rows if row.status == "confirmed"]
+    pending_regional = [row for row in regional_rows if row.status == "pending_review"]
+    regional_metric_codes = {row.metric_code for row in confirmed_regional}
+    regional_context_quality = {
+        "confirmed_metric_count": len(confirmed_regional),
+        "pending_review_count": len(pending_regional),
+        "latest_period": max((row.stat_period for row in confirmed_regional), default=None),
+        "missing_metrics": [
+            {"metric_code": code, "label": label}
+            for code, label in {
+                "resident_population": "常住人口",
+                "gdp": "地区生产总值",
+                "retail_sales_total": "社会消费品零售总额",
+                "disposable_income_per_capita": "居民人均可支配收入",
+            }.items()
+            if code not in regional_metric_codes
+        ],
+        "scope_warning": "政府城市和区县统计仅作为宏观背景，不代表项目分析半径内的真实人口或客流。",
+    }
     simulation_summary = simulation_data_summary(db, project_id)
     pois = count_rows(db, UnifiedPOIRecord, project_id)
     food = count_rows(db, FoodBusinessRecord, project_id) or count_pois_by_category(db, project_id, "food")
@@ -561,5 +592,6 @@ def data_quality(db: Session, project_id: str) -> dict[str, Any]:
         "supporting_detail_quality": supporting_quality,
         "rent_quality": rent_quality,
         "crawler_quality": crawler_quality,
+        "regional_context_quality": regional_context_quality,
         "simulation_data_summary": simulation_summary,
     }

@@ -177,14 +177,19 @@ export default function ReportPage() {
 
   return (
     <div className="page report report-export-root">
-      <h2>{ev.name} · 选址评估报告</h2>
+      <h2>{ev.name} · 历史规则评估报告</h2>
       <Space className="report-actions" style={{marginBottom: 12}}>
         <Button onClick={() => id && nav(`/evaluations/${id}`)}>返回评估页继续编辑</Button>
         <Button onClick={exportHtml}>导出 HTML</Button>
         <Button type="primary" onClick={printPdf}>打印 / 另存 PDF</Button>
       </Space>
       <Alert type={rep.hard_risk ? 'error' : 'info'} showIcon message={rep.hard_risk ? '存在硬性风险' : '未发现已知硬性风险'} description={rep.disclaimer} />
-      <Alert type="info" showIcon message="M1.5 当前报告为规则评分报告，不调用大模型" description="报告只展示自动采集数据、人工填写数据和规则评分依据，不会凭空生成经营数据。" />
+      <Alert
+        type="info"
+        showIcon
+        message="历史评估报告"
+        description="本页用于兼容旧评估记录，仅展示规则评分依据。新建项目的 AI 综合报告请在工作台生成、查看和导出。"
+      />
 
       <Card title="1. 结论摘要">
         <div className="score">{score.total_score}<small>/100</small></div>

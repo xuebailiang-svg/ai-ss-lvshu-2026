@@ -203,6 +203,12 @@ CRAWLER_SEARCH_PROVIDER=duckduckgo_html,bing_html
 CRAWLER_SEARCH_MAX_RESULTS=5
 CRAWLER_SEARCH_TIMEOUT_SECONDS=10
 CRAWLER_SEARCH_ALLOWED_DOMAINS=
+GOV_DATA_ENABLED=true
+GOV_DATA_SOURCES=national,shaanxi,xian
+GOV_DATA_TIMEOUT_SECONDS=15
+GOV_DATA_MAX_RETRIES=2
+GOV_DATA_RATE_LIMIT_SECONDS=1
+GOV_DATA_USER_AGENT=esports-site-selection/1.0 (+government-public-data)
 SYSTEM_CONFIG_ENCRYPTION_KEY=${encryption_key}
 ADMIN_CONFIG_TOKEN=${admin_token}
 SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
@@ -279,6 +285,31 @@ ensure_crawler_settings() {
   chmod 0640 "${ENV_FILE}"
   if [[ "${changed}" == true ]]; then
     echo "OK: 已补齐爬虫配置项（保留已有 Key 和数据库配置）"
+  fi
+}
+
+ensure_government_data_settings() {
+  local changed=false
+  declare -A defaults=(
+    [GOV_DATA_ENABLED]=true
+    [GOV_DATA_SOURCES]=national,shaanxi,xian
+    [GOV_DATA_TIMEOUT_SECONDS]=15
+    [GOV_DATA_MAX_RETRIES]=2
+    [GOV_DATA_RATE_LIMIT_SECONDS]=1
+    [GOV_DATA_USER_AGENT]="esports-site-selection/1.0 (+government-public-data)"
+  )
+
+  for key in "${!defaults[@]}"; do
+    if ! grep -q "^${key}=" "${ENV_FILE}"; then
+      printf '%s=%s\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      changed=true
+    fi
+  done
+
+  chown root:"${APP_GROUP}" "${ENV_FILE}"
+  chmod 0640 "${ENV_FILE}"
+  if [[ "${changed}" == true ]]; then
+    echo "OK: 已补齐政府公开数据配置项"
   fi
 }
 
@@ -614,6 +645,7 @@ main() {
   ensure_backend_env
   ensure_security_settings
   ensure_crawler_settings
+  ensure_government_data_settings
   normalize_frontend_runtime_config
   ensure_postgres
   backup_before_migration

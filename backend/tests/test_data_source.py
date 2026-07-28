@@ -99,6 +99,7 @@ def test_data_source_status_api_returns_all_registered_providers(client):
         "amap_supporting",
         "crawler",
         "third_party",
+        "government_stats",
     }
     assert items["amap"]["status"] == "available"
     assert items["amap"]["capabilities"] == ["poi"]
@@ -117,6 +118,9 @@ def test_data_source_status_api_returns_all_registered_providers(client):
     assert items["amap_supporting"]["status"] == "available"
     assert items["amap_supporting"]["capabilities"] == ["food", "entertainment", "night_economy"]
     assert items["third_party"]["status"] == "not_configured"
+    assert items["government_stats"]["status"] == "available"
+    assert "regional_statistics" in items["government_stats"]["capabilities"]
+    assert items["government_stats"]["check_supported"] is True
     assert all(item["description"] for item in items.values())
 
 

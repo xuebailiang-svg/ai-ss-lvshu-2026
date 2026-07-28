@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime, timezone
 from typing import Any
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -367,6 +367,58 @@ class CrawlTaskRecord(Base):
     provider: Mapped[str] = mapped_column(String(80), default="crawl4ai")
     status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     source_domain: Mapped[str | None] = mapped_column(String(200), index=True)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RegionalStatisticRecord(Base):
+    __tablename__ = "regional_statistics"
+    __table_args__ = (
+        UniqueConstraint(
+            "metric_code",
+            "scope_code",
+            "stat_period",
+            "source_name",
+            name="uq_regional_statistics_metric_scope_period_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    metric_code: Mapped[str] = mapped_column(String(80), index=True)
+    metric_name: Mapped[str] = mapped_column(String(160))
+    value_numeric: Mapped[float | None] = mapped_column(Float)
+    value_text: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    scope_level: Mapped[str] = mapped_column(String(30), index=True)
+    scope_code: Mapped[str] = mapped_column(String(40), index=True)
+    scope_name: Mapped[str] = mapped_column(String(120), index=True)
+    stat_period: Mapped[str] = mapped_column(String(30), index=True)
+    source_name: Mapped[str] = mapped_column(String(160))
+    source_url: Mapped[str] = mapped_column(Text)
+    source_format: Mapped[str] = mapped_column(String(30))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    status: Mapped[str] = mapped_column(String(50), default="pending_review", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=.8)
+    raw_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class DataSyncRunRecord(Base):
+    __tablename__ = "data_sync_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    project_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    scope_code: Mapped[str | None] = mapped_column(String(40), index=True)
+    scope_name: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    imported_count: Mapped[int] = mapped_column(Integer, default=0)
+    pending_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
     input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     result_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)

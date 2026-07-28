@@ -25,3 +25,15 @@
 - `GET /api/regulation-rules` 获取规则
 
 交互文档在后端 `/docs`。采集状态为 `pending/running/completed/failed`；上游失败返回 HTTP 502，未满足前置条件返回 HTTP 409。
+# 政府公开数据与城市洞察
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/projects/{project_id}/collect/government-stats` | 使用缓存或创建政府数据后台同步任务 |
+| `GET` | `/api/projects/{project_id}/city-insight` | 返回宏观背景、项目商圈、LBS 缺口、来源与口径 |
+| `POST` | `/api/system/government-stats/sync` | 管理员强制同步 |
+| `GET` | `/api/system/government-stats/review` | 管理员查看待审核指标 |
+| `POST` | `/api/system/government-stats/{record_id}/review` | 管理员确认或排除指标 |
+| `POST` | `/api/system/government-stats/upload` | 管理员上传官方 CSV、XLSX 或 PDF |
+
+系统级接口需要请求头 `X-Admin-Token`。项目城市洞察只返回已确认的政府指标；PDF 待审核结果不会进入 AI 报告。

@@ -61,6 +61,11 @@ npm run build
 | `CRAWLER_PROVIDER` | `crawl4ai` | 爬虫执行层 Provider。第一版仅支持 `crawl4ai`。 |
 | `CRAWLER_TIMEOUT_SECONDS` | `60` | 单个爬虫任务超时时间。 |
 | `CRAWLER_MAX_TASKS_PER_PROJECT` | `50` | 单个项目最大爬虫任务数。 |
+| `GOV_DATA_ENABLED` | `true` | 是否启用政府公开数据 Provider。 |
+| `GOV_DATA_SOURCES` | `national,shaanxi,xian` | 启用的官方来源适配器。 |
+| `GOV_DATA_TIMEOUT_SECONDS` | `15` | 单次官方页面请求超时。 |
+| `GOV_DATA_MAX_RETRIES` | `2` | 官方页面请求失败后的最大重试次数。 |
+| `GOV_DATA_RATE_LIMIT_SECONDS` | `1` | 重试与连续请求之间的最小等待时间。 |
 | `CRAWLER_ALLOWED_DOMAINS` | 空 | 允许抓取的域名白名单，逗号分隔；为空表示不启用白名单限制。 |
 | `CRAWLER_BLOCKED_DOMAINS` | 空 | 禁止抓取的域名，逗号分隔。 |
 | `SYSTEM_CONFIG_ENCRYPTION_KEY` | 空 | 配置中心加密主密钥，生产至少32位；不能通过 Web 修改。 |

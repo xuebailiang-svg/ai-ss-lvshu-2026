@@ -9,6 +9,7 @@ from app.data_model.schemas import (
     EntertainmentData,
     FoodBusinessData,
     POIData,
+    RegionalStatisticData,
     RentData,
 )
 
@@ -18,6 +19,7 @@ class DataSourceName(str, Enum):
     manual = "manual"
     crawler = "crawler"
     third_party = "third_party"
+    government_stats = "government_stats"
 
 
 class ProviderAvailability(str, Enum):
@@ -60,6 +62,7 @@ DataItem = TypeVar(
     FoodBusinessData,
     EntertainmentData,
     RentData,
+    RegionalStatisticData,
 )
 
 
@@ -150,6 +153,9 @@ class DataProvider:
         return self._unsupported()
 
     async def get_rent(self, request: DataSourceRequest) -> ProviderResult[RentData]:
+        return self._unsupported()
+
+    async def get_statistics(self, request: DataSourceRequest) -> ProviderResult[RegionalStatisticData]:
         return self._unsupported()
 
     def _unsupported(self) -> ProviderResult[Any]:

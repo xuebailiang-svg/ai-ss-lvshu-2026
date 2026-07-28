@@ -44,6 +44,12 @@ class Settings(BaseModel):
     crawler_search_max_results: int
     crawler_search_timeout_seconds: int
     crawler_search_allowed_domains: str
+    gov_data_enabled: bool
+    gov_data_sources: str
+    gov_data_timeout_seconds: int
+    gov_data_max_retries: int
+    gov_data_rate_limit_seconds: int
+    gov_data_user_agent: str
 
 @lru_cache
 def get_settings() -> Settings:
@@ -82,4 +88,13 @@ def get_settings() -> Settings:
         crawler_search_max_results=int(os.getenv("CRAWLER_SEARCH_MAX_RESULTS", "5")),
         crawler_search_timeout_seconds=int(os.getenv("CRAWLER_SEARCH_TIMEOUT_SECONDS", "10")),
         crawler_search_allowed_domains=os.getenv("CRAWLER_SEARCH_ALLOWED_DOMAINS", ""),
+        gov_data_enabled=env_bool("GOV_DATA_ENABLED", True),
+        gov_data_sources=os.getenv("GOV_DATA_SOURCES", "national,shaanxi,xian"),
+        gov_data_timeout_seconds=int(os.getenv("GOV_DATA_TIMEOUT_SECONDS", "15")),
+        gov_data_max_retries=int(os.getenv("GOV_DATA_MAX_RETRIES", "2")),
+        gov_data_rate_limit_seconds=int(os.getenv("GOV_DATA_RATE_LIMIT_SECONDS", "1")),
+        gov_data_user_agent=os.getenv(
+            "GOV_DATA_USER_AGENT",
+            "esports-site-selection/1.0 (+government-public-data)",
+        ),
     )

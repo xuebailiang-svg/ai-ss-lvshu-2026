@@ -13,6 +13,7 @@ class AIAnalysisInput(BaseModel):
     competitor_analysis: dict[str, Any] = Field(default_factory=dict)
     supporting_analysis: dict[str, Any] = Field(default_factory=dict)
     rent_analysis: dict[str, Any] = Field(default_factory=dict)
+    city_insight: dict[str, Any] = Field(default_factory=dict)
     # 兼容既有输入结构；租金成本分析必须使用 rent_analysis。
     rent: dict[str, Any]
     score_result: dict[str, Any]

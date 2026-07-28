@@ -32,6 +32,11 @@ class SystemConfigStatus(BaseModel):
     crawler_search_max_results: int = 5
     crawler_search_timeout_seconds: int = 10
     crawler_search_allowed_domains: str = ""
+    gov_data_enabled: bool = True
+    gov_data_sources: str = "national,shaanxi,xian"
+    gov_data_timeout_seconds: int = 15
+    gov_data_max_retries: int = 2
+    gov_data_rate_limit_seconds: int = 1
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -56,6 +61,11 @@ class SystemConfigUpdate(BaseModel):
     crawler_search_max_results: str | None = Field(default=None, max_length=20)
     crawler_search_timeout_seconds: str | None = Field(default=None, max_length=20)
     crawler_search_allowed_domains: str | None = Field(default=None, max_length=1000)
+    gov_data_enabled: str | None = Field(default=None, max_length=20)
+    gov_data_sources: str | None = Field(default=None, max_length=200)
+    gov_data_timeout_seconds: str | None = Field(default=None, max_length=20)
+    gov_data_max_retries: str | None = Field(default=None, max_length=20)
+    gov_data_rate_limit_seconds: str | None = Field(default=None, max_length=20)
 
 
 class ConnectionTestResponse(BaseModel):

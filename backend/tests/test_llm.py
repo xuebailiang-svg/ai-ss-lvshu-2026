@@ -196,6 +196,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
         "competitor_analysis",
         "supporting_analysis",
         "rent_analysis",
+        "city_insight",
         "rent",
         "score_result",
         "data_quality",
@@ -203,6 +204,8 @@ def test_ai_input_conversion_has_fixed_sections(client):
         "memory_context",
         "risks",
     }
+    assert data["city_insight"]["lbs_context"]["available"] is False
+    assert "小时客流" in data["city_insight"]["lbs_context"]["missing"]
     assert data["project"]["project_id"] == project_id
     assert "transport" in data["environment"]
     assert "population" in data["environment"]

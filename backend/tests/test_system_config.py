@@ -105,3 +105,27 @@ def test_connection_checks_use_runtime_clients_without_external_network(client, 
     assert deepseek.json()["success"] is True
     assert amap.status_code == 200
     assert amap.json()["success"] is True
+
+
+def test_government_data_settings_are_saved_and_returned(client, monkeypatch):
+    enable_management(monkeypatch)
+
+    response = client.put(
+        "/api/system/config",
+        headers=ADMIN_HEADERS,
+        json={
+            "gov_data_enabled": "true",
+            "gov_data_sources": "national,shaanxi,xian",
+            "gov_data_timeout_seconds": "20",
+            "gov_data_max_retries": "3",
+            "gov_data_rate_limit_seconds": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gov_data_enabled"] is True
+    assert body["gov_data_sources"] == "national,shaanxi,xian"
+    assert body["gov_data_timeout_seconds"] == 20
+    assert body["gov_data_max_retries"] == 3
+    assert body["gov_data_rate_limit_seconds"] == 2

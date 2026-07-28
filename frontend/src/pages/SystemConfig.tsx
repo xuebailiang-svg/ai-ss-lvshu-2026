@@ -42,6 +42,7 @@ import {
   type MemoryItem,
   type MemoryStatus,
 } from '../api/memory';
+import GovernmentStatsAdminPanel from '../components/GovernmentStatsAdminPanel';
 
 type CheckState = ConnectivityCheck | {success: false; message: string; latency_ms?: number} | 'loading' | undefined;
 
@@ -107,6 +108,7 @@ export default function SystemConfig() {
   const deepseekConfigured = Boolean(managedConfig?.deepseek?.configured);
   const amapConfigured = Boolean(managedConfig?.amap?.configured || managedConfig?.amap_js?.configured);
   const crawlerConfigured = Boolean(managedConfig?.crawler?.configured);
+  const governmentDataEnabled = Boolean(managedConfig?.gov_data_enabled);
 
   const loadAll = async () => {
     setLoading(true);
@@ -137,6 +139,11 @@ export default function SystemConfig() {
         crawler_search_max_results: Number(config?.crawler_search_max_results || 5),
         crawler_search_timeout_seconds: Number(config?.crawler_search_timeout_seconds || 10),
         crawler_search_allowed_domains: config?.crawler_search_allowed_domains || '',
+        gov_data_enabled: config?.gov_data_enabled ?? true,
+        gov_data_sources: config?.gov_data_sources || 'national,shaanxi,xian',
+        gov_data_timeout_seconds: Number(config?.gov_data_timeout_seconds || 15),
+        gov_data_max_retries: Number(config?.gov_data_max_retries || 2),
+        gov_data_rate_limit_seconds: Number(config?.gov_data_rate_limit_seconds || 1),
       });
     } finally {
       setLoading(false);
@@ -263,6 +270,17 @@ export default function SystemConfig() {
       'crawler_search_max_results',
       'crawler_search_timeout_seconds',
       'crawler_search_allowed_domains',
+    ]);
+    return saveConfigPatch(values);
+  };
+
+  const saveGovernmentDataConfig = () => {
+    const values = configForm.getFieldsValue([
+      'gov_data_enabled',
+      'gov_data_sources',
+      'gov_data_timeout_seconds',
+      'gov_data_max_retries',
+      'gov_data_rate_limit_seconds',
     ]);
     return saveConfigPatch(values);
   };
@@ -632,6 +650,65 @@ export default function SystemConfig() {
                 {checkAlert('租金爬虫', checks.crawler_rent)}
               </Card>
             </Col>
+            <Col span={24}>
+              <Card
+                size="small"
+                title="政府公开数据"
+                extra={governmentDataEnabled ? <Tag color="green">已启用</Tag> : <Tag color="default">已停用</Tag>}
+              >
+                <Alert
+                  style={{marginBottom: 12}}
+                  type="info"
+                  showIcon
+                  message="用于城市和区县宏观背景"
+                  description="只读取官方公开数据。城市/区县指标不会显示为项目1km人口或客流，也不会直接改变当前评分。"
+                />
+                <Row gutter={12}>
+                  <Col xs={24} md={4}>
+                    <Form.Item name="gov_data_enabled" label="启用政府数据" valuePropName="checked">
+                      <Switch checkedChildren="启用" unCheckedChildren="停用" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="gov_data_sources" label="数据源">
+                      <Input placeholder="national,shaanxi,xian" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Form.Item name="gov_data_timeout_seconds" label="超时（秒）">
+                      <InputNumber min={3} max={120} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Form.Item name="gov_data_max_retries" label="最大重试">
+                      <InputNumber min={0} max={5} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Form.Item name="gov_data_rate_limit_seconds" label="请求间隔（秒）">
+                      <InputNumber min={0} max={30} style={{width: '100%'}} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Space>
+                  <Button
+                    type={governmentDataEnabled ? 'default' : 'primary'}
+                    icon={governmentDataEnabled ? <CheckCircleOutlined /> : <SaveOutlined />}
+                    loading={savingConfig}
+                    onClick={saveGovernmentDataConfig}
+                  >
+                    {governmentDataEnabled ? '已保存政府数据配置' : '保存政府数据配置'}
+                  </Button>
+                  <Button
+                    onClick={() => testDataSource('government_stats')}
+                    loading={checks.government_stats === 'loading'}
+                  >
+                    测试政府数据源
+                  </Button>
+                </Space>
+                {checkAlert('政府公开数据', checks.government_stats)}
+              </Card>
+            </Col>
           </Row>
         </Form>
         {savingConfig && <Alert style={{marginTop: 12}} type="info" showIcon message="正在保存配置..." />}
@@ -645,6 +722,8 @@ export default function SystemConfig() {
           />
         )}
       </Card>
+
+      <GovernmentStatsAdminPanel adminToken={token} />
 
       <Card title="评分维度和权重">
         <Alert
