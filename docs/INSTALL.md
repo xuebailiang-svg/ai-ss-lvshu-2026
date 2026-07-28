@@ -258,3 +258,24 @@ sudo ./uninstall.sh --purge-all
 - 已经由 Alembic 管理的数据库。
 
 表、字段和索引已经存在时会安全跳过，不需要手工执行 `alembic stamp`，也不要清空数据库。
+# 主系统与独立爬虫
+
+主系统的 `install.sh` 只安装 FastAPI、前端、PostgreSQL 配置和 Nginx，不再安装
+`crawl4ai` 或下载 Playwright Chromium。这样日常升级不会重复下载数百 MB 浏览器文件，
+也不会因为爬虫环境异常阻塞主系统部署。
+
+主系统部署完成后，如需启用 Step 4 公开网页补充，再单独执行：
+
+```bash
+cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
+sudo bash scripts/crawler/install.sh
+```
+
+需要提前下载并上传依赖时，使用离线包：
+
+```bash
+sudo bash scripts/crawler/install.sh \
+  --bundle /home/ubuntu/data/esports-crawler-offline-ubuntu22.04-amd64.tar.gz
+```
+
+完整说明见 [CRAWLER_DEPLOYMENT.md](CRAWLER_DEPLOYMENT.md)。

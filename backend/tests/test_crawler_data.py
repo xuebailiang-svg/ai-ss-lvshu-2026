@@ -12,6 +12,7 @@ from app.data_source.crawler.service import (
     queue_manual_url_crawl_task,
     queue_project_crawler_tasks,
 )
+from app.data_source.crawler.worker import CrawlerWorker
 from app.models import CrawlTaskRecord, FoodBusinessRecord, RentDataRecord, UnifiedCompetitorRecord
 
 
@@ -343,6 +344,61 @@ def test_crawler_queue_creates_pending_tasks_without_running(client, monkeypatch
         task = db.get(CrawlTaskRecord, result["task_ids"][0])
         assert task is not None
         assert task.status == "pending"
+
+
+def test_crawler_api_only_queues_for_independent_worker(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        db.add(
+            UnifiedCompetitorRecord(
+                project_id=project_id,
+                name="独立 Worker 测试电竞馆",
+                address="测试地址",
+                distance_meters=200,
+                source="amap",
+                confidence=0.9,
+                status="pending_review",
+                raw_data={"source_url": "https://example.com/shop/worker"},
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        f"/api/projects/{project_id}/crawl/enrich",
+        json={"types": ["competitor"], "max_items": 1, "discover_urls": False},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task_count"] == 1
+    assert "独立 Worker" in body["message"]
+    with SessionLocal() as db:
+        task = db.get(CrawlTaskRecord, body["task_ids"][0])
+        assert task is not None
+        assert task.status == "pending"
+
+
+def test_independent_worker_claims_oldest_pending_task(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        first = CrawlTaskRecord(project_id=project_id, task_type="rent", provider="crawl4ai", status="pending")
+        second = CrawlTaskRecord(project_id=project_id, task_type="rent", provider="crawl4ai", status="pending")
+        db.add_all([first, second])
+        db.commit()
+        first_id = first.id
+        second_id = second.id
+
+    worker = CrawlerWorker()
+    claimed_id = worker.claim_next_task()
+
+    assert claimed_id == first_id
+    with SessionLocal() as db:
+        assert db.get(CrawlTaskRecord, first_id).status == "running"
+        assert db.get(CrawlTaskRecord, second_id).status == "pending"
 
 
 def test_manual_url_task_runs_in_independent_session(client, monkeypatch):

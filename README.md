@@ -6,7 +6,8 @@
 
 ## v1.0.0-beta Ubuntu 一键部署
 
-当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。安装脚本会自动把当前解压目录同步到固定生产目录
+当前生产交付方式为 Ubuntu 22.04 直接部署，不使用 Docker。安装脚本只部署主系统，不再下载
+`crawl4ai` 或 Playwright Chromium。爬虫作为可选独立 Worker 单独安装。主安装脚本会自动把当前解压目录同步到固定生产目录
 `/opt/esports-site-selection/app/ai-ss-lvshu-2026-main`，避免 systemd 指向 `/tmp` 或 `/home/ubuntu` 导致权限和 venv shebang 问题。
 
 ```bash
@@ -31,6 +32,24 @@ sudo ./uninstall.sh
 因此重新安装无需再次输入数据库密码或第三方 Key。
 
 详细说明见 [docs/INSTALL.md](docs/INSTALL.md)。
+
+### 独立爬虫部署
+
+先完成主系统部署，再按需要安装爬虫：
+
+```bash
+# 在线安装独立 crawler Worker
+cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
+sudo bash scripts/crawler/install.sh
+
+# 或使用提前上传的离线运行包
+sudo bash scripts/crawler/install.sh \
+  --bundle /home/ubuntu/data/esports-crawler-offline-ubuntu22.04-amd64.tar.gz
+```
+
+普通 `sudo ./install.sh --upgrade` 不会重新下载 Chromium。只有爬虫依赖变化时才需重新运行爬虫安装脚本。
+离线包构建、上传、安装、健康检查和卸载说明见
+[docs/CRAWLER_DEPLOYMENT.md](docs/CRAWLER_DEPLOYMENT.md)。
 
 公网打开后一直转圈时，优先检查：
 
@@ -62,6 +81,12 @@ bash scripts/health-check.sh
 
 # 查看日志
 bash scripts/view-logs.sh
+
+# 独立爬虫日志（已安装时）
+sudo journalctl -u esports-site-selection-crawler -n 200 --no-pager
+
+# 独立爬虫运行状态
+curl -s http://127.0.0.1/api/data-sources/crawler/runtime
 
 # 启停服务
 bash scripts/start.sh

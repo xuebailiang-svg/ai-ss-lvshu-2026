@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timezone
 
 from app.data_model.schemas import CompetitorData, POIData, RentData
 from app.data_source import (
@@ -159,15 +161,10 @@ def test_crawler_connectivity_is_disabled(client):
     assert body["message"] == "爬虫能力未启用"
 
 
-def test_crawler_connectivity_detects_missing_playwright_runtime(client, monkeypatch):
+def test_crawler_connectivity_detects_missing_worker_runtime(client, monkeypatch, tmp_path):
     monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_HEALTH_FILE", str(tmp_path / "missing-worker-health.json"))
     get_settings.cache_clear()
-    monkeypatch.setattr("app.data_source.crawler.crawl4ai_client.ensure_crawl4ai_available", lambda: None)
-
-    def fail_runtime():
-        raise RuntimeError("Playwright Chromium 未安装")
-
-    monkeypatch.setattr("app.data_source.crawler.crawl4ai_client.ensure_playwright_chromium_available", fail_runtime)
 
     response = client.post("/api/data-sources/crawler_competitor/check")
 
@@ -175,8 +172,38 @@ def test_crawler_connectivity_detects_missing_playwright_runtime(client, monkeyp
     body = response.json()
     assert body["configured"] is True
     assert body["reachable"] is False
-    assert body["status"] == "failed"
-    assert "Playwright Chromium 未安装" in body["message"]
+    assert body["status"] == "not_configured"
+    assert "独立爬虫 Worker 尚未安装" in body["message"]
+
+
+def test_crawler_runtime_health_is_exposed_without_secrets(client, monkeypatch, tmp_path):
+    health_file = tmp_path / "worker-health.json"
+    health_file.write_text(
+        json.dumps(
+            {
+                "service": "esports-site-selection-crawler",
+                "status": "ok",
+                "browser_ready": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_HEALTH_FILE", str(health_file))
+    get_settings.cache_clear()
+
+    response = client.get("/api/data-sources/crawler/runtime")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["installed"] is True
+    assert body["reachable"] is True
+    assert body["status"] == "ok"
+    assert "key" not in json.dumps(body).lower()
+
+    check = client.post("/api/data-sources/crawler_competitor/check")
+    assert check.status_code == 200
+    assert check.json()["status"] == "ok"
 
 
 def test_unknown_provider_connectivity_returns_404(client):

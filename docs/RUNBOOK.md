@@ -61,6 +61,18 @@ npm run build
 | `CRAWLER_PROVIDER` | `crawl4ai` | 爬虫执行层 Provider。第一版仅支持 `crawl4ai`。 |
 | `CRAWLER_TIMEOUT_SECONDS` | `60` | 单个爬虫任务超时时间。 |
 | `CRAWLER_MAX_TASKS_PER_PROJECT` | `50` | 单个项目最大爬虫任务数。 |
+
+> `crawl4ai` 与 Playwright Chromium 不再安装到 FastAPI 主服务环境。主服务只创建
+> `crawl_tasks`，独立 `esports-site-selection-crawler` Worker 负责执行。安装与离线包
+> 操作见 [CRAWLER_DEPLOYMENT.md](CRAWLER_DEPLOYMENT.md)。
+
+爬虫常用运维命令：
+
+```bash
+sudo systemctl status esports-site-selection-crawler --no-pager -l
+sudo journalctl -u esports-site-selection-crawler -n 200 --no-pager
+curl -s http://127.0.0.1/api/data-sources/crawler/runtime
+```
 | `GOV_DATA_ENABLED` | `true` | 是否启用政府公开数据 Provider。 |
 | `GOV_DATA_SOURCES` | `national,shaanxi,xian` | 启用的官方来源适配器。 |
 | `GOV_DATA_TIMEOUT_SECONDS` | `15` | 单次官方页面请求超时。 |

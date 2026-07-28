@@ -71,6 +71,7 @@ const apiMocks = vi.hoisted(() => ({
     {name: 'manual', display_name: '人工上传', status: 'available', description: '人工补充数据', capabilities: ['manual'], check_supported: true},
   ]})),
   checkDataSourceConnectivity: vi.fn(() => Promise.resolve({name: 'amap', configured: true, reachable: true, status: 'ok', message: 'ok', latency_ms: 10, checked_at: 'now'})),
+  getCrawlerRuntimeStatus: vi.fn(() => Promise.resolve({installed: false, reachable: false, status: 'not_installed', message: '独立爬虫 Worker 尚未安装'})),
   getScoringConfig: vi.fn(() => Promise.resolve({dimensions: [
     {key: 'redline_compliance', name: '红线合规', description: '红线检查', weight: 10, enabled: true, data_sources: ['amap'], sort_order: 0, factors: []},
     {key: 'competitor_operation', name: '竞品经营', description: '竞品经营信息', weight: 10, enabled: true, data_sources: ['manual'], sort_order: 1, factors: []},
@@ -128,6 +129,7 @@ vi.mock('../api/projects', () => ({
 vi.mock('../api/dataSources', () => ({
   getDataSourceStatus: apiMocks.getDataSourceStatus,
   checkDataSourceConnectivity: apiMocks.checkDataSourceConnectivity,
+  getCrawlerRuntimeStatus: apiMocks.getCrawlerRuntimeStatus,
 }));
 
 vi.mock('../api/scoringConfig', () => ({

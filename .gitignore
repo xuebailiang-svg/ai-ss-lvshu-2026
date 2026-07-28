@@ -17,3 +17,6 @@ data/
 .coverage
 chat1.log
 ai-ss-lvshu-2026/
+crawler/.venv/
+crawler/offline-bundle/
+crawler/*.tar.gz

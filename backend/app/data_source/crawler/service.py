@@ -62,7 +62,7 @@ def _domain_allowed(url: str | None) -> tuple[bool, str | None]:
 def _friendly_crawl_error(exc: Exception) -> str:
     message = str(exc)
     if "Executable doesn't exist" in message or "playwright install" in message:
-        return "Playwright Chromium 未安装，请重新执行安装脚本或在后端虚拟环境执行：python -m playwright install chromium"
+        return "Playwright Chromium 未安装，请重新执行独立爬虫安装脚本：scripts/crawler/install.sh"
     if "Timeout" in message or "timeout" in message:
         return "公开网页抓取超时，请稍后重试或换用更具体的详情页 URL。"
     if "net::ERR_NAME_NOT_RESOLVED" in message:
@@ -657,7 +657,7 @@ async def enrich_project_with_crawler(
             "skipped_count": 0,
             "discovered_url_count": 0,
             "saved": {"competitors": 0, "supporting": 0, "rent": 0},
-            "message": "爬虫能力未启用，请先在配置页启用",
+            "message": "爬虫能力未启用，请先安装独立爬虫服务并在配置页启用",
         }
 
     allowed_types = [item for item in types if item in {"competitor", "supporting", "rent"}]
@@ -806,7 +806,7 @@ def queue_project_crawler_tasks(
         "skipped_count": 0,
         "discovered_url_count": 0,
         "saved": {"competitors": 0, "supporting": 0, "rent": 0},
-        "message": "爬虫任务已创建，请稍后查看结果" if task_ids else "没有可用于爬虫补充的候选数据",
+        "message": "爬虫任务已创建，独立 Worker 将在后台处理" if task_ids else "没有可用于爬虫补充的候选数据",
     }
 
 
@@ -835,7 +835,7 @@ def queue_manual_url_crawl_task(
             "skipped_count": 0,
             "discovered_url_count": 0,
             "saved": {"competitors": 0, "supporting": 0, "rent": 0},
-            "message": "爬虫能力未启用，请先在配置页启用",
+            "message": "爬虫能力未启用，请先安装独立爬虫服务并在配置页启用",
         }
     payload = {
         "task_type": task_type,
@@ -861,7 +861,7 @@ def queue_manual_url_crawl_task(
         "skipped_count": 0,
         "discovered_url_count": 0,
         "saved": {"competitors": 0, "supporting": 0, "rent": 0},
-        "message": "手动 URL 爬虫任务已创建，请稍后查看结果",
+        "message": "手动 URL 爬虫任务已创建，独立 Worker 将在后台处理",
     }
 
 

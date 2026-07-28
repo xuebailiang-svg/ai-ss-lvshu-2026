@@ -52,6 +52,9 @@ copy_source_to_deploy_root() {
   tar -C "${SOURCE_ROOT}" \
     --exclude='./.git' \
     --exclude='./backend/.venv' \
+    --exclude='./crawler/.venv' \
+    --exclude='./crawler/offline-bundle' \
+    --exclude='./crawler/*.tar.gz' \
     --exclude='./frontend/node_modules' \
     --exclude='./frontend/dist' \
     --exclude='./backups' \
@@ -397,19 +400,11 @@ install_backend() {
   log "安装后端依赖并迁移数据库"
   python3 -m venv "${APP_ROOT}/backend/.venv"
   "${APP_ROOT}/backend/.venv/bin/python" -m pip install --upgrade pip
+  # 爬虫拥有独立虚拟环境。清理旧版本曾装入主后端环境的浏览器依赖，
+  # 避免升级后误以为主服务仍承担爬虫执行。
+  "${APP_ROOT}/backend/.venv/bin/pip" uninstall -y crawl4ai playwright >/dev/null 2>&1 || true
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
-  log "准备 crawl4ai / Playwright 运行时"
-  # crawl4ai-setup 会在内部调用 sudo。APP_USER 是无登录服务账号，直接
-  # 以该用户执行会停在密码提示。系统依赖由当前 root 安装进程安装，
-  # 浏览器文件再以 APP_USER 身份写入其运行时缓存目录。
-  "${APP_ROOT}/backend/.venv/bin/python" -c "import crawl4ai"
-  "${APP_ROOT}/backend/.venv/bin/python" -m playwright install-deps chromium
-  runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" \
-    "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium
-  runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" \
-    "${APP_ROOT}/backend/.venv/bin/python" -c \
-    "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch(headless=True); browser.close(); p.stop()"
   runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
 }
 
@@ -461,6 +456,15 @@ EOF
   systemctl daemon-reload
   systemctl enable "${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"
+  if systemctl cat esports-site-selection-crawler.service >/dev/null 2>&1; then
+    if grep -q 'ExecStart=.*/crawler/.venv/bin/python' /etc/systemd/system/esports-site-selection-crawler.service 2>/dev/null; then
+      log "重启已安装的独立爬虫 Worker 以加载新代码"
+      systemctl restart esports-site-selection-crawler.service || warn "独立爬虫 Worker 重启失败，不影响主系统；请查看其日志"
+    else
+      systemctl disable --now esports-site-selection-crawler.service 2>/dev/null || true
+      warn "检测到旧版内置爬虫服务，已停止。请单独执行 scripts/crawler/install.sh 完成迁移"
+    fi
+  fi
 }
 
 write_nginx() {
@@ -671,6 +675,9 @@ Health:
 生产数据:
   ${DATA_DIR}/site_feedback.json
   ${DATA_DIR}/agent_traces.json
+
+独立爬虫（可选，主系统部署不会下载浏览器）:
+  sudo bash ${APP_ROOT}/scripts/crawler/install.sh
 
 日常升级:
   sudo ./install.sh --upgrade

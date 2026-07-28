@@ -23,10 +23,24 @@ export type ConnectivityCheck = {
   checked_at: string;
 };
 
+export type CrawlerRuntimeStatus = {
+  installed: boolean;
+  reachable: boolean;
+  status: 'ok' | 'disabled' | 'failed' | 'stale' | 'not_installed' | string;
+  message: string;
+  browser_ready?: boolean;
+  checked_at?: string;
+  age_seconds?: number | null;
+};
+
 export const getDataSourceStatus = () => api
   .get<{items: DataSourceStatus[]}>('/data-sources/status')
   .then(response => response.data);
 
 export const checkDataSourceConnectivity = (providerName: string) => api
   .post<ConnectivityCheck>(`/data-sources/${encodeURIComponent(providerName)}/check`)
+  .then(response => response.data);
+
+export const getCrawlerRuntimeStatus = () => api
+  .get<CrawlerRuntimeStatus>('/data-sources/crawler/runtime')
   .then(response => response.data);

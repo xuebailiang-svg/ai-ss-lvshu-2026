@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,7 +16,6 @@ from app.data_source.crawler.service import (
     CrawlTaskNotFoundError,
     get_crawl_task,
     list_crawl_tasks,
-    process_crawl_task_ids,
     queue_manual_url_crawl_task,
     queue_project_crawler_tasks,
 )
@@ -26,10 +25,9 @@ router = APIRouter(prefix="/api/projects", tags=["crawler-data"])
 
 
 @router.post("/{project_id}/crawl/enrich", response_model=CrawlEnrichResponse)
-async def crawl_enrich_project(
+def crawl_enrich_project(
     project_id: str,
     payload: CrawlEnrichRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> CrawlEnrichResponse:
     try:
@@ -40,18 +38,15 @@ async def crawl_enrich_project(
             max_items=payload.max_items,
             discover_urls=payload.discover_urls,
         )
-        if result.get("task_ids"):
-            background_tasks.add_task(process_crawl_task_ids, list(result["task_ids"]))
         return CrawlEnrichResponse(**result)
     except CrawlProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found") from None
 
 
 @router.post("/{project_id}/crawl/manual-url", response_model=CrawlEnrichResponse)
-async def crawl_manual_url_project(
+def crawl_manual_url_project(
     project_id: str,
     payload: CrawlManualUrlRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> CrawlEnrichResponse:
     try:
@@ -64,8 +59,6 @@ async def crawl_manual_url_project(
             url=payload.url,
             record_type=payload.record_type,
         )
-        if result.get("task_ids"):
-            background_tasks.add_task(process_crawl_task_ids, list(result["task_ids"]))
         return CrawlEnrichResponse(**result)
     except CrawlProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found") from None

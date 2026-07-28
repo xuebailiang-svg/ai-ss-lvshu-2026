@@ -11,6 +11,7 @@ from app.data_source.base import (
     ProviderAvailability,
 )
 from app.system_config.service import resolve_config_value
+from .runtime import read_worker_health
 
 
 def _truthy(value: str | bool | None) -> bool:
@@ -72,7 +73,13 @@ class CrawlerProvider(DataProvider):
 
     @property
     def availability(self) -> ProviderAvailability:
-        return ProviderAvailability.available if crawler_settings().enabled else ProviderAvailability.disabled
+        if not crawler_settings().enabled:
+            return ProviderAvailability.disabled
+        return (
+            ProviderAvailability.available
+            if read_worker_health().get("reachable")
+            else ProviderAvailability.not_configured
+        )
 
     async def check_connectivity(self) -> ConnectivityResult:
         settings = crawler_settings()
@@ -80,11 +87,19 @@ class CrawlerProvider(DataProvider):
             return ConnectivityResult(False, False, ConnectivityStatus.disabled, "爬虫能力未启用")
         if settings.provider != "crawl4ai":
             return ConnectivityResult(False, False, ConnectivityStatus.not_configured, "当前仅支持 crawl4ai")
-        try:
-            from .crawl4ai_client import ensure_crawl4ai_available, ensure_playwright_chromium_available
-
-            ensure_crawl4ai_available()
-            ensure_playwright_chromium_available()
-        except Exception as exc:
-            return ConnectivityResult(True, False, ConnectivityStatus.failed, f"crawl4ai运行时不可用：{exc}")
-        return ConnectivityResult(True, True, ConnectivityStatus.ok, "crawl4ai和Playwright Chromium可用")
+        health = read_worker_health()
+        if health.get("reachable"):
+            return ConnectivityResult(True, True, ConnectivityStatus.ok, "独立爬虫 Worker 和 Chromium 运行正常")
+        if health.get("status") == "not_installed":
+            return ConnectivityResult(
+                True,
+                False,
+                ConnectivityStatus.not_configured,
+                "独立爬虫 Worker 尚未安装，请执行 scripts/crawler/install.sh",
+            )
+        return ConnectivityResult(
+            True,
+            False,
+            ConnectivityStatus.failed,
+            str(health.get("message") or "独立爬虫 Worker 不可用"),
+        )

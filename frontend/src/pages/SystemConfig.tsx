@@ -24,7 +24,9 @@ import {
 } from '../api/client';
 import {
   checkDataSourceConnectivity,
+  getCrawlerRuntimeStatus,
   getDataSourceStatus,
+  type CrawlerRuntimeStatus,
   type ConnectivityCheck,
   type DataSourceStatus,
 } from '../api/dataSources';
@@ -89,6 +91,7 @@ export default function SystemConfig() {
   const [memoryForm] = Form.useForm();
   const [managedConfig, setManagedConfig] = useState<any>(null);
   const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
+  const [crawlerRuntime, setCrawlerRuntime] = useState<CrawlerRuntimeStatus | null>(null);
   const [checks, setChecks] = useState<Record<string, CheckState>>({});
   const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -113,16 +116,18 @@ export default function SystemConfig() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [config, sources, scoring, memory] = await Promise.all([
+      const [config, sources, scoring, memory, crawlerRuntimeResult] = await Promise.all([
         getManagedSystemConfig().catch(() => null),
         getDataSourceStatus().catch(() => ({items: []})),
         getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
         listMemory().catch(() => ({items: [], total: 0})),
+        getCrawlerRuntimeStatus().catch(() => null),
       ]);
       setManagedConfig(config);
       setDataSources(sources.items || []);
       setDimensions(scoring.dimensions || []);
       setMemories(memory.items || []);
+      setCrawlerRuntime(crawlerRuntimeResult);
       configForm.setFieldsValue({
         deepseek_base_url: config?.deepseek_base_url || 'https://api.deepseek.com',
         deepseek_model: config?.deepseek_model || 'deepseek-chat',
@@ -558,6 +563,16 @@ export default function SystemConfig() {
                   showIcon
                   message="合规限制"
                   description="只抓取允许访问的公开页面，不绕过登录、验证码、反爬或付费墙；结果默认待人工确认。"
+                />
+                <Alert
+                  style={{marginBottom: 12}}
+                  type={crawlerRuntime?.reachable ? 'success' : 'warning'}
+                  showIcon
+                  message={crawlerRuntime?.reachable ? '独立爬虫服务运行正常' : '独立爬虫服务尚未就绪'}
+                  description={
+                    crawlerRuntime?.message
+                    || '主系统安装不会下载浏览器。请在服务器单独执行 scripts/crawler/install.sh。'
+                  }
                 />
                 <Row gutter={12}>
                   <Col xs={24} md={6}>
