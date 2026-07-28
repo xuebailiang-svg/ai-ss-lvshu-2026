@@ -12,6 +12,15 @@ from app.data_source.crawler.base import CrawlerSettings
 from app.models import SiteProjectRecord
 
 
+def _search_error(provider: str, query: str, error_type: str, message: str) -> dict[str, str]:
+    return {
+        "provider": provider,
+        "query": query,
+        "error_type": error_type,
+        "message": message,
+    }
+
+
 @dataclass(frozen=True)
 class SearchResult:
     url: str
@@ -132,14 +141,17 @@ async def discover_urls_for_payload(
     *,
     settings: CrawlerSettings,
     client: SearchDiscoveryClient,
-) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], str | None, list[dict[str, str]]]:
     if not settings.search_enabled:
-        return [], [], [], "爬虫搜索发现未启用"
+        return [], [], [], "爬虫搜索发现未启用", [
+            _search_error("system", "", "disabled", "爬虫搜索发现未启用")
+        ]
 
     providers = _provider_list(settings.search_provider)
     queries = build_search_queries(project, payload)
     discovered: list[SearchResult] = []
     errors: list[str] = []
+    search_errors: list[dict[str, str]] = []
     seen: set[str] = set()
     filtered_count = 0
 
@@ -160,11 +172,16 @@ async def discover_urls_for_payload(
                         timeout_seconds=max(3, settings.search_timeout_seconds),
                     )
             except Exception as exc:
-                errors.append(f"{provider} {query}: {exc}")
+                error_type = _classify_search_exception(exc)
+                message = f"{provider} {query}: {exc}"
+                errors.append(message)
+                search_errors.append(_search_error(provider, query, error_type, str(exc)))
                 continue
 
             if not results:
-                errors.append(f"{provider} {query}: 未解析到搜索结果")
+                message = f"{provider} {query}: 未解析到搜索结果"
+                errors.append(message)
+                search_errors.append(_search_error(provider, query, "parse_empty", "未解析到搜索结果"))
                 continue
 
             for result in results:
@@ -173,6 +190,9 @@ async def discover_urls_for_payload(
                     continue
                 if not _search_domain_allowed(normalized_url, settings):
                     filtered_count += 1
+                    search_errors.append(
+                        _search_error(result.provider or provider, result.query or query, "domain_filtered", normalized_url)
+                    )
                     continue
                 seen.add(normalized_url)
                 discovered.append(
@@ -202,13 +222,25 @@ async def discover_urls_for_payload(
         for result in discovered
     ]
     if discovered:
-        return payloads, queries, [item.model_dump() for item in discovered], None
+        return payloads, queries, [item.model_dump() for item in discovered], None, search_errors
 
     error_message = "；".join(errors)
     if filtered_count:
         extra = f"域名过滤后无可用结果，过滤 {filtered_count} 个"
         error_message = f"{error_message}；{extra}" if error_message else extra
-    return payloads, queries, [], error_message or "未发现可抓取的公开网页"
+    return payloads, queries, [], error_message or "未发现可抓取的公开网页", search_errors
+
+
+def _classify_search_exception(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "http_error"
+    if isinstance(exc, httpx.RequestError):
+        return "request_error"
+    if isinstance(exc, ValueError):
+        return "unsupported_provider"
+    return "failed"
 
 
 def _parse_duckduckgo_html(text: str, *, query: str, max_results: int) -> list[SearchResult]:

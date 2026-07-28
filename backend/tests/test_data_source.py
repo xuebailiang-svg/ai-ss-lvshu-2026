@@ -147,12 +147,32 @@ def test_manual_connectivity_is_local_and_available(client):
 
 
 def test_crawler_connectivity_is_disabled(client):
-    response = client.post("/api/data-sources/crawler/check")
+    response = client.post("/api/data-sources/crawler_competitor/check")
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "disabled"
-    assert body["message"] == "爬虫能力尚未开发"
+    assert body["message"] == "爬虫能力未启用"
+
+
+def test_crawler_connectivity_detects_missing_playwright_runtime(client, monkeypatch):
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.data_source.crawler.crawl4ai_client.ensure_crawl4ai_available", lambda: None)
+
+    def fail_runtime():
+        raise RuntimeError("Playwright Chromium 未安装")
+
+    monkeypatch.setattr("app.data_source.crawler.crawl4ai_client.ensure_playwright_chromium_available", fail_runtime)
+
+    response = client.post("/api/data-sources/crawler_competitor/check")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is True
+    assert body["reachable"] is False
+    assert body["status"] == "failed"
+    assert "Playwright Chromium 未安装" in body["message"]
 
 
 def test_unknown_provider_connectivity_returns_404(client):

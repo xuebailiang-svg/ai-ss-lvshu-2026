@@ -49,6 +49,16 @@ class FakeDiscovery:
         return [SearchResult(url="https://example.com/discovered/1", title="测试公开页面", query=query)]
 
 
+class FakeEmptyDiscovery:
+    async def discover_provider(self, provider: str, query: str, *, max_results: int, timeout_seconds: int):
+        return []
+
+
+class FakeEmptyCrawler:
+    async def crawl(self, url: str, timeout_seconds: int):
+        return SimpleNamespace(markdown="这是一段没有经营字段的普通网页内容")
+
+
 def test_crawler_enrich_disabled_returns_clear_message(client):
     project_id = _create_project(client)
 
@@ -186,6 +196,45 @@ def test_crawler_enrich_discovers_url_from_name_and_address(client, monkeypatch)
         task = db.query(CrawlTaskRecord).filter(CrawlTaskRecord.project_id == project_id).first()
         assert task.target_url == "https://example.com/discovered/1"
         assert task.input_snapshot["discovered_by_search"] is True
+
+
+def test_crawler_search_empty_records_diagnostics(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        db.add(
+            UnifiedCompetitorRecord(
+                project_id=project_id,
+                name="无搜索结果竞品",
+                address="测试地址",
+                distance_meters=300,
+                source="amap",
+                confidence=0.9,
+                status="pending_review",
+                raw_data={},
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(
+            enrich_project_with_crawler(
+                db,
+                project_id=project_id,
+                types=["competitor"],
+                max_items=1,
+                client=FakeCrawler(),
+                discovery_client=FakeEmptyDiscovery(),
+            )
+        )
+
+        assert result["skipped_count"] == 1
+        task = db.query(CrawlTaskRecord).filter(CrawlTaskRecord.project_id == project_id).first()
+        assert task is not None
+        assert task.status == "skipped"
+        assert task.result_snapshot["search_queries"]
+        assert task.result_snapshot["search_errors"]
+        assert task.result_snapshot["search_errors"][0]["error_type"] == "parse_empty"
 
 
 def test_crawler_rent_search_creates_pending_rent_record(client, monkeypatch):
@@ -361,3 +410,31 @@ def test_manual_url_supporting_task_creates_pending_food_record(client, monkeypa
         assert len(rows) == 1
         assert rows[0].status == "pending_review"
         assert rows[0].raw_data["crawler_detail"]["source_url"] == "https://example.com/manual/food"
+
+
+def test_manual_url_task_with_no_extracted_fields_returns_partial_message(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
+    get_settings.cache_clear()
+    monkeypatch.setattr(crawler_service, "Crawl4AIClient", lambda: FakeEmptyCrawler())
+
+    with SessionLocal() as db:
+        result = queue_manual_url_crawl_task(
+            db,
+            project_id=project_id,
+            task_type="competitor",
+            name="无字段页面",
+            address="测试地址",
+            url="https://example.com/manual/empty",
+        )
+        task_ids = result["task_ids"]
+
+    asyncio.run(process_crawl_task_ids(task_ids))
+
+    with SessionLocal() as db:
+        task = db.get(CrawlTaskRecord, task_ids[0])
+        assert task is not None
+        assert task.status == "partial"
+        assert "未识别到可用字段" in task.error_message
+        assert task.result_snapshot["extracted_fields"] == {}

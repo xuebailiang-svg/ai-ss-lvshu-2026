@@ -19,6 +19,30 @@ def test_create_project_success(client):
     assert project_id.startswith("proj_")
 
 
+def test_create_project_preserves_utf8_text(client):
+    payload = {
+        "name": "陕西省西安市雁塔区西部电子社区电竞馆",
+        "city": "西安市",
+        "district": "雁塔区",
+        "address": "陕西省西安市雁塔区西部电子社区",
+        "longitude": 108.946767,
+        "latitude": 34.222838,
+        "radius_meters": 1000,
+        "business_type": "电竞馆",
+    }
+
+    response = client.post("/api/projects", json=payload)
+
+    assert response.status_code == 200
+    project_id = response.json()["project_id"]
+    detail = client.get(f"/api/projects/{project_id}").json()["project"]
+    assert detail["name"] == payload["name"]
+    assert detail["city"] == payload["city"]
+    assert detail["district"] == payload["district"]
+    assert detail["address"] == payload["address"]
+    assert detail["business_type"] == payload["business_type"]
+
+
 def test_get_project_success(client):
     project_id = create_project(client)
 

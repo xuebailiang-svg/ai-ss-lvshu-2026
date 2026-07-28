@@ -245,6 +245,43 @@ ensure_security_settings() {
   fi
 }
 
+ensure_crawler_settings() {
+  local changed=false
+  declare -A defaults=(
+    [CRAWLER_ENABLED]=false
+    [CRAWLER_PROVIDER]=crawl4ai
+    [CRAWLER_TIMEOUT_SECONDS]=60
+    [CRAWLER_MAX_PAGES_PER_TASK]=5
+    [CRAWLER_MAX_TASKS_PER_PROJECT]=50
+    [CRAWLER_RATE_LIMIT_SECONDS]=5
+    [CRAWLER_ALLOWED_DOMAINS]=
+    [CRAWLER_BLOCKED_DOMAINS]=
+    [CRAWLER_SEARCH_ENABLED]=true
+    [CRAWLER_SEARCH_PROVIDER]=duckduckgo_html,bing_html
+    [CRAWLER_SEARCH_MAX_RESULTS]=5
+    [CRAWLER_SEARCH_TIMEOUT_SECONDS]=10
+    [CRAWLER_SEARCH_ALLOWED_DOMAINS]=
+  )
+
+  for key in "${!defaults[@]}"; do
+    if ! grep -q "^${key}=" "${ENV_FILE}"; then
+      printf '%s=%s\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      changed=true
+    fi
+  done
+
+  if grep -q '^CRAWLER_SEARCH_PROVIDER=duckduckgo_html$' "${ENV_FILE}"; then
+    sed -i 's|^CRAWLER_SEARCH_PROVIDER=duckduckgo_html$|CRAWLER_SEARCH_PROVIDER=duckduckgo_html,bing_html|' "${ENV_FILE}"
+    changed=true
+  fi
+
+  chown root:"${APP_GROUP}" "${ENV_FILE}"
+  chmod 0640 "${ENV_FILE}"
+  if [[ "${changed}" == true ]]; then
+    echo "OK: 已补齐爬虫配置项（保留已有 Key 和数据库配置）"
+  fi
+}
+
 normalize_frontend_runtime_config() {
   install -d -m 0755 -o root -g root "${CONFIG_DIR}"
   local js_key="" security="" tmp
@@ -331,13 +368,16 @@ install_backend() {
   "${APP_ROOT}/backend/.venv/bin/python" -m pip install --upgrade pip
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
-  if grep -Eiq '^CRAWLER_ENABLED=(true|1|yes|on)$' "${ENV_FILE}"; then
-    log "准备 crawl4ai 运行时"
-    if [[ -x "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" ]]; then
-      "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup"
-    else
-      echo "WARN: crawl4ai-setup 未找到；爬虫连接检测可能失败，请检查 crawl4ai 安装。"
-    fi
+  log "准备 crawl4ai / Playwright 运行时"
+  if [[ -x "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" ]]; then
+    runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" || true
+  else
+    echo "WARN: crawl4ai-setup 未找到；爬虫连接检测可能失败，请检查 crawl4ai 安装。"
+  fi
+  if ! runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium; then
+    echo "WARN: Playwright Chromium 安装失败，尝试补充系统依赖后重试。"
+    "${APP_ROOT}/backend/.venv/bin/python" -m playwright install-deps chromium || true
+    runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium
   fi
   runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
 }
@@ -573,6 +613,7 @@ main() {
   ensure_user_and_dirs
   ensure_backend_env
   ensure_security_settings
+  ensure_crawler_settings
   normalize_frontend_runtime_config
   ensure_postgres
   backup_before_migration

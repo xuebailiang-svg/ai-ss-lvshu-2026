@@ -81,9 +81,10 @@ class CrawlerProvider(DataProvider):
         if settings.provider != "crawl4ai":
             return ConnectivityResult(False, False, ConnectivityStatus.not_configured, "当前仅支持 crawl4ai")
         try:
-            from .crawl4ai_client import ensure_crawl4ai_available
+            from .crawl4ai_client import ensure_crawl4ai_available, ensure_playwright_chromium_available
 
             ensure_crawl4ai_available()
+            ensure_playwright_chromium_available()
         except Exception as exc:
-            return ConnectivityResult(True, False, ConnectivityStatus.failed, f"crawl4ai不可用：{exc}")
-        return ConnectivityResult(True, True, ConnectivityStatus.ok, "crawl4ai可用")
+            return ConnectivityResult(True, False, ConnectivityStatus.failed, f"crawl4ai运行时不可用：{exc}")
+        return ConnectivityResult(True, True, ConnectivityStatus.ok, "crawl4ai和Playwright Chromium可用")

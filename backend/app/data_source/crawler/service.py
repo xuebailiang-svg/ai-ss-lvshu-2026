@@ -59,6 +59,19 @@ def _domain_allowed(url: str | None) -> tuple[bool, str | None]:
     return True, None
 
 
+def _friendly_crawl_error(exc: Exception) -> str:
+    message = str(exc)
+    if "Executable doesn't exist" in message or "playwright install" in message:
+        return "Playwright Chromium 未安装，请重新执行安装脚本或在后端虚拟环境执行：python -m playwright install chromium"
+    if "Timeout" in message or "timeout" in message:
+        return "公开网页抓取超时，请稍后重试或换用更具体的详情页 URL。"
+    if "net::ERR_NAME_NOT_RESOLVED" in message:
+        return "公开网页域名无法解析，请检查 URL 是否正确。"
+    if "net::ERR_CONNECTION" in message:
+        return "公开网页暂时无法连接，请稍后重试或人工补充。"
+    return message
+
+
 def _source_url(raw: Any) -> str | None:
     data = raw if isinstance(raw, dict) else {}
     candidates = [
@@ -169,6 +182,14 @@ def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
 
 def _has_value(data: dict[str, Any]) -> bool:
     return any(value not in (None, "", []) for key, value in data.items() if key not in {"source_url", "review_summary"})
+
+
+def _meaningful_fields(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in {"source_url", "review_summary"} and value not in (None, "", [])
+    }
 
 
 def _text(text: str, pattern: str) -> str | None:
@@ -440,6 +461,7 @@ def _skip_task(task: CrawlTaskRecord, payload: dict[str, Any], message: str) -> 
         **(task.result_snapshot or {}),
         "search_queries": payload.get("search_queries") or [],
         "search_results": payload.get("search_results") or [],
+        "search_errors": payload.get("search_errors") or [],
         "discovered_url_count": len(payload.get("search_results") or []),
         "message": message,
     }
@@ -463,7 +485,7 @@ async def _run_existing_task(
     db.flush()
 
     if not url and payload.get("discover_urls", True):
-        discovered_payloads, queries, discovered_results, error_message = await discover_urls_for_payload(
+        discovered_payloads, queries, discovered_results, error_message, search_errors = await discover_urls_for_payload(
             project,
             payload,
             settings=settings,
@@ -475,6 +497,7 @@ async def _run_existing_task(
             "discovery_attempted": True,
             "search_queries": queries,
             "search_results": discovered_results,
+            "search_errors": search_errors,
         }
         if not discovered_payloads:
             payload["discovery_error"] = error_message
@@ -487,6 +510,7 @@ async def _run_existing_task(
             **selected_payload,
             "search_queries": queries,
             "search_results": discovered_results,
+            "search_errors": search_errors,
         }
         url = selected_payload.get("url")
         task.target_url = url
@@ -496,6 +520,7 @@ async def _run_existing_task(
             **(task.result_snapshot or {}),
             "search_queries": queries,
             "search_results": discovered_results,
+            "search_errors": search_errors,
             "discovered_url_count": discovered_url_count,
         }
     else:
@@ -545,15 +570,18 @@ async def _run_existing_task(
             "search_query": payload.get("search_query"),
             "search_result": payload.get("search_result"),
             "extracted": detail,
-            "extracted_fields": {key: value for key, value in detail.items() if value not in (None, "", [])},
+            "extracted_fields": _meaningful_fields(detail),
             "changed": changed,
         }
         task.status = "success" if changed else "partial"
+        if not changed:
+            task.error_message = "页面可访问，但未识别到可用字段，请换用更具体的详情页或人工补充。"
+            task.result_snapshot["message"] = task.error_message
         task.finished_at = _now()
         return {"status": task.status, "saved": saved_type, "discovered_url_count": discovered_url_count}
     except Exception as exc:
         task.status = "failed"
-        task.error_message = str(exc)
+        task.error_message = _friendly_crawl_error(exc)
         task.finished_at = _now()
         return {"status": "failed", "saved": None, "discovered_url_count": discovered_url_count}
 
@@ -573,7 +601,7 @@ async def _expand_payloads_with_discovery(
         if payload.get("url") or not discover_urls:
             expanded.append(payload)
             continue
-        discovered_payloads, queries, discovered_results, error_message = await discover_urls_for_payload(
+        discovered_payloads, queries, discovered_results, error_message, search_errors = await discover_urls_for_payload(
             project,
             payload,
             settings=settings,
@@ -587,6 +615,7 @@ async def _expand_payloads_with_discovery(
                     "discovery_attempted": True,
                     "search_queries": queries,
                     "search_results": discovered_results,
+                    "search_errors": search_errors,
                     "discovery_error": error_message,
                 }
             )
@@ -662,6 +691,7 @@ async def enrich_project_with_crawler(
                 task.result_snapshot = {
                     "search_queries": payload.get("search_queries") or [],
                     "search_results": payload.get("search_results") or [],
+                    "search_errors": payload.get("search_errors") or [],
                     "message": "未发现可抓取的公开网页",
                 }
             task.finished_at = _now()
@@ -698,14 +728,18 @@ async def enrich_project_with_crawler(
                 "search_query": payload.get("search_query"),
                 "search_result": payload.get("search_result"),
                 "extracted": detail,
+                "extracted_fields": _meaningful_fields(detail),
                 "changed": changed,
             }
             task.status = "success" if changed else "partial"
+            if not changed:
+                task.error_message = "页面可访问，但未识别到可用字段，请换用更具体的详情页或人工补充。"
+                task.result_snapshot["message"] = task.error_message
             task.finished_at = _now()
             completed += 1
         except Exception as exc:
             task.status = "failed"
-            task.error_message = str(exc)
+            task.error_message = _friendly_crawl_error(exc)
             task.finished_at = _now()
             failed += 1
     db.commit()
