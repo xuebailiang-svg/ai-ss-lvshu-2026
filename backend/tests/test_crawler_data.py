@@ -5,8 +5,14 @@ from types import SimpleNamespace
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.data_source.crawler.service import enrich_project_with_crawler
-from app.models import CrawlTaskRecord, RentDataRecord, UnifiedCompetitorRecord
+from app.data_source.crawler import service as crawler_service
+from app.data_source.crawler.service import (
+    enrich_project_with_crawler,
+    process_crawl_task_ids,
+    queue_manual_url_crawl_task,
+    queue_project_crawler_tasks,
+)
+from app.models import CrawlTaskRecord, FoodBusinessRecord, RentDataRecord, UnifiedCompetitorRecord
 
 
 def _create_project(client) -> str:
@@ -252,3 +258,106 @@ def test_crawler_unknown_project_returns_404(client):
     response = client.get("/api/projects/not-exist/crawl/tasks")
 
     assert response.status_code == 404
+
+
+def test_crawler_queue_creates_pending_tasks_without_running(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        db.add(
+            UnifiedCompetitorRecord(
+                project_id=project_id,
+                name="测试电竞馆",
+                address="测试地址",
+                distance_meters=300,
+                source="amap",
+                confidence=0.9,
+                status="pending_review",
+                raw_data={"source_url": "https://example.com/shop/1"},
+            )
+        )
+        db.commit()
+
+        result = queue_project_crawler_tasks(
+            db,
+            project_id=project_id,
+            types=["competitor"],
+            max_items=1,
+            discover_urls=True,
+        )
+
+        assert result["success"] is True
+        assert result["task_count"] == 1
+        assert result["task_ids"]
+        task = db.get(CrawlTaskRecord, result["task_ids"][0])
+        assert task is not None
+        assert task.status == "pending"
+
+
+def test_manual_url_task_runs_in_independent_session(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
+    get_settings.cache_clear()
+    monkeypatch.setattr(crawler_service, "Crawl4AIClient", lambda: FakeCrawler())
+
+    with SessionLocal() as db:
+        result = queue_manual_url_crawl_task(
+            db,
+            project_id=project_id,
+            task_type="competitor",
+            name="手动链接电竞馆",
+            address="测试地址",
+            url="https://example.com/manual/shop",
+        )
+        task_ids = result["task_ids"]
+
+    asyncio.run(process_crawl_task_ids(task_ids))
+
+    with SessionLocal() as db:
+        task = db.get(CrawlTaskRecord, task_ids[0])
+        assert task is not None
+        assert task.status == "success"
+        competitors = db.query(UnifiedCompetitorRecord).filter(
+            UnifiedCompetitorRecord.project_id == project_id,
+            UnifiedCompetitorRecord.source == "crawler",
+        ).all()
+        assert len(competitors) == 1
+        assert competitors[0].status == "pending_review"
+        assert competitors[0].hour_price == 12
+
+
+def test_manual_url_supporting_task_creates_pending_food_record(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
+    get_settings.cache_clear()
+    monkeypatch.setattr(crawler_service, "Crawl4AIClient", lambda: FakeCrawler())
+
+    with SessionLocal() as db:
+        result = queue_manual_url_crawl_task(
+            db,
+            project_id=project_id,
+            task_type="supporting",
+            record_type="food",
+            name="手动链接餐饮",
+            address="测试地址",
+            url="https://example.com/manual/food",
+        )
+        task_ids = result["task_ids"]
+
+    asyncio.run(process_crawl_task_ids(task_ids))
+
+    with SessionLocal() as db:
+        task = db.get(CrawlTaskRecord, task_ids[0])
+        assert task is not None
+        assert task.status == "success"
+        rows = db.query(FoodBusinessRecord).filter(
+            FoodBusinessRecord.project_id == project_id,
+            FoodBusinessRecord.source == "crawler",
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].status == "pending_review"
+        assert rows[0].raw_data["crawler_detail"]["source_url"] == "https://example.com/manual/food"

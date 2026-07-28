@@ -430,6 +430,7 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
     success_statuses = {"success", "partial"}
     failed_statuses = {"failed"}
     skipped_statuses = {"skipped"}
+    running_statuses = {"pending", "running"}
 
     def count_task(task_type: str, statuses: set[str] | None = None) -> int:
         return sum(
@@ -441,9 +442,24 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
     completed_count = sum(1 for row in rows if row.status in success_statuses)
     failed_count = sum(1 for row in rows if row.status in failed_statuses)
     skipped_count = sum(1 for row in rows if row.status in skipped_statuses)
+    running_count = sum(1 for row in rows if row.status in running_statuses)
+    discovered_url_count = 0
+    for row in rows:
+        input_snapshot = row.input_snapshot or {}
+        result_snapshot = row.result_snapshot or {}
+        discovered_url_count += max(
+            int(input_snapshot.get("discovered_url_count") or 0),
+            len(input_snapshot.get("search_results") or []),
+            int(result_snapshot.get("discovered_url_count") or 0),
+            len(result_snapshot.get("search_results") or []),
+        )
     warnings = []
+    if running_count:
+        warnings.append("爬虫任务仍在执行中，请稍后刷新结果")
     if completed_count:
         warnings.append("爬虫数据尚未人工确认，不能作为最终事实")
+    if skipped_count:
+        warnings.append("部分爬虫任务未搜索到可访问的公开网页，建议人工补充或手动提供来源链接")
     if failed_count:
         warnings.append("部分爬虫任务失败，建议人工补充或检查公开来源链接")
 
@@ -452,8 +468,11 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
         "supporting_crawler_count": count_task("supporting", success_statuses),
         "rent_crawler_count": count_task("rent", success_statuses),
         "pending_review_count": completed_count,
+        "running_task_count": running_count,
+        "success_task_count": completed_count,
         "failed_task_count": failed_count,
         "skipped_task_count": skipped_count,
+        "discovered_url_count": discovered_url_count,
         "total_task_count": len(rows),
         "warnings": warnings,
     }

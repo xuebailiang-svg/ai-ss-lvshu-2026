@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.database import SessionLocal
 from app.data_source.crawler.base import crawler_settings
 from app.data_source.crawler.crawl4ai_client import Crawl4AIClient
 from app.data_source.crawler.search_discovery import (
@@ -259,6 +260,77 @@ def _create_rent_from_crawler(db: Session, project_id: str, payload: dict[str, A
     return True
 
 
+def _create_competitor_from_crawler(db: Session, project_id: str, payload: dict[str, Any], detail: dict[str, Any]) -> bool:
+    if not _has_value(detail):
+        return False
+    row = UnifiedCompetitorRecord(
+        project_id=project_id,
+        name=payload.get("name") or "公开网页竞品线索",
+        address=payload.get("address"),
+        area_sqm=detail.get("area_sqm"),
+        machine_count=int(detail["machine_count"]) if detail.get("machine_count") is not None else None,
+        hour_price=detail.get("hour_price"),
+        member_price=detail.get("member_price"),
+        occupancy_rate=detail.get("occupancy_rate"),
+        source="crawler",
+        confidence=0.6,
+        status="pending_review",
+        raw_data={
+            "crawler_detail": {key: value for key, value in detail.items() if value is not None},
+            "search_query": payload.get("search_query"),
+            "search_result": payload.get("search_result"),
+            "source_url": detail.get("source_url") or payload.get("url"),
+        },
+    )
+    db.add(row)
+    return True
+
+
+def _create_supporting_from_crawler(db: Session, project_id: str, payload: dict[str, Any], detail: dict[str, Any]) -> bool:
+    if not _has_value(detail):
+        return False
+    record_type = payload.get("record_type") or "food"
+    raw_data = {
+        "address": payload.get("address"),
+        "crawler_detail": {key: value for key, value in detail.items() if value is not None},
+        "manual_detail": {
+            key: detail.get(key)
+            for key in ("business_hours", "night_operation", "is_24_hours", "source_url")
+            if detail.get(key) is not None
+        },
+        "search_query": payload.get("search_query"),
+        "search_result": payload.get("search_result"),
+        "source_url": detail.get("source_url") or payload.get("url"),
+    }
+    if record_type == "entertainment":
+        row = EntertainmentRecord(
+            project_id=project_id,
+            name=payload.get("name") or "公开网页配套线索",
+            type="crawler",
+            business_hours=detail.get("business_hours"),
+            night_business=detail.get("night_operation"),
+            source="crawler",
+            confidence=0.55,
+            status="pending_review",
+            raw_data=raw_data,
+        )
+    else:
+        row = FoodBusinessRecord(
+            project_id=project_id,
+            name=payload.get("name") or "公开网页配套线索",
+            category="crawler",
+            business_hours=detail.get("business_hours"),
+            night_business=detail.get("night_operation"),
+            rating=detail.get("rating"),
+            source="crawler",
+            confidence=0.55,
+            status="pending_review",
+            raw_data=raw_data,
+        )
+    db.add(row)
+    return True
+
+
 def _candidate_payload(row: Any, task_type: str, record_type: str | None = None) -> dict[str, Any]:
     raw = row.raw_data if isinstance(row.raw_data, dict) else {}
     return {
@@ -359,6 +431,131 @@ def _create_task(project_id: str, payload: dict[str, Any]) -> CrawlTaskRecord:
         result_snapshot={},
         created_at=_now(),
     )
+
+
+def _skip_task(task: CrawlTaskRecord, payload: dict[str, Any], message: str) -> None:
+    task.status = "skipped"
+    task.error_message = message
+    task.result_snapshot = {
+        **(task.result_snapshot or {}),
+        "search_queries": payload.get("search_queries") or [],
+        "search_results": payload.get("search_results") or [],
+        "discovered_url_count": len(payload.get("search_results") or []),
+        "message": message,
+    }
+    task.finished_at = _now()
+
+
+async def _run_existing_task(
+    db: Session,
+    task: CrawlTaskRecord,
+    project: SiteProjectRecord,
+    *,
+    settings: Any,
+    crawler: Crawl4AIClient,
+    discovery_client: SearchDiscoveryClient,
+) -> dict[str, Any]:
+    payload = dict(task.input_snapshot or {})
+    url = task.target_url or payload.get("url")
+    discovered_url_count = 0
+    task.status = "running"
+    task.started_at = task.started_at or _now()
+    db.flush()
+
+    if not url and payload.get("discover_urls", True):
+        discovered_payloads, queries, discovered_results, error_message = await discover_urls_for_payload(
+            project,
+            payload,
+            settings=settings,
+            client=discovery_client,
+        )
+        discovered_url_count = len(discovered_results)
+        payload = {
+            **payload,
+            "discovery_attempted": True,
+            "search_queries": queries,
+            "search_results": discovered_results,
+        }
+        if not discovered_payloads:
+            payload["discovery_error"] = error_message
+            task.input_snapshot = payload
+            _skip_task(task, payload, error_message or "未搜索到可访问的公开网页，建议人工补充或手动提供来源链接。")
+            return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+        selected_payload = discovered_payloads[0]
+        payload = {
+            **payload,
+            **selected_payload,
+            "search_queries": queries,
+            "search_results": discovered_results,
+        }
+        url = selected_payload.get("url")
+        task.target_url = url
+        task.source_domain = _domain(url)
+        task.input_snapshot = payload
+        task.result_snapshot = {
+            **(task.result_snapshot or {}),
+            "search_queries": queries,
+            "search_results": discovered_results,
+            "discovered_url_count": discovered_url_count,
+        }
+    else:
+        task.input_snapshot = payload
+
+    ok, reason = _domain_allowed(url)
+    if not ok:
+        _skip_task(task, payload, reason or "缺少可访问的公开来源 URL")
+        return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+
+    try:
+        page = await crawler.crawl(url, timeout_seconds=settings.timeout_seconds)
+        markdown = page.markdown or ""
+        if payload["task_type"] == "competitor":
+            detail = _extract_competitor(markdown, url)
+        elif payload["task_type"] == "supporting":
+            detail = _extract_supporting(markdown, url)
+        else:
+            detail = _extract_rent(markdown, url)
+
+        target = _get_target_row(db, task.project_id, payload)
+        changed = False
+        saved_type: str | None = None
+        if target is not None:
+            if payload["task_type"] == "competitor":
+                changed = _apply_competitor(target, detail)
+                saved_type = "competitors" if changed else None
+            elif payload["task_type"] == "supporting":
+                changed = _apply_supporting(target, detail)
+                saved_type = "supporting" if changed else None
+            else:
+                changed = _apply_rent(target, detail)
+                saved_type = "rent" if changed else None
+        elif payload["task_type"] == "rent":
+            changed = _create_rent_from_crawler(db, task.project_id, payload, detail)
+            saved_type = "rent" if changed else None
+        elif payload["task_type"] == "competitor":
+            changed = _create_competitor_from_crawler(db, task.project_id, payload, detail)
+            saved_type = "competitors" if changed else None
+        elif payload["task_type"] == "supporting":
+            changed = _create_supporting_from_crawler(db, task.project_id, payload, detail)
+            saved_type = "supporting" if changed else None
+
+        task.result_snapshot = {
+            **(task.result_snapshot or {}),
+            "url": url,
+            "search_query": payload.get("search_query"),
+            "search_result": payload.get("search_result"),
+            "extracted": detail,
+            "extracted_fields": {key: value for key, value in detail.items() if value not in (None, "", [])},
+            "changed": changed,
+        }
+        task.status = "success" if changed else "partial"
+        task.finished_at = _now()
+        return {"status": task.status, "saved": saved_type, "discovered_url_count": discovered_url_count}
+    except Exception as exc:
+        task.status = "failed"
+        task.error_message = str(exc)
+        task.finished_at = _now()
+        return {"status": "failed", "saved": None, "discovered_url_count": discovered_url_count}
 
 
 async def _expand_payloads_with_discovery(
@@ -523,6 +720,146 @@ async def enrich_project_with_crawler(
         "saved": saved,
         "message": "爬虫补充完成，结果需要人工确认" if completed else "未发现可抓取的公开来源URL",
     }
+
+
+def queue_project_crawler_tasks(
+    db: Session,
+    project_id: str,
+    *,
+    types: list[str],
+    max_items: int,
+    discover_urls: bool = True,
+) -> dict[str, Any]:
+    project: SiteProjectRecord | None = get_project(db, project_id)
+    if not project:
+        raise CrawlProjectNotFoundError("Project not found")
+    settings = crawler_settings()
+    if not settings.enabled:
+        return {
+            "success": False,
+            "project_id": project_id,
+            "task_count": 0,
+            "task_ids": [],
+            "completed_count": 0,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "discovered_url_count": 0,
+            "saved": {"competitors": 0, "supporting": 0, "rent": 0},
+            "message": "爬虫能力未启用，请先在配置页启用",
+        }
+
+    allowed_types = [item for item in types if item in {"competitor", "supporting", "rent"}]
+    per_type_limit = max(1, min(max_items, settings.max_tasks_per_project))
+    payloads: list[dict[str, Any]] = []
+    for task_type in allowed_types:
+        payloads.extend(_load_candidates(db, project, task_type, per_type_limit))
+    payloads = payloads[: settings.max_tasks_per_project]
+
+    task_ids: list[int] = []
+    for payload in payloads:
+        task = _create_task(project_id, {**payload, "discover_urls": discover_urls})
+        db.add(task)
+        db.flush()
+        task_ids.append(task.id)
+    db.commit()
+    return {
+        "success": bool(task_ids),
+        "project_id": project_id,
+        "task_count": len(task_ids),
+        "task_ids": task_ids,
+        "completed_count": 0,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "discovered_url_count": 0,
+        "saved": {"competitors": 0, "supporting": 0, "rent": 0},
+        "message": "爬虫任务已创建，请稍后查看结果" if task_ids else "没有可用于爬虫补充的候选数据",
+    }
+
+
+def queue_manual_url_crawl_task(
+    db: Session,
+    project_id: str,
+    *,
+    task_type: str,
+    name: str,
+    address: str | None,
+    url: str,
+    record_type: str | None = None,
+) -> dict[str, Any]:
+    project = get_project(db, project_id)
+    if not project:
+        raise CrawlProjectNotFoundError("Project not found")
+    settings = crawler_settings()
+    if not settings.enabled:
+        return {
+            "success": False,
+            "project_id": project_id,
+            "task_count": 0,
+            "task_ids": [],
+            "completed_count": 0,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "discovered_url_count": 0,
+            "saved": {"competitors": 0, "supporting": 0, "rent": 0},
+            "message": "爬虫能力未启用，请先在配置页启用",
+        }
+    payload = {
+        "task_type": task_type,
+        "record_type": record_type or ("food" if task_type == "supporting" else None),
+        "record_id": None,
+        "name": name,
+        "address": address,
+        "url": url,
+        "source": "manual_url",
+        "status": "pending_review",
+        "discover_urls": False,
+    }
+    task = _create_task(project_id, payload)
+    db.add(task)
+    db.commit()
+    return {
+        "success": True,
+        "project_id": project_id,
+        "task_count": 1,
+        "task_ids": [task.id],
+        "completed_count": 0,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "discovered_url_count": 0,
+        "saved": {"competitors": 0, "supporting": 0, "rent": 0},
+        "message": "手动 URL 爬虫任务已创建，请稍后查看结果",
+    }
+
+
+async def process_crawl_task_ids(task_ids: list[int]) -> None:
+    if not task_ids:
+        return
+    settings = crawler_settings()
+    crawler = Crawl4AIClient()
+    discovery_client = SearchDiscoveryClient()
+    with SessionLocal() as db:
+        for task_id in task_ids:
+            task = db.get(CrawlTaskRecord, task_id)
+            if not task:
+                continue
+            project = get_project(db, task.project_id)
+            if not project:
+                task.status = "failed"
+                task.error_message = "Project not found"
+                task.finished_at = _now()
+                db.commit()
+                continue
+            try:
+                await _run_existing_task(
+                    db,
+                    task,
+                    project,
+                    settings=settings,
+                    crawler=crawler,
+                    discovery_client=discovery_client,
+                )
+            finally:
+                db.commit()
 
 
 def list_crawl_tasks(db: Session, project_id: str) -> dict[str, Any]:

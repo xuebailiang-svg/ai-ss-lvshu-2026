@@ -9,9 +9,11 @@ import {
   Input,
   InputNumber,
   List,
+  Modal,
   Popconfirm,
   Progress,
   Row,
+  Select,
   Space,
   Statistic,
   Tag,
@@ -33,11 +35,13 @@ import {
   collectProjectCompetitors,
   collectProjectSupporting,
   createProject,
+  createCrawlerManualUrlTask,
   deleteProject,
   enrichProjectCrawler,
   generateDemoData,
   generateProjectAiReview,
   getProjectDataQuality,
+  listProjectCrawlTasks,
   listProjects,
   type ProjectCreatePayload,
 } from '../../api/projects';
@@ -77,12 +81,28 @@ type ActionResult = {
   content: string;
 };
 
+type CrawlTaskItem = {
+  id: number;
+  task_type: string;
+  target_name?: string | null;
+  target_address?: string | null;
+  target_url?: string | null;
+  status: string;
+  error_message?: string | null;
+};
+
 const QUICK_MESSAGES = [
   '西安市小寨地铁站 1000 米，电竞馆，帮我做一次选址分析',
   '这个项目当前缺哪些关键数据？',
   '竞品压力和夜间消费环境怎么样？',
   '生成一份适合投资人看的报告',
 ];
+
+const CRAWLER_SOURCE_LABELS: Record<string, string> = {
+  competitor: '竞品',
+  supporting: '配套',
+  rent: '租金',
+};
 
 const STATUS_TEXT: Record<string, string> = {
   draft: '初始化',
@@ -109,6 +129,35 @@ function providerStatusText(status: string) {
   if (status === 'disabled') return '未启用';
   if (status === 'not_configured') return '未配置';
   return status;
+}
+
+function projectSearchText(project?: ProjectItem | null) {
+  return [project?.city, project?.district, project?.address].filter(Boolean).join(' ');
+}
+
+function crawlSourcePresets(project: ProjectItem | null, taskType: string) {
+  const location = projectSearchText(project) || '西安市 小寨地铁站';
+  const encoded = (text: string) => encodeURIComponent(text);
+  if (taskType === 'rent') {
+    return [
+      {label: '58同城商铺出租', url: 'https://xa.58.com/shangpucz/', name: `${location} 商铺出租`},
+      {label: '安居客商铺出租', url: 'https://xian.anjuke.com/sp-zu/', name: `${location} 商铺出租`},
+      {label: '房天下商铺出租', url: 'https://xian.shop.fang.com/zu/', name: `${location} 商铺出租`},
+      {label: '公开搜索租金线索', url: `https://www.bing.com/search?q=${encoded(`${location} 商铺出租 月租 面积 转让费`)}`, name: `${location} 租金线索`},
+    ];
+  }
+  if (taskType === 'supporting') {
+    return [
+      {label: '大众点评商户搜索', url: 'https://www.dianping.com/search/keyword/', name: `${location} 周边配套`},
+      {label: '美团商户搜索', url: 'https://www.meituan.com/', name: `${location} 周边配套`},
+      {label: '公开搜索营业时间', url: `https://www.bing.com/search?q=${encoded(`${location} 餐饮 娱乐 营业时间 评分`)}`, name: `${location} 配套线索`},
+    ];
+  }
+  return [
+    {label: '大众点评竞品搜索', url: 'https://www.dianping.com/search/keyword/', name: `${location} 电竞馆`},
+    {label: '美团竞品搜索', url: 'https://www.meituan.com/', name: `${location} 电竞馆`},
+    {label: '公开搜索竞品价格', url: `https://www.bing.com/search?q=${encoded(`${location} 电竞馆 网咖 价格 营业时间 机器配置`)}`, name: `${location} 电竞馆竞品`},
+  ];
 }
 
 function errorText(error: any, fallback: string) {
@@ -336,6 +385,15 @@ function summarizeAction(action: string, result: any) {
     return `${action}失败：${result.message || '服务暂时不可用，请检查配置或稍后重试。'}`;
   }
 
+  if (Array.isArray(result?.task_ids) && result.task_ids.length > 0) {
+    return [
+      `${action}任务已创建。`,
+      `任务数：${countText(result.task_count)}`,
+      `任务ID：${result.task_ids.join('、')}`,
+      '系统将在后台搜索公开网页并抓取线索。请查看本步骤下方任务中心，结果默认待人工确认。',
+    ].join('\n');
+  }
+
   if (action === '高德 POI 采集') {
     const collected = result?.collected || {};
     return [
@@ -434,6 +492,7 @@ export default function WorkbenchPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [projectForm] = Form.useForm<ProjectCreatePayload>();
+  const [manualUrlForm] = Form.useForm();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [creating, setCreating] = useState(false);
@@ -448,6 +507,9 @@ export default function WorkbenchPage() {
   const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [sideContextLoading, setSideContextLoading] = useState(false);
+  const [crawlTasks, setCrawlTasks] = useState<CrawlTaskItem[]>([]);
+  const [crawlTasksLoading, setCrawlTasksLoading] = useState(false);
+  const [manualUrlOpen, setManualUrlOpen] = useState(false);
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [actionResults, setActionResults] = useState<Record<string, ActionResult>>({});
@@ -502,6 +564,22 @@ export default function WorkbenchPage() {
     }
   };
 
+  const loadCrawlTasks = async (projectId = selectedProjectId, silent = false) => {
+    if (!projectId) {
+      setCrawlTasks([]);
+      return;
+    }
+    if (!silent) setCrawlTasksLoading(true);
+    try {
+      const result = await listProjectCrawlTasks(projectId);
+      setCrawlTasks(Array.isArray(result?.items) ? result.items : []);
+    } catch {
+      if (!silent) message.warning('爬虫任务状态暂时不可用');
+    } finally {
+      if (!silent) setCrawlTasksLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadProjects(searchParams.get('projectId') || undefined);
     void loadSideContext();
@@ -516,10 +594,21 @@ export default function WorkbenchPage() {
     setSessionId('');
     setActionResults({});
     void loadSideContext(selectedProjectId);
+    void loadCrawlTasks(selectedProjectId, true);
     createProjectChatSession(selectedProjectId)
       .then(result => setSessionId(String(result.session_id)))
       .catch(() => setSessionId(''));
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    const hasActiveTask = crawlTasks.some(task => task.status === 'pending' || task.status === 'running');
+    if (!hasActiveTask) return;
+    const timer = window.setInterval(() => {
+      void loadCrawlTasks(selectedProjectId, true);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [selectedProjectId, crawlTasks]);
 
   const createNewProject = async (values: ProjectCreatePayload) => {
     setCreating(true);
@@ -602,6 +691,32 @@ export default function WorkbenchPage() {
       return null;
     } finally {
       setActionLoading('');
+    }
+  };
+
+  const runCrawlerTask = async (loadingKey: string, actionName: string, types: Array<'competitor' | 'supporting' | 'rent'>) => {
+    const result = await runAction(loadingKey, actionName, () => enrichProjectCrawler(selectedProjectId, types));
+    if (result) {
+      await loadCrawlTasks(selectedProjectId, true);
+    }
+  };
+
+  const submitManualUrl = async () => {
+    if (!selectedProjectId) {
+      message.warning('请先选择或创建项目');
+      return;
+    }
+    try {
+      const values = await manualUrlForm.validateFields();
+      const result = await runAction('crawlerManualUrl', '手动 URL 爬虫补充', () => createCrawlerManualUrlTask(selectedProjectId, values));
+      if (result) {
+        setManualUrlOpen(false);
+        manualUrlForm.resetFields();
+        await loadCrawlTasks(selectedProjectId, true);
+      }
+    } catch (error: any) {
+      if (error?.errorFields) return;
+      message.error(errorText(error, '手动 URL 任务创建失败'));
     }
   };
 
@@ -710,8 +825,17 @@ export default function WorkbenchPage() {
     actionResults.crawlerCompetitor
     || actionResults.crawlerSupporting
     || actionResults.crawlerRent
+    || crawlTasks.length > 0
     || Number(crawlerQuality.total_task_count || 0) > 0,
   );
+  const crawlTaskStats = {
+    total: crawlTasks.length,
+    pending: crawlTasks.filter(task => task.status === 'pending').length,
+    running: crawlTasks.filter(task => task.status === 'running').length,
+    success: crawlTasks.filter(task => task.status === 'success' || task.status === 'partial').length,
+    skipped: crawlTasks.filter(task => task.status === 'skipped').length,
+    failed: crawlTasks.filter(task => task.status === 'failed').length,
+  };
   const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent, hasCrawlerResult);
   const currentWorkflowIndex = Math.max(0, workflowSteps.findIndex(item => item.status !== 'finish'));
   const activeWorkflowStep = workflowSteps[currentWorkflowIndex] || workflowSteps[workflowSteps.length - 1];
@@ -960,7 +1084,7 @@ export default function WorkbenchPage() {
                   <Button
                     disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
                     loading={actionLoading === 'crawlerCompetitor'}
-                    onClick={() => runAction('crawlerCompetitor', '搜索并补充竞品信息', () => enrichProjectCrawler(selectedProjectId, ['competitor']))}
+                    onClick={() => runCrawlerTask('crawlerCompetitor', '搜索并补充竞品信息', ['competitor'])}
                     block
                   >
                     搜索并补充竞品信息
@@ -968,7 +1092,7 @@ export default function WorkbenchPage() {
                   <Button
                     disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
                     loading={actionLoading === 'crawlerSupporting'}
-                    onClick={() => runAction('crawlerSupporting', '搜索并补充周边配套', () => enrichProjectCrawler(selectedProjectId, ['supporting']))}
+                    onClick={() => runCrawlerTask('crawlerSupporting', '搜索并补充周边配套', ['supporting'])}
                     block
                   >
                     搜索并补充周边配套
@@ -976,14 +1100,60 @@ export default function WorkbenchPage() {
                   <Button
                     disabled={!selectedProjectId || !crawlerAvailable}
                     loading={actionLoading === 'crawlerRent'}
-                    onClick={() => runAction('crawlerRent', '搜索并补充租金信息', () => enrichProjectCrawler(selectedProjectId, ['rent']))}
+                    onClick={() => runCrawlerTask('crawlerRent', '搜索并补充租金信息', ['rent'])}
                     block
                   >
                     搜索并补充租金信息
                   </Button>
+                  <Button
+                    disabled={!selectedProjectId || !crawlerAvailable}
+                    loading={actionLoading === 'crawlerManualUrl'}
+                    onClick={() => setManualUrlOpen(true)}
+                    block
+                  >
+                    手动添加公开网页链接
+                  </Button>
+                  {crawlTaskStats.total > 0 && (
+                    <Card size="small" title="爬虫任务中心" extra={<Button size="small" loading={crawlTasksLoading} onClick={() => loadCrawlTasks()}>刷新</Button>}>
+                      <Space direction="vertical" size={8} style={{width: '100%'}}>
+                        <Space size={[4, 4]} wrap>
+                          <Tag>总任务 {crawlTaskStats.total}</Tag>
+                          <Tag color={crawlTaskStats.pending + crawlTaskStats.running > 0 ? 'processing' : 'default'}>执行中 {crawlTaskStats.pending + crawlTaskStats.running}</Tag>
+                          <Tag color="green">成功 {crawlTaskStats.success}</Tag>
+                          <Tag color="orange">跳过 {crawlTaskStats.skipped}</Tag>
+                          <Tag color="red">失败 {crawlTaskStats.failed}</Tag>
+                        </Space>
+                        {crawlTaskStats.skipped > 0 && (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message="部分任务未搜索到可访问的公开网页"
+                            description="建议人工补充，或在本步骤手动提供公开来源链接后重新抓取。"
+                          />
+                        )}
+                        <List
+                          size="small"
+                          dataSource={crawlTasks.slice(0, 5)}
+                          renderItem={task => (
+                            <List.Item>
+                              <Space direction="vertical" size={0} style={{width: '100%'}}>
+                                <Space size={[4, 4]} wrap>
+                                  <Tag>{task.task_type}</Tag>
+                                  <Tag color={task.status === 'success' || task.status === 'partial' ? 'green' : task.status === 'failed' ? 'red' : task.status === 'skipped' ? 'orange' : 'blue'}>{task.status}</Tag>
+                                  <Typography.Text>{task.target_name || task.target_address || task.target_url || `任务 ${task.id}`}</Typography.Text>
+                                </Space>
+                                {task.error_message && <Typography.Text type="secondary">{task.error_message}</Typography.Text>}
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      </Space>
+                    </Card>
+                  )}
                   {inlineResult('crawlerCompetitor')}
                   {inlineResult('crawlerSupporting')}
                   {inlineResult('crawlerRent')}
+                  {inlineResult('crawlerManualUrl')}
                 </Space>
             </Card>
 
@@ -1115,7 +1285,7 @@ export default function WorkbenchPage() {
                         type="info"
                         showIcon
                         message="公开网页补充数据"
-                        description={`任务 ${countText(quality.crawler_quality.total_task_count)} 个，待人工确认 ${countText(quality.crawler_quality.pending_review_count)} 条，失败 ${countText(quality.crawler_quality.failed_task_count)} 条。`}
+                        description={`任务 ${countText(quality.crawler_quality.total_task_count)} 个，执行中 ${countText(quality.crawler_quality.running_task_count)} 个，成功 ${countText(quality.crawler_quality.success_task_count)} 个，搜索到候选网页 ${countText(quality.crawler_quality.discovered_url_count)} 个，待人工确认 ${countText(quality.crawler_quality.pending_review_count)} 条，跳过 ${countText(quality.crawler_quality.skipped_task_count)} 个，失败 ${countText(quality.crawler_quality.failed_task_count)} 个。`}
                       />
                     )}
                   </Card>
@@ -1330,6 +1500,92 @@ export default function WorkbenchPage() {
           )}
         </Card>
       </aside>
+      <Modal
+        title="手动添加公开网页链接"
+        open={manualUrlOpen}
+        onCancel={() => setManualUrlOpen(false)}
+        onOk={submitManualUrl}
+        confirmLoading={actionLoading === 'crawlerManualUrl'}
+        okText="创建抓取任务"
+        cancelText="取消"
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{marginBottom: 12}}
+          message="用于搜索引擎不可控时的兜底抓取"
+          description="请输入允许公开访问的网页链接。系统只抓取页面公开内容，结果仍需人工确认。"
+        />
+        <Form form={manualUrlForm} layout="vertical" initialValues={{task_type: 'competitor'}}>
+          <Form.Item name="task_type" label="数据类型" rules={[{required: true, message: '请选择数据类型'}]}>
+            <Select
+              options={[
+                {value: 'competitor', label: '竞品'},
+                {value: 'supporting', label: '配套'},
+                {value: 'rent', label: '租金'},
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.task_type !== current.task_type}>
+            {({getFieldValue}) => getFieldValue('task_type') === 'supporting' ? (
+              <Form.Item name="record_type" label="配套分类" rules={[{required: true, message: '请选择配套分类'}]}>
+                <Select
+                  options={[
+                    {value: 'food', label: '餐饮'},
+                    {value: 'entertainment', label: '娱乐'},
+                  ]}
+                />
+              </Form.Item>
+            ) : null}
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.task_type !== current.task_type}>
+            {({getFieldValue}) => {
+              const taskType = getFieldValue('task_type') || 'competitor';
+              const presets = crawlSourcePresets(selectedProject, taskType);
+              return (
+                <Card size="small" style={{marginBottom: 12}} title={`${CRAWLER_SOURCE_LABELS[taskType] || '数据'}推荐来源`}>
+                  <Space direction="vertical" size={8} style={{width: '100%'}}>
+                    <Typography.Text type="secondary">
+                      这些是常用公开入口。最好打开网站后复制具体详情页 URL；如果先用入口页，系统会尽量抓取页面中的公开线索。
+                    </Typography.Text>
+                    <Space size={[6, 6]} wrap>
+                      {presets.map(preset => (
+                        <Button
+                          key={preset.label}
+                          size="small"
+                          onClick={() => manualUrlForm.setFieldsValue({
+                            name: preset.name,
+                            address: selectedProject?.address || '',
+                            url: preset.url,
+                          })}
+                        >
+                          {preset.label}
+                        </Button>
+                      ))}
+                    </Space>
+                  </Space>
+                </Card>
+              );
+            }}
+          </Form.Item>
+          <Form.Item name="name" label="名称" rules={[{required: true, message: '请输入名称'}]}>
+            <Input placeholder="例如：某电竞馆 / 某商铺出租信息" />
+          </Form.Item>
+          <Form.Item name="address" label="地址">
+            <Input placeholder="可选，便于后续人工确认" />
+          </Form.Item>
+          <Form.Item
+            name="url"
+            label="公开网页 URL"
+            rules={[
+              {required: true, message: '请输入公开网页 URL'},
+              {type: 'url', message: '请输入有效 URL，例如 https://example.com/page'},
+            ]}
+          >
+            <Input placeholder="https://..." />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

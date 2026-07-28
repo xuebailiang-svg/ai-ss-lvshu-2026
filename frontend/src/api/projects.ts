@@ -39,11 +39,24 @@ export const enrichProjectCrawler = (
   maxItems = 20,
   discoverUrls = true,
 ) => api
-  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems, discover_urls: discoverUrls}, {timeout: LONG_REQUEST_TIMEOUT_MS})
+  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems, discover_urls: discoverUrls})
   .then(response => response.data);
 
 export const listProjectCrawlTasks = (projectId: string) => api
   .get(`/projects/${projectId}/crawl/tasks`)
+  .then(response => response.data);
+
+export const createCrawlerManualUrlTask = (
+  projectId: string,
+  data: {
+    task_type: CrawlerEnrichType;
+    name: string;
+    address?: string;
+    url: string;
+    record_type?: 'food' | 'entertainment';
+  },
+) => api
+  .post(`/projects/${projectId}/crawl/manual-url`, data)
   .then(response => response.data);
 
 export type ProjectSupportingStatus = 'pending_review' | 'confirmed' | 'rejected';

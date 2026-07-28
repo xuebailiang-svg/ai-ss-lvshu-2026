@@ -16,6 +16,14 @@ class CrawlEnrichRequest(BaseModel):
     discover_urls: bool = True
 
 
+class CrawlManualUrlRequest(BaseModel):
+    task_type: CrawlTaskType
+    name: str = Field(min_length=1, max_length=200)
+    address: str | None = Field(default=None, max_length=300)
+    url: str = Field(min_length=8, max_length=2000)
+    record_type: Literal["food", "entertainment"] | None = None
+
+
 class CrawlSavedCounts(BaseModel):
     competitors: int = 0
     supporting: int = 0
@@ -26,6 +34,7 @@ class CrawlEnrichResponse(BaseModel):
     success: bool
     project_id: str
     task_count: int
+    task_ids: list[int] = Field(default_factory=list)
     completed_count: int
     failed_count: int
     skipped_count: int = 0
