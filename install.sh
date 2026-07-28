@@ -369,16 +369,16 @@ install_backend() {
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
   log "准备 crawl4ai / Playwright 运行时"
-  if [[ -x "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" ]]; then
-    runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/crawl4ai-setup" || true
-  else
-    echo "WARN: crawl4ai-setup 未找到；爬虫连接检测可能失败，请检查 crawl4ai 安装。"
-  fi
-  if ! runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium; then
-    echo "WARN: Playwright Chromium 安装失败，尝试补充系统依赖后重试。"
-    "${APP_ROOT}/backend/.venv/bin/python" -m playwright install-deps chromium || true
-    runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium
-  fi
+  # crawl4ai-setup 会在内部调用 sudo。APP_USER 是无登录服务账号，直接
+  # 以该用户执行会停在密码提示。系统依赖由当前 root 安装进程安装，
+  # 浏览器文件再以 APP_USER 身份写入其运行时缓存目录。
+  "${APP_ROOT}/backend/.venv/bin/python" -c "import crawl4ai"
+  "${APP_ROOT}/backend/.venv/bin/python" -m playwright install-deps chromium
+  runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" \
+    "${APP_ROOT}/backend/.venv/bin/python" -m playwright install chromium
+  runuser -u "${APP_USER}" -- env HOME="${DATA_DIR}" \
+    "${APP_ROOT}/backend/.venv/bin/python" -c \
+    "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch(headless=True); browser.close(); p.stop()"
   runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
 }
 
