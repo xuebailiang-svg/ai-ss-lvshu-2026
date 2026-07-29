@@ -8,6 +8,7 @@ APP_USER="esports-site-selection"
 APP_GROUP="esports-site-selection"
 DATA_DIR="/var/lib/esports-site-selection"
 CRAWLER_DATA_DIR="${DATA_DIR}/crawler"
+LEGACY_BROWSER_DIR="${DATA_DIR}/.cache/ms-playwright"
 ENV_FILE="/etc/esports-site-selection/backend.env"
 SERVICE_NAME="esports-site-selection-crawler"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -41,6 +42,11 @@ install -d -m 0750 -o "${APP_USER}" -g "${APP_GROUP}" "${CRAWLER_DATA_DIR}"
 install -d -m 0755 -o root -g root "${CRAWLER_ROOT}"
 rm -rf "${CRAWLER_ROOT}/.venv"
 python3 -m venv "${CRAWLER_ROOT}/.venv"
+
+if [[ ! -d "${CRAWLER_DATA_DIR}/ms-playwright" ]] && compgen -G "${LEGACY_BROWSER_DIR}/chromium-*" >/dev/null; then
+  echo "==> 复用主系统旧版 Playwright 浏览器缓存"
+  cp -a "${LEGACY_BROWSER_DIR}" "${CRAWLER_DATA_DIR}/ms-playwright"
+fi
 
 if [[ -n "${BUNDLE}" ]]; then
   [[ -f "${BUNDLE}" ]] || { echo "ERROR: 找不到离线包 ${BUNDLE}" >&2; exit 1; }
@@ -127,6 +133,13 @@ systemctl is-active --quiet "${SERVICE_NAME}" || {
   systemctl status "${SERVICE_NAME}" --no-pager -l || true
   exit 1
 }
+if command -v curl >/dev/null && systemctl is-active --quiet esports-site-selection; then
+  curl --fail --silent --show-error --max-time 10 \
+    http://127.0.0.1:8000/api/data-sources/crawler/runtime >/dev/null || {
+      echo "ERROR: Worker 已启动，但主系统暂未读取到爬虫健康状态" >&2
+      exit 1
+    }
+fi
 
 cat <<EOF
 独立爬虫部署完成。

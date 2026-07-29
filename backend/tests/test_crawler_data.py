@@ -36,7 +36,13 @@ def _create_project(client) -> str:
 
 class FakeCrawler:
     async def crawl(self, url: str, timeout_seconds: int):
-        return SimpleNamespace(markdown="营业时间 10:00-02:00 价格 12 会员价 10 机器 120 面积 800 上座率 75% 月租 30000 单价 60")
+        return SimpleNamespace(
+            markdown=(
+                "测试电竞馆 小寨地铁站 商铺出租 "
+                "营业时间 10:00-02:00 价格 12 会员价 10 机器 120 "
+                "面积 800 上座率 75% 月租 30000 单价 60"
+            )
+        )
 
 
 class FakeDiscovery:
@@ -47,7 +53,7 @@ class FakeDiscovery:
         from app.data_source.crawler.search_discovery import SearchResult
 
         self.queries.append(query)
-        return [SearchResult(url="https://example.com/discovered/1", title="测试公开页面", query=query)]
+        return [SearchResult(url="https://example.com/discovered/1", title=f"{query} 详情", query=query)]
 
 
 class FakeEmptyDiscovery:
@@ -58,6 +64,21 @@ class FakeEmptyDiscovery:
 class FakeEmptyCrawler:
     async def crawl(self, url: str, timeout_seconds: int):
         return SimpleNamespace(markdown="这是一段没有经营字段的普通网页内容")
+
+
+class FakeIrrelevantDiscovery:
+    async def discover_provider(self, provider: str, query: str, *, max_results: int, timeout_seconds: int):
+        from app.data_source.crawler.search_discovery import SearchResult
+
+        return [
+            SearchResult(
+                url="https://baike.baidu.com/item/xian",
+                title="西安市_百度百科",
+                snippet="西安市是陕西省省会，介绍城市面积和历史。",
+                query=query,
+                provider=provider,
+            )
+        ]
 
 
 def test_crawler_enrich_disabled_returns_clear_message(client):
@@ -238,6 +259,68 @@ def test_crawler_search_empty_records_diagnostics(client, monkeypatch):
         assert task.result_snapshot["search_errors"][0]["error_type"] == "parse_empty"
 
 
+def test_crawler_search_rejects_irrelevant_city_page_without_mutating_competitor(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        row = UnifiedCompetitorRecord(
+            project_id=project_id,
+            name="测试电竞馆",
+            address="小寨地铁站",
+            distance_meters=300,
+            source="amap",
+            confidence=0.9,
+            status="pending_review",
+            raw_data={},
+        )
+        db.add(row)
+        db.commit()
+        row_id = row.id
+
+        result = asyncio.run(
+            enrich_project_with_crawler(
+                db,
+                project_id=project_id,
+                types=["competitor"],
+                max_items=1,
+                client=FakeCrawler(),
+                discovery_client=FakeIrrelevantDiscovery(),
+            )
+        )
+
+        assert result["skipped_count"] == 1
+        saved = db.get(UnifiedCompetitorRecord, row_id)
+        assert saved is not None
+        assert saved.hour_price is None
+        assert saved.area_sqm is None
+        assert not saved.raw_data.get("crawler_detail")
+        task = db.query(CrawlTaskRecord).filter(CrawlTaskRecord.project_id == project_id).first()
+        assert task.status == "skipped"
+        assert task.result_snapshot["search_results"][0]["eligible"] is False
+        assert task.result_snapshot["search_errors"][0]["error_type"] == "irrelevant_result"
+
+
+def test_crawler_rent_rejects_irrelevant_city_page_without_creating_record(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        result = asyncio.run(
+            enrich_project_with_crawler(
+                db,
+                project_id=project_id,
+                types=["rent"],
+                max_items=1,
+                client=FakeCrawler(),
+                discovery_client=FakeIrrelevantDiscovery(),
+            )
+        )
+
+        assert result["skipped_count"] == 1
+        assert db.query(RentDataRecord).filter(RentDataRecord.project_id == project_id).count() == 0
+
+
 def test_crawler_rent_search_creates_pending_rent_record(client, monkeypatch):
     project_id = _create_project(client)
     monkeypatch.setenv("CRAWLER_ENABLED", "true")
@@ -284,6 +367,19 @@ def test_crawler_quality_is_returned_from_data_quality(client, monkeypatch):
                 raw_data={"source_url": "https://example.com/shop/1"},
             )
         )
+        db.add(
+            RentDataRecord(
+                project_id=project_id,
+                monthly_rent=30000,
+                area_sqm=500,
+                rent_per_sqm=60,
+                location_type="错误租金测试",
+                source="crawler",
+                confidence=0.5,
+                status="rejected",
+                raw_data={"crawler_detail": {"monthly_rent": 30000, "area_sqm": 500}},
+            )
+        )
         db.commit()
         asyncio.run(
             enrich_project_with_crawler(
@@ -301,6 +397,7 @@ def test_crawler_quality_is_returned_from_data_quality(client, monkeypatch):
     body = response.json()
     assert "crawler_quality" in body
     assert body["crawler_quality"]["competitor_crawler_count"] == 1
+    assert body["crawler_quality"]["rent_crawler_count"] == 0
     assert body["crawler_quality"]["pending_review_count"] == 1
 
 
@@ -468,7 +565,7 @@ def test_manual_url_supporting_task_creates_pending_food_record(client, monkeypa
         assert rows[0].raw_data["crawler_detail"]["source_url"] == "https://example.com/manual/food"
 
 
-def test_manual_url_task_with_no_extracted_fields_returns_partial_message(client, monkeypatch):
+def test_manual_url_task_with_no_extracted_fields_is_skipped(client, monkeypatch):
     project_id = _create_project(client)
     monkeypatch.setenv("CRAWLER_ENABLED", "true")
     monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
@@ -491,6 +588,6 @@ def test_manual_url_task_with_no_extracted_fields_returns_partial_message(client
     with SessionLocal() as db:
         task = db.get(CrawlTaskRecord, task_ids[0])
         assert task is not None
-        assert task.status == "partial"
-        assert "未识别到可用字段" in task.error_message
+        assert task.status == "skipped"
+        assert "未识别到可用" in task.error_message
         assert task.result_snapshot["extracted_fields"] == {}

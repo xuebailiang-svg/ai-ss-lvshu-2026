@@ -14,6 +14,7 @@ from app.data_source.crawler.crawl4ai_client import Crawl4AIClient
 from app.data_source.crawler.search_discovery import (
     SearchDiscoveryClient,
     discover_urls_for_payload,
+    page_matches_target,
 )
 from app.models import (
     CrawlTaskRecord,
@@ -127,19 +128,48 @@ def _num(text: str, *patterns: str) -> float | None:
     return None
 
 
+def _bounded(value: float | None, minimum: float, maximum: float) -> float | None:
+    if value is None or value < minimum or value > maximum:
+        return None
+    return value
+
+
 def _hours(text: str) -> str | None:
     match = re.search(r"(\d{1,2}:\d{2}\s*[-~至]\s*\d{1,2}:\d{2})", text)
     return match.group(1).replace(" ", "") if match else None
 
 
 def _extract_competitor(markdown: str, url: str) -> dict[str, Any]:
+    occupancy_rate = _bounded(
+        _num(markdown, r"(?:上座率|满座率)[^\d]{0,8}(\d+(?:\.\d+)?)%?"),
+        0,
+        100,
+    )
+    if occupancy_rate is not None and occupancy_rate > 1:
+        occupancy_rate = round(occupancy_rate / 100, 4)
     return {
         "business_hours": _hours(markdown),
-        "hour_price": _num(markdown, r"(?:小时价|时价|价格|单价)[^\d]{0,8}(\d+(?:\.\d+)?)"),
-        "member_price": _num(markdown, r"(?:会员价|会员价格)[^\d]{0,8}(\d+(?:\.\d+)?)"),
-        "machine_count": _num(markdown, r"(?:机器|机位|电脑)[^\d]{0,8}(\d{2,4})"),
-        "area_sqm": _num(markdown, r"(?:面积)[^\d]{0,8}(\d+(?:\.\d+)?)"),
-        "occupancy_rate": _num(markdown, r"(?:上座率|满座率)[^\d]{0,8}(\d+(?:\.\d+)?)%?"),
+        "hour_price": _bounded(
+            _num(markdown, r"(?:小时价|上网价|网费|时价|价格|单价)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            1,
+            200,
+        ),
+        "member_price": _bounded(
+            _num(markdown, r"(?:会员价|会员价格)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            1,
+            200,
+        ),
+        "machine_count": _bounded(
+            _num(markdown, r"(?:机器|机位|电脑)[^\d]{0,8}(\d{2,4})"),
+            10,
+            3000,
+        ),
+        "area_sqm": _bounded(
+            _num(markdown, r"(?:面积)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            20,
+            5000,
+        ),
+        "occupancy_rate": occupancy_rate,
         "source_url": url,
         "review_summary": markdown[:1000],
     }
@@ -154,16 +184,32 @@ def _extract_supporting(markdown: str, url: str) -> dict[str, Any]:
         "business_hours": hours,
         "night_operation": night_operation,
         "is_24_hours": True if re.search(r"24小时", markdown) else None,
-        "rating": _num(markdown, r"(?:评分|星级)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        "rating": _bounded(
+            _num(markdown, r"(?:评分|星级)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            0,
+            5,
+        ),
         "source_url": url,
         "review_summary": markdown[:1000],
     }
 
 
 def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
-    monthly = _num(markdown, r"(?:月租|租金)[^\d]{0,8}(\d+(?:\.\d+)?)")
-    area = _num(markdown, r"(?:面积|建筑面积)[^\d]{0,8}(\d+(?:\.\d+)?)")
-    unit = _num(markdown, r"(?:元/㎡/月|元/平/月|单价)[^\d]{0,8}(\d+(?:\.\d+)?)")
+    monthly = _bounded(
+        _num(markdown, r"(?:月租|租金)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        100,
+        10_000_000,
+    )
+    area = _bounded(
+        _num(markdown, r"(?:面积|建筑面积)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        5,
+        100_000,
+    )
+    unit = _bounded(
+        _num(markdown, r"(?:元/㎡/月|元/平/月|单价)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        0.1,
+        10_000,
+    )
     if unit is None and monthly is not None and area:
         unit = round(monthly / area, 2)
     return {
@@ -171,8 +217,16 @@ def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
         "monthly_rent": monthly,
         "area_sqm": area,
         "rent_per_sqm": unit,
-        "property_fee": _num(markdown, r"(?:物业费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
-        "transfer_fee": _num(markdown, r"(?:转让费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+        "property_fee": _bounded(
+            _num(markdown, r"(?:物业费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            0,
+            1_000_000,
+        ),
+        "transfer_fee": _bounded(
+            _num(markdown, r"(?:转让费)[^\d]{0,8}(\d+(?:\.\d+)?)"),
+            0,
+            100_000_000,
+        ),
         "floor": _text(markdown, r"(?:楼层)[：:\s]{0,4}([^\n，,。；;]{1,30})"),
         "publish_date": _text(markdown, r"(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?)"),
         "source_url": url,
@@ -190,6 +244,21 @@ def _meaningful_fields(data: dict[str, Any]) -> dict[str, Any]:
         for key, value in data.items()
         if key not in {"source_url", "review_summary"} and value not in (None, "", [])
     }
+
+
+def _detail_is_sufficient(
+    task_type: str,
+    detail: dict[str, Any],
+    *,
+    target_exists: bool,
+) -> tuple[bool, str | None]:
+    fields = _meaningful_fields(detail)
+    if not fields:
+        return False, "页面可访问，但未识别到可用业务字段，请换用更具体的详情页或人工补充。"
+    if task_type == "rent" and not target_exists:
+        if detail.get("monthly_rent") is None or detail.get("area_sqm") is None:
+            return False, "租金网页缺少月租金或面积，未创建租金记录。"
+    return True, None
 
 
 def _text(text: str, pattern: str) -> str | None:
@@ -251,7 +320,7 @@ def _apply_rent(row: RentDataRecord, detail: dict[str, Any]) -> bool:
 
 
 def _create_rent_from_crawler(db: Session, project_id: str, payload: dict[str, Any], detail: dict[str, Any]) -> bool:
-    if not _has_value(detail):
+    if detail.get("monthly_rent") is None or detail.get("area_sqm") is None:
         return False
     raw = {
         "crawler_detail": {key: value for key, value in detail.items() if value is not None},
@@ -534,6 +603,22 @@ async def _run_existing_task(
     try:
         page = await crawler.crawl(url, timeout_seconds=settings.timeout_seconds)
         markdown = page.markdown or ""
+        page_relevant, page_relevance_reasons = page_matches_target(payload, markdown)
+        task.result_snapshot = {
+            **(task.result_snapshot or {}),
+            "url": url,
+            "search_query": payload.get("search_query"),
+            "search_result": payload.get("search_result"),
+            "page_relevance": {
+                "eligible": page_relevant,
+                "reasons": page_relevance_reasons,
+            },
+        }
+        if not page_relevant:
+            message = "搜索到的网页与目标名称、位置或业务类型不匹配，已跳过且未写入数据。"
+            _skip_task(task, payload, message)
+            return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+
         if payload["task_type"] == "competitor":
             detail = _extract_competitor(markdown, url)
         elif payload["task_type"] == "supporting":
@@ -542,6 +627,24 @@ async def _run_existing_task(
             detail = _extract_rent(markdown, url)
 
         target = _get_target_row(db, task.project_id, payload)
+        sufficient, insufficient_reason = _detail_is_sufficient(
+            payload["task_type"],
+            detail,
+            target_exists=target is not None,
+        )
+        if not sufficient:
+            task.result_snapshot = {
+                **(task.result_snapshot or {}),
+                "extracted": detail,
+                "extracted_fields": _meaningful_fields(detail),
+                "changed": False,
+                "message": insufficient_reason,
+            }
+            task.status = "skipped"
+            task.error_message = insufficient_reason
+            task.finished_at = _now()
+            return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+
         changed = False
         saved_type: str | None = None
         if target is not None:
@@ -573,9 +676,9 @@ async def _run_existing_task(
             "extracted_fields": _meaningful_fields(detail),
             "changed": changed,
         }
-        task.status = "success" if changed else "partial"
+        task.status = "success" if changed else "skipped"
         if not changed:
-            task.error_message = "页面可访问，但未识别到可用字段，请换用更具体的详情页或人工补充。"
+            task.error_message = "页面可访问，但没有可写入的新字段，未修改现有数据。"
             task.result_snapshot["message"] = task.error_message
         task.finished_at = _now()
         return {"status": task.status, "saved": saved_type, "discovered_url_count": discovered_url_count}

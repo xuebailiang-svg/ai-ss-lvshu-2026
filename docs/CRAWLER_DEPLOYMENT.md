@@ -24,6 +24,8 @@ FastAPI 主服务
 - 抓取数据默认 `pending_review`。
 - 不覆盖人工确认字段。
 - 未经人工确认的数据不作为正式评分事实。
+- 自动搜索会先校验目标名称、项目位置和业务类型，城市百科等泛页面不会写入业务数据。
+- 租金搜索只有同时识别到面积和月租金时才会创建待确认记录。
 
 ## 部署顺序
 
@@ -43,7 +45,8 @@ cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
 sudo bash scripts/crawler/install.sh
 ```
 
-该命令只在首次安装或爬虫依赖升级时下载 `crawl4ai`、Playwright Chromium 和系统库。后续普通主系统升级不会重新下载浏览器。
+该命令只在首次安装或爬虫依赖升级时下载 `crawl4ai`、Playwright Chromium 和系统库。安装器会优先复用
+`/var/lib/esports-site-selection/.cache/ms-playwright` 中的旧版浏览器缓存；后续普通主系统升级不会重新下载浏览器。
 
 ## 方式二：提前下载并上传离线包
 
@@ -169,6 +172,14 @@ CRAWLER_ENABLED=true
 ```
 
 数据库配置优先于 `.env`，如果曾在配置页保存过关闭状态，应在配置页重新打开并保存。
+
+### 自动搜索任务全部 skipped
+
+先检查配置的搜索 Provider 是否能从服务器访问。国内服务器默认使用 `bing_html`；
+如部署环境可以访问 DuckDuckGo，可在配置页自行增加 `duckduckgo_html` 作为备用。搜索结果只有通过名称、位置和业务类型相关性校验后才会抓取；
+不相关结果会显示为 `skipped`，不会写入竞品、配套或租金字段。
+
+如果公开搜索不可用或没有相关结果，可以在 Step 4 手动提供明确的公开详情页 URL。
 
 ### 离线 `.deb` 安装失败
 

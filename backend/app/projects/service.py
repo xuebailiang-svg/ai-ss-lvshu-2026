@@ -433,17 +433,56 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
     skipped_statuses = {"skipped"}
     running_statuses = {"pending", "running"}
 
-    def count_task(task_type: str, statuses: set[str] | None = None) -> int:
-        return sum(
-            1
-            for row in rows
-            if row.task_type == task_type and (statuses is None or row.status in statuses)
-        )
-
     completed_count = sum(1 for row in rows if row.status in success_statuses)
     failed_count = sum(1 for row in rows if row.status in failed_statuses)
     skipped_count = sum(1 for row in rows if row.status in skipped_statuses)
     running_count = sum(1 for row in rows if row.status in running_statuses)
+
+    competitor_rows = list(
+        db.scalars(
+            select(UnifiedCompetitorRecord).where(UnifiedCompetitorRecord.project_id == project_id)
+        ).all()
+    )
+    food_rows = list(
+        db.scalars(
+            select(FoodBusinessRecord).where(FoodBusinessRecord.project_id == project_id)
+        ).all()
+    )
+    entertainment_rows = list(
+        db.scalars(
+            select(EntertainmentRecord).where(EntertainmentRecord.project_id == project_id)
+        ).all()
+    )
+    rent_rows = list(
+        db.scalars(
+            select(RentDataRecord).where(RentDataRecord.project_id == project_id)
+        ).all()
+    )
+
+    def has_crawler_data(row: Any) -> bool:
+        raw_data = row.raw_data if isinstance(row.raw_data, dict) else {}
+        crawler_detail = raw_data.get("crawler_detail")
+        return row.source == "crawler" or (isinstance(crawler_detail, dict) and bool(crawler_detail))
+
+    active_competitors = [
+        row for row in competitor_rows if row.status != "rejected" and has_crawler_data(row)
+    ]
+    active_food = [
+        row for row in food_rows if row.status != "rejected" and has_crawler_data(row)
+    ]
+    active_entertainment = [
+        row for row in entertainment_rows if row.status != "rejected" and has_crawler_data(row)
+    ]
+    active_rent = [
+        row for row in rent_rows if row.status != "rejected" and has_crawler_data(row)
+    ]
+    crawler_records = [
+        *active_competitors,
+        *active_food,
+        *active_entertainment,
+        *active_rent,
+    ]
+    pending_review_count = sum(1 for row in crawler_records if row.status == "pending_review")
     discovered_url_count = 0
     for row in rows:
         input_snapshot = row.input_snapshot or {}
@@ -457,7 +496,7 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
     warnings = []
     if running_count:
         warnings.append("爬虫任务仍在执行中，请稍后刷新结果")
-    if completed_count:
+    if pending_review_count:
         warnings.append("爬虫数据尚未人工确认，不能作为最终事实")
     if skipped_count:
         warnings.append("部分爬虫任务未搜索到可访问的公开网页，建议人工补充或手动提供来源链接")
@@ -465,10 +504,10 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
         warnings.append("部分爬虫任务失败，建议人工补充或检查公开来源链接")
 
     return {
-        "competitor_crawler_count": count_task("competitor", success_statuses),
-        "supporting_crawler_count": count_task("supporting", success_statuses),
-        "rent_crawler_count": count_task("rent", success_statuses),
-        "pending_review_count": completed_count,
+        "competitor_crawler_count": len(active_competitors),
+        "supporting_crawler_count": len(active_food) + len(active_entertainment),
+        "rent_crawler_count": len(active_rent),
+        "pending_review_count": pending_review_count,
         "running_task_count": running_count,
         "success_task_count": completed_count,
         "failed_task_count": failed_count,

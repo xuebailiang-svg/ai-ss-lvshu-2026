@@ -54,6 +54,7 @@ import {createProjectChatSession, sendProjectChatMessage} from '../../api/chat';
 import {getDataSourceStatus, type DataSourceStatus} from '../../api/dataSources';
 import {getScoringConfig, type ScoringDimensionConfig} from '../../api/scoringConfig';
 import {listMemory, type MemoryItem} from '../../api/memory';
+import {getManagedSystemConfig} from '../../api/client';
 import MarkdownReport from '../../components/MarkdownReport';
 import CityInsightPanel from '../../components/CityInsightPanel';
 import {useNavigate, useSearchParams} from 'react-router-dom';
@@ -586,6 +587,7 @@ export default function WorkbenchPage() {
   const [sideContextLoading, setSideContextLoading] = useState(false);
   const [crawlTasks, setCrawlTasks] = useState<CrawlTaskItem[]>([]);
   const [crawlTasksLoading, setCrawlTasksLoading] = useState(false);
+  const [crawlerSearchEnabled, setCrawlerSearchEnabled] = useState(true);
   const [manualUrlOpen, setManualUrlOpen] = useState(false);
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
@@ -624,16 +626,18 @@ export default function WorkbenchPage() {
   const loadSideContext = async (projectId?: string) => {
     setSideContextLoading(true);
     try {
-      const [sourceResult, configResult, memoryResult] = await Promise.all([
+      const [sourceResult, scoringResult, memoryResult, managedConfig] = await Promise.all([
         getDataSourceStatus().catch(() => ({items: []})),
         getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
         projectId
           ? listMemory({project_id: projectId, status: 'confirmed'}).catch(() => ({items: [], total: 0}))
           : Promise.resolve({items: [], total: 0}),
+        getManagedSystemConfig().catch(() => ({crawler_search_enabled: false})),
       ]);
       setDataSources(sourceResult.items || []);
-      setDimensions(configResult.dimensions || []);
+      setDimensions(scoringResult.dimensions || []);
       setMemories(memoryResult.items || []);
+      setCrawlerSearchEnabled(Boolean(managedConfig?.crawler_search_enabled));
     } catch {
       // 右侧上下文失败不阻断工作台主流程。
     } finally {
@@ -980,6 +984,7 @@ export default function WorkbenchPage() {
   const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
   const crawlerSources = dataSources.filter(source => source.name.startsWith('crawler_'));
   const crawlerAvailable = crawlerSources.some(source => source.status === 'available');
+  const crawlerSearchAvailable = crawlerAvailable && crawlerSearchEnabled;
   const crawlerDisabledReason = sideContextLoading && crawlerSources.length === 0
     ? '数据源状态加载中...'
     : crawlerSources.length
@@ -1228,15 +1233,17 @@ export default function WorkbenchPage() {
             <Card size="small" className={hasCrawlerResult ? 'v11-step-card done' : hasAmapData ? 'v11-step-card active' : 'v11-step-card'} title="Step 4：搜索并补充公开数据" extra={doneTag(hasCrawlerResult, actionLoading.startsWith('crawler'))}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Alert
-                    type={crawlerAvailable ? 'info' : 'warning'}
+                    type={crawlerSearchAvailable ? 'info' : 'warning'}
                     showIcon
-                    message={crawlerAvailable ? '按名称和地址搜索公开网页' : '爬虫搜索默认关闭'}
-                    description={crawlerAvailable
-                      ? '系统会优先抓取已有来源链接；没有链接时会尝试搜索公开网页。结果默认待人工确认，不直接作为最终事实。'
-                      : `请先在配置页启用爬虫搜索能力。${crawlerDisabledReason}`}
+                    message={crawlerSearchAvailable ? '按名称和地址搜索公开网页' : crawlerAvailable ? '自动搜索发现已关闭' : '爬虫服务尚未就绪'}
+                    description={crawlerSearchAvailable
+                      ? '系统会先校验目标名称、位置和业务类型，再抓取相关网页。结果默认待人工确认，不直接作为最终事实。'
+                      : crawlerAvailable
+                        ? '仍可使用下方“手动添加公开网页链接”；如需自动搜索，请在配置页启用搜索发现。'
+                        : `请先安装并启用独立爬虫服务。${crawlerDisabledReason}`}
                   />
                   <Button
-                    disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
+                    disabled={!selectedProjectId || !hasAmapData || !crawlerSearchAvailable}
                     loading={actionLoading === 'crawlerCompetitor'}
                     onClick={() => runCrawlerTask('crawlerCompetitor', '搜索并补充竞品信息', ['competitor'])}
                     block
@@ -1244,7 +1251,7 @@ export default function WorkbenchPage() {
                     搜索并补充竞品信息
                   </Button>
                   <Button
-                    disabled={!selectedProjectId || !hasAmapData || !crawlerAvailable}
+                    disabled={!selectedProjectId || !hasAmapData || !crawlerSearchAvailable}
                     loading={actionLoading === 'crawlerSupporting'}
                     onClick={() => runCrawlerTask('crawlerSupporting', '搜索并补充周边配套', ['supporting'])}
                     block
@@ -1252,7 +1259,7 @@ export default function WorkbenchPage() {
                     搜索并补充周边配套
                   </Button>
                   <Button
-                    disabled={!selectedProjectId || !crawlerAvailable}
+                    disabled={!selectedProjectId || !crawlerSearchAvailable}
                     loading={actionLoading === 'crawlerRent'}
                     onClick={() => runCrawlerTask('crawlerRent', '搜索并补充租金信息', ['rent'])}
                     block

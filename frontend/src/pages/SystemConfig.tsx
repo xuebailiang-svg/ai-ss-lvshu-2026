@@ -140,7 +140,7 @@ export default function SystemConfig() {
         crawler_allowed_domains: config?.crawler_allowed_domains || '',
         crawler_blocked_domains: config?.crawler_blocked_domains || '',
         crawler_search_enabled: config?.crawler_search_enabled ?? true,
-        crawler_search_provider: config?.crawler_search_provider || 'duckduckgo_html',
+        crawler_search_provider: config?.crawler_search_provider || 'bing_html',
         crawler_search_max_results: Number(config?.crawler_search_max_results || 5),
         crawler_search_timeout_seconds: Number(config?.crawler_search_timeout_seconds || 10),
         crawler_search_allowed_domains: config?.crawler_search_allowed_domains || '',

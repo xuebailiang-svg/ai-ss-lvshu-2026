@@ -48,6 +48,8 @@ sudo bash scripts/crawler/install.sh \
 ```
 
 普通 `sudo ./install.sh --upgrade` 不会重新下载 Chromium。只有爬虫依赖变化时才需重新运行爬虫安装脚本。
+独立爬虫安装器会优先复用旧版 Playwright 浏览器缓存。自动搜索默认优先使用 Bing，并在抓取前后执行
+目标名称、位置和业务类型校验；未通过校验的网页只记录为 `skipped`，不会写入业务数据。
 离线包构建、上传、安装、健康检查和卸载说明见
 [docs/CRAWLER_DEPLOYMENT.md](docs/CRAWLER_DEPLOYMENT.md)。
 

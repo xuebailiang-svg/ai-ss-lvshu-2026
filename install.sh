@@ -202,7 +202,7 @@ CRAWLER_RATE_LIMIT_SECONDS=5
 CRAWLER_ALLOWED_DOMAINS=
 CRAWLER_BLOCKED_DOMAINS=
 CRAWLER_SEARCH_ENABLED=true
-CRAWLER_SEARCH_PROVIDER=duckduckgo_html,bing_html
+CRAWLER_SEARCH_PROVIDER=bing_html
 CRAWLER_SEARCH_MAX_RESULTS=5
 CRAWLER_SEARCH_TIMEOUT_SECONDS=10
 CRAWLER_SEARCH_ALLOWED_DOMAINS=
@@ -211,7 +211,7 @@ GOV_DATA_SOURCES=national,shaanxi,xian
 GOV_DATA_TIMEOUT_SECONDS=15
 GOV_DATA_MAX_RETRIES=2
 GOV_DATA_RATE_LIMIT_SECONDS=1
-GOV_DATA_USER_AGENT=esports-site-selection/1.0 (+government-public-data)
+GOV_DATA_USER_AGENT="esports-site-selection/1.0 (+government-public-data)"
 SYSTEM_CONFIG_ENCRYPTION_KEY=${encryption_key}
 ADMIN_CONFIG_TOKEN=${admin_token}
 SITE_FEEDBACK_STORE_PATH=/var/lib/esports-site-selection/site_feedback.json
@@ -266,7 +266,7 @@ ensure_crawler_settings() {
     [CRAWLER_ALLOWED_DOMAINS]=
     [CRAWLER_BLOCKED_DOMAINS]=
     [CRAWLER_SEARCH_ENABLED]=true
-    [CRAWLER_SEARCH_PROVIDER]=duckduckgo_html,bing_html
+    [CRAWLER_SEARCH_PROVIDER]=bing_html
     [CRAWLER_SEARCH_MAX_RESULTS]=5
     [CRAWLER_SEARCH_TIMEOUT_SECONDS]=10
     [CRAWLER_SEARCH_ALLOWED_DOMAINS]=
@@ -280,7 +280,7 @@ ensure_crawler_settings() {
   done
 
   if grep -q '^CRAWLER_SEARCH_PROVIDER=duckduckgo_html$' "${ENV_FILE}"; then
-    sed -i 's|^CRAWLER_SEARCH_PROVIDER=duckduckgo_html$|CRAWLER_SEARCH_PROVIDER=duckduckgo_html,bing_html|' "${ENV_FILE}"
+    sed -i 's|^CRAWLER_SEARCH_PROVIDER=duckduckgo_html$|CRAWLER_SEARCH_PROVIDER=bing_html|' "${ENV_FILE}"
     changed=true
   fi
 
@@ -304,10 +304,19 @@ ensure_government_data_settings() {
 
   for key in "${!defaults[@]}"; do
     if ! grep -q "^${key}=" "${ENV_FILE}"; then
-      printf '%s=%s\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      if [[ "${key}" == "GOV_DATA_USER_AGENT" ]]; then
+        printf '%s="%s"\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      else
+        printf '%s=%s\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      fi
       changed=true
     fi
   done
+
+  if grep -Fxq 'GOV_DATA_USER_AGENT=esports-site-selection/1.0 (+government-public-data)' "${ENV_FILE}"; then
+    sed -i 's|^GOV_DATA_USER_AGENT=esports-site-selection/1.0 (+government-public-data)$|GOV_DATA_USER_AGENT="esports-site-selection/1.0 (+government-public-data)"|' "${ENV_FILE}"
+    changed=true
+  fi
 
   chown root:"${APP_GROUP}" "${ENV_FILE}"
   chmod 0640 "${ENV_FILE}"

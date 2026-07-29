@@ -85,7 +85,7 @@ class CrawlerWorker:
 
     async def run(self, *, once: bool = False) -> None:
         try:
-            self.verify_runtime()
+            await asyncio.to_thread(self.verify_runtime)
             recovered = self.recover_stale_tasks()
             message = (
                 f"独立爬虫 Worker 运行正常；恢复 {recovered} 个中断任务"

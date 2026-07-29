@@ -195,7 +195,7 @@ def config_status(db: Session) -> dict[str, Any]:
         "crawler_allowed_domains": crawler_allowed_domains or "",
         "crawler_blocked_domains": crawler_blocked_domains or "",
         "crawler_search_enabled": crawler_search_enabled,
-        "crawler_search_provider": crawler_search_provider or "duckduckgo_html",
+        "crawler_search_provider": crawler_search_provider or "bing_html",
         "crawler_search_max_results": int(crawler_search_max_results or 5),
         "crawler_search_timeout_seconds": int(crawler_search_timeout or 10),
         "crawler_search_allowed_domains": crawler_search_allowed_domains or "",

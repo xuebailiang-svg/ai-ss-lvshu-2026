@@ -28,7 +28,7 @@ class SystemConfigStatus(BaseModel):
     crawler_allowed_domains: str = ""
     crawler_blocked_domains: str = ""
     crawler_search_enabled: bool = True
-    crawler_search_provider: str = "duckduckgo_html"
+    crawler_search_provider: str = "bing_html"
     crawler_search_max_results: int = 5
     crawler_search_timeout_seconds: int = 10
     crawler_search_allowed_domains: str = ""

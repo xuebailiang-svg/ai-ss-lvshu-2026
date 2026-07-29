@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   poiTemplates: vi.fn(() => Promise.resolve({base_columns: [], categories: {}})),
   listPois: vi.fn(() => Promise.resolve({evaluation_id: 0, total: 0, counts: {}, items: [], statistics: {}})),
   configStatus: vi.fn(() => Promise.resolve({backend: {}, frontend: {}})),
+  getManagedSystemConfig: vi.fn(() => Promise.resolve({crawler_search_enabled: true})),
   systemHealth: vi.fn(() => Promise.resolve({status: 'ok', warnings: [], config: {ENABLE_DEBUG_API: false}})),
   amapGeocodeTest: vi.fn(() => Promise.resolve({ok: true, result: {formatted_address: '测试地址'}})),
   runSiteSelectionAgent: vi.fn(() => Promise.resolve({steps: [], final_score: {total: 70, level: '建议进一步实地考察'}, report: {summary: 'ok'}})),
