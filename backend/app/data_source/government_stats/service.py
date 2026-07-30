@@ -312,7 +312,9 @@ def city_insight(db: Session, project: SiteProjectRecord) -> dict[str, Any]:
         },
         "rent": {"sample_count": count_rows(db, RentDataRecord, project.project_id)},
     }
-    available_codes = {row.metric_code for row in rows if row.scope_level in {"city", "district"}}
+    target_rows = [row for row in rows if row.scope_level in {"city", "district"}]
+    fallback_rows = [row for row in rows if row.scope_level in {"province", "country"}]
+    available_codes = {row.metric_code for row in target_rows}
     missing_metrics = [
         {"metric_code": code, "label": label}
         for code, label in CORE_METRICS.items()
@@ -325,6 +327,41 @@ def city_insight(db: Session, project: SiteProjectRecord) -> dict[str, Any]:
         }
     )
     latest_period = max((row.stat_period for row in rows), default=None)
+    latest_target_period = max((row.stat_period for row in target_rows), default=None)
+    available_scope_names = sorted({row.scope_name for row in rows})
+    target_scope_names = sorted({row.scope_name for row in target_rows})
+    fallback_scope_names = sorted({row.scope_name for row in fallback_rows})
+    requested_target_scopes = [
+        scope_name
+        for scope_name in (project.city, project.district)
+        if scope_name
+    ]
+    missing_target_scopes = [
+        scope_name
+        for scope_name in requested_target_scopes
+        if scope_name not in target_scope_names
+    ]
+    coverage_status = (
+        "target_ready"
+        if target_rows
+        else "fallback_only"
+        if fallback_rows
+        else "unavailable"
+    )
+    if coverage_status == "target_ready":
+        scope_warning = (
+            "已加载城市或区县官方统计。宏观统计仅作为区域背景，"
+            "不能代表项目分析半径内的真实人口或客流。"
+        )
+    elif coverage_status == "fallback_only":
+        fallback_text = "、".join(fallback_scope_names) or "上级行政区"
+        missing_text = "、".join(missing_target_scopes) or "目标城市/区县"
+        scope_warning = (
+            f"当前仅加载{fallback_text}宏观统计；{missing_text}指标暂缺。"
+            "不得将上级行政区数据描述为项目所在城市、区县或商圈数据。"
+        )
+    else:
+        scope_warning = "尚无可用政府公开统计，不能生成城市或区县宏观结论。"
     sync = latest_sync_run(db, project.project_id)
     return {
         "project_id": project.project_id,
@@ -344,9 +381,17 @@ def city_insight(db: Session, project: SiteProjectRecord) -> dict[str, Any]:
         },
         "data_quality": {
             "confirmed_metric_count": len(rows),
+            "confirmed_target_metric_count": len(target_rows),
+            "fallback_metric_count": len(fallback_rows),
             "missing_metrics": missing_metrics,
             "latest_period": latest_period,
-            "scope_warning": "城市和区县统计仅作为宏观背景，不能代表项目分析半径内的真实人口或客流。",
+            "latest_target_period": latest_target_period,
+            "coverage_status": coverage_status,
+            "available_scope_names": available_scope_names,
+            "target_scope_names": target_scope_names,
+            "fallback_scope_names": fallback_scope_names,
+            "missing_target_scopes": missing_target_scopes,
+            "scope_warning": scope_warning,
         },
         "sources": [
             {

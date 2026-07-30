@@ -247,6 +247,43 @@ def test_city_insight_separates_macro_trade_area_and_lbs_gap(client):
     assert result["lbs_context"]["available"] is False
     assert "小时客流" in result["lbs_context"]["missing"]
     assert "不使用城市宏观数据推算1km" in result["lbs_context"]["message"]
+    assert result["data_quality"]["coverage_status"] == "target_ready"
+    assert result["data_quality"]["confirmed_target_metric_count"] == 2
+    assert result["data_quality"]["fallback_metric_count"] == 0
+
+
+def test_city_insight_marks_province_and_country_data_as_fallback_only(client):
+    project_id = create_project(client)
+    with SessionLocal() as db:
+        save_uploaded_statistics(db, [
+            statistic(
+                "resident_population",
+                "常住人口",
+                3952,
+                scope_level="province",
+                scope_code="610000",
+                scope_name="陕西省",
+            ),
+            statistic(
+                "gdp",
+                "国内生产总值",
+                1400000,
+                scope_level="country",
+                scope_code="100000",
+                scope_name="全国",
+            ),
+        ])
+        project = db.query(SiteProjectRecord).filter_by(project_id=project_id).one()
+        result = city_insight(db, project)
+
+    quality = result["data_quality"]
+    assert result["status"] == "ready"
+    assert quality["coverage_status"] == "fallback_only"
+    assert quality["confirmed_target_metric_count"] == 0
+    assert quality["fallback_metric_count"] == 2
+    assert quality["fallback_scope_names"] == ["全国", "陕西省"]
+    assert quality["missing_target_scopes"] == ["西安市", "雁塔区"]
+    assert "不得将上级行政区数据描述为项目所在城市" in quality["scope_warning"]
 
 
 def test_pending_and_rejected_statistics_do_not_enter_city_insight_or_ai(client):

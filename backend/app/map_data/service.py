@@ -154,7 +154,7 @@ async def collect_amap_for_project(
             "diagnostics": diagnostics,
         }
 
-    saved_rows: list[dict[str, Any]] = []
+    saved_rows: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
     for raw in raw_rows:
         unified = amap_poi_to_unified(
             raw,
@@ -165,12 +165,21 @@ async def collect_amap_for_project(
         unified["timestamp"] = datetime.now(timezone.utc)
         payload = _column_payload(unified)
         _upsert_poi(db, payload)
-        saved_rows.append(payload)
+        identity = (
+            payload.get("name"),
+            payload.get("longitude"),
+            payload.get("latitude"),
+        )
+        saved_rows[identity] = payload
     db.commit()
+    unique_rows = list(saved_rows.values())
+    diagnostics["raw_discovered_count"] = len(raw_rows)
+    diagnostics["stored_unique_count"] = len(unique_rows)
+    diagnostics["duplicate_count"] = max(0, len(raw_rows) - len(unique_rows))
     return {
         "success": True,
         "project_id": project.project_id,
-        "collected": _count_collected(saved_rows),
+        "collected": _count_collected(unique_rows),
         "message": "高德 POI 采集完成",
         "diagnostics": diagnostics,
     }

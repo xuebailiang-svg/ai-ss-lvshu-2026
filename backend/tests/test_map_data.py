@@ -122,6 +122,26 @@ def test_collect_amap_pois_upserts_duplicates(client, monkeypatch):
     assert len(dataset["pois"]) == 4
 
 
+def test_collect_amap_reports_unique_stored_count(client, monkeypatch):
+    async def fake_collect_pois(self, **kwargs):
+        rows = _fake_amap_rows()
+        return [*rows, dict(rows[0])], {"raw_count": 5}
+
+    monkeypatch.setattr("app.map_data.amap_client.AmapMapDataClient.collect_pois", fake_collect_pois)
+    project_id = client.post("/api/projects", json=_project_payload()).json()["project_id"]
+
+    response = client.post(f"/api/projects/{project_id}/collect/amap")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["collected"]["poi_count"] == 4
+    assert body["diagnostics"]["raw_discovered_count"] == 5
+    assert body["diagnostics"]["stored_unique_count"] == 4
+    assert body["diagnostics"]["duplicate_count"] == 1
+    dataset = client.get(f"/api/projects/{project_id}/dataset").json()
+    assert len(dataset["pois"]) == 4
+
+
 def test_collect_amap_without_key_returns_clear_error(client, monkeypatch):
     monkeypatch.setenv("AMAP_MOCK", "false")
     monkeypatch.delenv("AMAP_WEB_SERVICE_KEY", raising=False)

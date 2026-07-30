@@ -46,6 +46,8 @@ const apiMocks = vi.hoisted(() => ({
   collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
   collectProjectSupporting: vi.fn(() => Promise.resolve({success: true, food_count: 1, entertainment_count: 1, night_business_count: 0})),
   collectProjectGovernmentStats: vi.fn(() => Promise.resolve({success: true, status: 'collecting'})),
+  listProjectCrawlTasks: vi.fn(() => Promise.resolve({items: []})),
+  createCrawlerManualUrlTask: vi.fn(() => Promise.resolve({success: true, task_ids: [1]})),
   getProjectCityInsight: vi.fn(() => Promise.resolve({
     project_id: 'proj_1',
     scope: {city: '西安市', city_code: '610100', district: '雁塔区', district_code: '610113'},
@@ -113,6 +115,8 @@ vi.mock('../api/projects', () => ({
   collectProjectGovernmentStats: apiMocks.collectProjectGovernmentStats,
   getProjectCityInsight: apiMocks.getProjectCityInsight,
   enrichProjectCrawler: apiMocks.enrichProjectCrawler,
+  listProjectCrawlTasks: apiMocks.listProjectCrawlTasks,
+  createCrawlerManualUrlTask: apiMocks.createCrawlerManualUrlTask,
   listProjectCompetitors: apiMocks.listProjectCompetitors,
   listProjectSupporting: apiMocks.listProjectSupporting,
   listProjectRent: apiMocks.listProjectRent,
@@ -178,6 +182,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   apiMocks.listProjects.mockResolvedValue({items: []});
+  apiMocks.listProjectCrawlTasks.mockResolvedValue({items: []});
   apiMocks.getEvaluation.mockResolvedValue(sampleEvaluation);
   apiMocks.report.mockResolvedValue({sections: {}, hard_risk: false, disclaimer: ''});
 });
@@ -286,6 +291,45 @@ test('workbench enforces quality and scoring prerequisites', async () => {
   expect(screen.getByLabelText('选址流程完成进度')).toBeInTheDocument();
 });
 
+test('workbench does not mark crawler step complete when all tasks were skipped', async () => {
+  apiMocks.listProjects.mockResolvedValueOnce({items: [{
+    project_id: 'proj_1',
+    name: '测试项目',
+    city: '西安市',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+    stats: {poi_count: 10},
+  }]} as any);
+  apiMocks.getProjectDataQuality.mockResolvedValueOnce({
+    project_id: 'proj_1',
+    quality_score: 40,
+    missing: [],
+    warnings: [],
+    crawler_quality: {
+      total_task_count: 1,
+      success_task_count: 0,
+      skipped_task_count: 1,
+    },
+  } as any);
+  apiMocks.listProjectCrawlTasks.mockResolvedValueOnce({items: [{
+    id: 70,
+    task_type: 'competitor',
+    target_name: '测试电竞馆',
+    status: 'skipped',
+    error_message: '爬虫搜索发现未启用',
+  }]} as any);
+  apiMocks.getDataSourceStatus.mockResolvedValueOnce({items: [
+    {name: 'amap', display_name: '高德 POI', status: 'available', description: '高德地图基础数据', capabilities: ['poi'], check_supported: true},
+    {name: 'crawler_competitor', display_name: '竞品爬虫', status: 'available', description: '公开网页线索', capabilities: ['crawler'], check_supported: true},
+  ]});
+
+  render(<MemoryRouter><App /></MemoryRouter>);
+
+  expect(await screen.findByText('本次爬虫补充尚未取得有效结果')).toBeInTheDocument();
+  expect(screen.getByText('未找到来源')).toBeInTheDocument();
+});
+
 test('workbench displays city insight scope and collects government data', async () => {
   apiMocks.listProjects.mockResolvedValueOnce({items: [{
     project_id: 'proj_1',
@@ -329,7 +373,19 @@ test('workbench displays city insight scope and collects government data', async
       rent: {sample_count: 0},
     },
     lbs_context: {available: false, missing: ['1km居住人口', '小时客流'], message: '未接入真实客流数据。'},
-    data_quality: {confirmed_metric_count: 1, missing_metrics: [], latest_period: '2025', scope_warning: '城市统计只作为宏观背景。'},
+    data_quality: {
+      confirmed_metric_count: 1,
+      confirmed_target_metric_count: 1,
+      fallback_metric_count: 0,
+      coverage_status: 'target_ready',
+      target_scope_names: ['西安市'],
+      fallback_scope_names: [],
+      missing_target_scopes: ['雁塔区'],
+      missing_metrics: [],
+      latest_period: '2025',
+      latest_target_period: '2025',
+      scope_warning: '城市统计只作为宏观背景。',
+    },
     sources: [{source_name: '西安市统计局', source_url: 'https://tjj.xa.gov.cn/example.html', stat_period: '2025', scope_name: '西安市'}],
     latest_sync: null,
   } as any);

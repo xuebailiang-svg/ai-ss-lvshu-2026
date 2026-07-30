@@ -63,12 +63,20 @@ export type CityInsight = {
     rent: {sample_count: number};
   };
   lbs_context: {available: boolean; missing: string[]; message?: string};
-  data_quality: {
-    confirmed_metric_count: number;
-    missing_metrics: Array<{metric_code: string; label: string}>;
-    latest_period?: string | null;
-    scope_warning?: string;
-  };
+    data_quality: {
+      confirmed_metric_count: number;
+      confirmed_target_metric_count?: number;
+      fallback_metric_count?: number;
+      missing_metrics: Array<{metric_code: string; label: string}>;
+      latest_period?: string | null;
+      latest_target_period?: string | null;
+      coverage_status?: 'target_ready' | 'fallback_only' | 'unavailable';
+      available_scope_names?: string[];
+      target_scope_names?: string[];
+      fallback_scope_names?: string[];
+      missing_target_scopes?: string[];
+      scope_warning?: string;
+    };
   sources: Array<{
     source_name: string;
     source_url: string;

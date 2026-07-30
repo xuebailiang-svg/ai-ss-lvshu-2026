@@ -110,6 +110,15 @@ const CRAWLER_SOURCE_LABELS: Record<string, string> = {
   rent: '租金',
 };
 
+const CRAWLER_TASK_STATUS_LABELS: Record<string, string> = {
+  pending: '待执行',
+  running: '执行中',
+  success: '已补充',
+  partial: '部分补充',
+  skipped: '未找到来源',
+  failed: '失败',
+};
+
 const STATUS_TEXT: Record<string, string> = {
   draft: '初始化',
   pending_review: '待确认',
@@ -408,13 +417,17 @@ function summarizeAction(action: string, result: any) {
 
   if (action === '高德 POI 采集') {
     const collected = result?.collected || {};
+    const diagnostics = result?.diagnostics || {};
     return [
       '高德 POI 采集完成。',
-      `POI：${countText(collected.poi_count)}`,
-      `疑似竞品：${countText(collected.competitor_count)}`,
+      `本次去重后 POI：${countText(collected.poi_count)}`,
+      `竞品关键词命中（待专门筛选）：${countText(collected.competitor_count)}`,
       `餐饮：${countText(collected.food_count)}`,
       `娱乐：${countText(collected.entertainment_count)}`,
-      '下一步建议：确认竞品和配套是否有效，再做数据核验。',
+      Number(diagnostics.duplicate_count || 0) > 0
+        ? `已合并重复 POI：${countText(diagnostics.duplicate_count)} 条`
+        : '未发现重复 POI。',
+      '下一步建议：点击“获取竞品”和“获取配套”进行专门分类；后续列表数量以专门筛选和去重后的结果为准。',
     ].join('\n');
   }
 
@@ -957,13 +970,6 @@ export default function WorkbenchPage() {
     : [];
   const supplementSuggestions = buildSupplementSuggestions(quality);
   const crawlerQuality = quality?.crawler_quality || {};
-  const hasCrawlerResult = Boolean(
-    actionResults.crawlerCompetitor
-    || actionResults.crawlerSupporting
-    || actionResults.crawlerRent
-    || crawlTasks.length > 0
-    || Number(crawlerQuality.total_task_count || 0) > 0,
-  );
   const crawlTaskStats = {
     total: crawlTasks.length,
     pending: crawlTasks.filter(task => task.status === 'pending').length,
@@ -972,6 +978,11 @@ export default function WorkbenchPage() {
     skipped: crawlTasks.filter(task => task.status === 'skipped').length,
     failed: crawlTasks.filter(task => task.status === 'failed').length,
   };
+  const hasCrawlerAttempt = crawlTaskStats.total > 0 || Number(crawlerQuality.total_task_count || 0) > 0;
+  const hasCrawlerResult = crawlTaskStats.success > 0 || Number(crawlerQuality.success_task_count || 0) > 0;
+  const crawlerAttemptNeedsAttention = hasCrawlerAttempt
+    && !hasCrawlerResult
+    && crawlTaskStats.pending + crawlTaskStats.running === 0;
   const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent, hasCrawlerResult);
   const firstIncompleteWorkflowIndex = workflowSteps.findIndex(item => item.status !== 'finish');
   const currentWorkflowIndex = firstIncompleteWorkflowIndex === -1
@@ -986,6 +997,11 @@ export default function WorkbenchPage() {
   const projectFoodCount = selectedProject ? numberFromStats(selectedProject, 'food_count') : 0;
   const projectEntertainmentCount = selectedProject ? numberFromStats(selectedProject, 'entertainment_count') : 0;
   const projectRentCount = selectedProject ? numberFromStats(selectedProject, 'rent_count') : 0;
+  const cityCoverageStatus = cityInsight?.data_quality?.coverage_status
+    || (cityInsight?.status === 'ready' ? 'target_ready' : 'unavailable');
+  const cityCoverageScopeText = cityCoverageStatus === 'target_ready'
+    ? (cityInsight?.data_quality?.target_scope_names || []).join('、')
+    : (cityInsight?.data_quality?.fallback_scope_names || []).join('、');
   const hasAmapData = projectPoiCount > 0;
   const hasCompetitorData = projectCompetitorCount > 0;
   const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
@@ -1241,14 +1257,16 @@ export default function WorkbenchPage() {
                   </Button>
                   {cityInsight && (
                     <Alert
-                      type={cityInsight.status === 'ready' ? 'success' : cityInsight.status === 'collecting' ? 'info' : 'warning'}
+                      type={cityInsight.status === 'collecting' ? 'info' : cityCoverageStatus === 'target_ready' ? 'success' : 'warning'}
                       showIcon
-                      message={cityInsight.status === 'ready'
-                        ? `城市公开数据已就绪：${cityInsight.data_quality.confirmed_metric_count} 项已确认指标`
+                      message={cityInsight.status === 'ready' && cityCoverageStatus === 'target_ready'
+                        ? `城市公开数据已就绪：${cityInsight.data_quality.confirmed_target_metric_count ?? cityInsight.data_quality.confirmed_metric_count} 项目标行政区指标`
+                        : cityInsight.status === 'ready' && cityCoverageStatus === 'fallback_only'
+                          ? `仅获取到${cityCoverageScopeText || '上级行政区'}宏观数据，目标城市/区县数据暂缺`
                         : cityInsight.status === 'collecting'
                           ? '政府公开数据正在后台同步'
                           : '尚无可用城市公开指标'}
-                      description={`最新统计期：${cityInsight.data_quality.latest_period || '--'}；口径：${cityInsight.scope.district || cityInsight.scope.city || '--'}。宏观数据不代表项目1km商圈。`}
+                      description={`最新统计期：${cityInsight.data_quality.latest_target_period || cityInsight.data_quality.latest_period || '--'}；实际已加载口径：${cityCoverageScopeText || '--'}。宏观数据不代表项目分析半径内的真实人口和客流。`}
                     />
                   )}
                   {inlineResult('amap')}
@@ -1320,6 +1338,14 @@ export default function WorkbenchPage() {
                             description="建议人工补充，或在本步骤手动提供公开来源链接后重新抓取。"
                           />
                         )}
+                        {crawlerAttemptNeedsAttention && (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message="本次爬虫补充尚未取得有效结果"
+                            description="Step 4 不会标记为已完成。请启用搜索发现、检查来源网站，或手动添加公开网页链接后重试。"
+                          />
+                        )}
                         <List
                           size="small"
                           dataSource={crawlTasks.slice(0, 5)}
@@ -1327,8 +1353,8 @@ export default function WorkbenchPage() {
                             <List.Item>
                               <Space direction="vertical" size={0} style={{width: '100%'}}>
                                 <Space size={[4, 4]} wrap>
-                                  <Tag>{task.task_type}</Tag>
-                                  <Tag color={task.status === 'success' || task.status === 'partial' ? 'green' : task.status === 'failed' ? 'red' : task.status === 'skipped' ? 'orange' : 'blue'}>{task.status}</Tag>
+                                  <Tag>{CRAWLER_SOURCE_LABELS[task.task_type] || task.task_type}</Tag>
+                                  <Tag color={task.status === 'success' || task.status === 'partial' ? 'green' : task.status === 'failed' ? 'red' : task.status === 'skipped' ? 'orange' : 'blue'}>{CRAWLER_TASK_STATUS_LABELS[task.status] || task.status}</Tag>
                                   <Typography.Text>{task.target_name || task.target_address || task.target_url || `任务 ${task.id}`}</Typography.Text>
                                 </Space>
                                 {task.error_message && <Typography.Text type="secondary">{task.error_message}</Typography.Text>}

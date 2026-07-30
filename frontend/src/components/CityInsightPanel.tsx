@@ -45,6 +45,15 @@ function latestMetric(rows: RegionalStatistic[], code: string) {
 
 export default function CityInsightPanel({insight}: Props) {
   const metrics = flattenMetrics(insight);
+  const coverageStatus = insight.data_quality?.coverage_status
+    || (insight.status === 'ready' ? 'target_ready' : 'unavailable');
+  const fallbackScopes = insight.data_quality?.fallback_scope_names || [];
+  const missingTargetScopes = insight.data_quality?.missing_target_scopes || [];
+  const coverageMessage = coverageStatus === 'target_ready'
+    ? `${(insight.data_quality?.target_scope_names || []).join('、') || insight.scope.city || '当前城市'}宏观背景已加载`
+    : coverageStatus === 'fallback_only'
+      ? `仅加载${fallbackScopes.join('、') || '上级行政区'}宏观背景`
+      : '政府公开数据暂时不可用';
   const headlineCodes = [
     'resident_population',
     'gdp',
@@ -70,14 +79,17 @@ export default function CityInsightPanel({insight}: Props) {
   return (
     <Card title="城市洞察" className="v11-city-insight">
       <Alert
-        type={insight.status === 'ready' ? 'info' : insight.status === 'collecting' ? 'warning' : 'error'}
+        type={coverageStatus === 'target_ready' ? 'info' : insight.status === 'collecting' ? 'warning' : coverageStatus === 'fallback_only' ? 'warning' : 'error'}
         showIcon
         message={insight.status === 'ready'
-          ? `${insight.scope.city || '当前城市'}宏观背景已加载`
+          ? coverageMessage
           : insight.status === 'collecting'
             ? '政府公开数据正在后台同步'
             : '政府公开数据暂时不可用'}
-        description={insight.data_quality?.scope_warning || '城市和区县统计只作为宏观背景，不代表项目1km商圈。'}
+        description={[
+          insight.data_quality?.scope_warning || '城市和区县统计只作为宏观背景，不代表项目1km商圈。',
+          missingTargetScopes.length ? `待补充口径：${missingTargetScopes.join('、')}。` : '',
+        ].filter(Boolean).join(' ')}
       />
 
       <Typography.Title level={4}>城市与区域宏观背景</Typography.Title>
