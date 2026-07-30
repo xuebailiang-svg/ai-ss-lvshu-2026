@@ -26,7 +26,7 @@ function ChecklistTable({items}: {items?: any[]}) {
   return (
     <Table
       size="small"
-      rowKey={(row, index) => `${row.name}-${index}`}
+      rowKey={row => String(row.id ?? row.key ?? `${row.name}-${row.status ?? ''}-${row.data_type ?? ''}`)}
       pagination={false}
       dataSource={items || []}
       columns={[

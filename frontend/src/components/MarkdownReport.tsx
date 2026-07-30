@@ -68,8 +68,16 @@ function isTableSeparator(line: string) {
   return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
 }
 
+function normalizeMarkdown(content: string) {
+  return content
+    .replace(/\r\n/g, '\n')
+    // 部分模型会把 Markdown 表格压缩成一行，用 “| |” 表示相邻行。
+    // 先恢复换行，避免报告把表格当作普通段落直接显示。
+    .replace(/\|\s+\|/g, '|\n|');
+}
+
 export default function MarkdownReport({content, showToc = false}: MarkdownReportProps) {
-  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const lines = normalizeMarkdown(content).split('\n');
   const blocks: ReactNode[] = [];
   const headings: HeadingItem[] = [];
   let index = 0;

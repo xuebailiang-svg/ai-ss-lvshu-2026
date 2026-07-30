@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {lazy, Suspense, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   Button,
@@ -56,8 +56,9 @@ import {getScoringConfig, type ScoringDimensionConfig} from '../../api/scoringCo
 import {listMemory, type MemoryItem} from '../../api/memory';
 import {getManagedSystemConfig} from '../../api/client';
 import MarkdownReport from '../../components/MarkdownReport';
-import CityInsightPanel from '../../components/CityInsightPanel';
 import {useNavigate, useSearchParams} from 'react-router-dom';
+
+const CityInsightPanel = lazy(() => import('../../components/CityInsightPanel'));
 
 type ProjectItem = {
   project_id: string;
@@ -222,7 +223,7 @@ function projectProgress(project: ProjectItem) {
     rentCount > 0,
   ].filter(Boolean).length;
   if (completed === 0) return {completed, total: 4, text: '待采集', color: 'default'};
-  if (completed >= 4) return {completed, total: 4, text: '数据较完整', color: 'green'};
+  if (completed >= 4) return {completed, total: 4, text: '基础数据已采集', color: 'green'};
   if (completed >= 3 && rentCount === 0) return {completed, total: 4, text: '缺租金', color: 'orange'};
   return {completed, total: 4, text: `进度 ${completed}/4`, color: completed >= 2 ? 'blue' : 'orange'};
 }
@@ -972,8 +973,14 @@ export default function WorkbenchPage() {
     failed: crawlTasks.filter(task => task.status === 'failed').length,
   };
   const workflowSteps = buildWorkflowSteps(selectedProject, quality, score, reportContent, hasCrawlerResult);
-  const currentWorkflowIndex = Math.max(0, workflowSteps.findIndex(item => item.status !== 'finish'));
+  const firstIncompleteWorkflowIndex = workflowSteps.findIndex(item => item.status !== 'finish');
+  const currentWorkflowIndex = firstIncompleteWorkflowIndex === -1
+    ? Math.max(0, workflowSteps.length - 1)
+    : firstIncompleteWorkflowIndex;
   const activeWorkflowStep = workflowSteps[currentWorkflowIndex] || workflowSteps[workflowSteps.length - 1];
+  const completedWorkflowSteps = workflowSteps.filter(item => item.status === 'finish').length;
+  const workflowAllCompleted = workflowSteps.length > 0 && completedWorkflowSteps === workflowSteps.length;
+  const workflowProgressPercent = Math.round(completedWorkflowSteps / Math.max(1, workflowSteps.length) * 100);
   const projectPoiCount = selectedProject ? numberFromStats(selectedProject, 'poi_count') : 0;
   const projectCompetitorCount = selectedProject ? numberFromStats(selectedProject, 'competitor_count') : 0;
   const projectFoodCount = selectedProject ? numberFromStats(selectedProject, 'food_count') : 0;
@@ -983,6 +990,9 @@ export default function WorkbenchPage() {
   const hasCompetitorData = projectCompetitorCount > 0;
   const hasSupportingData = projectFoodCount > 0 || projectEntertainmentCount > 0;
   const crawlerSources = dataSources.filter(source => source.name.startsWith('crawler_'));
+  const visibleDataSources = crawlerSources.length > 0
+    ? dataSources.filter(source => source.name !== 'crawler')
+    : dataSources;
   const crawlerAvailable = crawlerSources.some(source => source.status === 'available');
   const crawlerSearchAvailable = crawlerAvailable && crawlerSearchEnabled;
   const crawlerDisabledReason = sideContextLoading && crawlerSources.length === 0
@@ -993,6 +1003,18 @@ export default function WorkbenchPage() {
   const hasQualityResult = Boolean(quality);
   const hasScoreResult = Boolean(score);
   const hasReportResult = Boolean(reportContent);
+  const hasAnyProjectData = hasAmapData
+    || projectCompetitorCount > 0
+    || projectFoodCount > 0
+    || projectEntertainmentCount > 0
+    || projectRentCount > 0;
+  const reportTrustLabel = hasSimulationData
+    ? '仅限演示'
+    : Number(crawlerQuality.pending_review_count || 0) > 0
+      ? '存在待确认线索'
+      : qualityScore >= 80
+        ? '数据较完整'
+        : '数据待补充';
   const inlineResult = (key: string) => {
     const item = actionResults[key];
     if (!item) return null;
@@ -1130,15 +1152,21 @@ export default function WorkbenchPage() {
         <Card
           title="选址流程"
           className="v11-action-card"
-          extra={<Tag color={activeWorkflowStep?.status === 'finish' ? 'green' : 'blue'}>{activeWorkflowStep?.title}</Tag>}
+          extra={<Tag color={workflowAllCompleted ? 'green' : 'blue'}>{workflowAllCompleted ? '流程已完成' : activeWorkflowStep?.title}</Tag>}
         >
           <Alert
-            type="info"
+            type={workflowAllCompleted ? 'success' : 'info'}
             showIcon
-            message={`当前阶段：${activeWorkflowStep?.title || '新建或选择项目'}`}
-            description={`下一步：${activeWorkflowStep?.description || '先在左侧新建项目，或选择已有项目。'}`}
+            message={workflowAllCompleted ? '选址分析流程已完成' : `当前阶段：${activeWorkflowStep?.title || '新建或选择项目'}`}
+            description={workflowAllCompleted
+              ? '评分和 AI 报告已生成，可在报告底部导出 HTML 或打印为 PDF；如需提高可信度，请继续补充缺失数据并重新核验。'
+              : `下一步：${activeWorkflowStep?.description || '先在左侧新建项目，或选择已有项目。'}`}
             style={{marginBottom: 12}}
           />
+          <div className="v11-workflow-progress" aria-label="选址流程完成进度">
+            <Progress percent={workflowProgressPercent} showInfo={false} status={completedWorkflowSteps === workflowSteps.length ? 'success' : 'active'} />
+            <Typography.Text strong>已完成 {completedWorkflowSteps}/{workflowSteps.length} 步</Typography.Text>
+          </div>
 
           <div className="v11-step-grid">
             <Card size="small" className={selectedProject ? 'v11-step-card done' : 'v11-step-card active'} title="Step 1：新建或选择项目" extra={doneTag(Boolean(selectedProject))}>
@@ -1367,6 +1395,7 @@ export default function WorkbenchPage() {
                     type={hasQualityResult ? 'default' : 'primary'}
                     icon={hasQualityResult ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'quality' || actionLoading === 'ai-review'}
+                    disabled={!selectedProjectId || !hasAnyProjectData}
                     onClick={checkQuality}
                     block
                   >
@@ -1383,6 +1412,7 @@ export default function WorkbenchPage() {
                     type={hasScoreResult ? 'default' : 'primary'}
                     icon={hasScoreResult ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'score'}
+                    disabled={!selectedProjectId || !hasQualityResult}
                     onClick={runScore}
                     block
                   >
@@ -1404,6 +1434,7 @@ export default function WorkbenchPage() {
                   type={hasReportResult ? 'default' : 'primary'}
                   icon={hasReportResult ? <CheckCircleOutlined /> : <FileTextOutlined />}
                   loading={actionLoading === 'report'}
+                  disabled={!selectedProjectId || !hasScoreResult}
                   onClick={runReport}
                   block
                 >
@@ -1421,7 +1452,11 @@ export default function WorkbenchPage() {
           </div>
         </Card>
 
-        {cityInsight && <CityInsightPanel insight={cityInsight} />}
+        {cityInsight && (
+          <Suspense fallback={<Card loading title="城市洞察" />}>
+            <CityInsightPanel insight={cityInsight} />
+          </Suspense>
+        )}
         {(quality || aiReview || score || reportContent) && (
           <Card title="分析结果与报告" className="v11-result-card">
             <Row gutter={[12, 12]}>
@@ -1570,8 +1605,22 @@ export default function WorkbenchPage() {
                         <span className="v11-report-summary-label">报告生成时间</span>
                         <span className="v11-report-summary-value small">{formatReportDate(reportCreatedAt)}</span>
                       </div>
+                      <div className="v11-report-summary-item">
+                        <span className="v11-report-summary-label">数据可信状态</span>
+                        <span className="v11-report-summary-value small">{reportTrustLabel}</span>
+                      </div>
                     </div>
                   </header>
+                  {(qualityScore < 80 || hasSimulationData || Number(crawlerQuality.pending_review_count || 0) > 0) && (
+                    <section className="v11-report-quality-note">
+                      <strong>阅读提示：</strong>
+                      {hasSimulationData
+                        ? '本报告包含演示模拟数据，只用于展示系统流程，不可直接用于投资决策。'
+                        : Number(crawlerQuality.pending_review_count || 0) > 0
+                          ? `仍有 ${countText(crawlerQuality.pending_review_count)} 条爬虫线索待人工确认，相关内容只能作为调查方向。`
+                          : `当前数据完整度为 ${qualityScore}%，请优先完成报告中列出的人工核实清单。`}
+                    </section>
+                  )}
                   <MarkdownReport content={reportContent} showToc />
                   <footer className="v11-report-footer">
                     <strong>数据使用说明：</strong>
@@ -1677,7 +1726,7 @@ export default function WorkbenchPage() {
         <Card title="数据源">
           <List
             size="small"
-            dataSource={dataSources}
+            dataSource={visibleDataSources}
             locale={{emptyText: '暂无数据源状态'}}
             renderItem={item => (
               <List.Item>

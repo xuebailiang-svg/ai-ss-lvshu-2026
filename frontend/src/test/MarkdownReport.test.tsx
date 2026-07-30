@@ -35,3 +35,16 @@ test('renders report table, links, quote and table of contents', () => {
   expect(sourceLink).toHaveAttribute('href', 'https://tjj.xa.gov.cn/');
   expect(sourceLink).toHaveAttribute('rel', 'noreferrer');
 });
+
+test('renders a table when model output collapses table rows into one line', () => {
+  const collapsedTable = `## 评分总览
+| 维度 | 得分 | 说明 | | --- | ---: | --- | | 交通 | 15 | 地铁可达 | | 租金 | 0 | 缺少真实租金 |`;
+
+  const {container} = render(<MarkdownReport content={collapsedTable} />);
+
+  const table = container.querySelector('table');
+  expect(table).not.toBeNull();
+  expect(within(table as HTMLElement).getByText('交通')).toBeInTheDocument();
+  expect(within(table as HTMLElement).getByText('地铁可达')).toBeInTheDocument();
+  expect(within(table as HTMLElement).getByText('缺少真实租金')).toBeInTheDocument();
+});

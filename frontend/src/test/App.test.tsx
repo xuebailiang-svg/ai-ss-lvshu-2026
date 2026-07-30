@@ -177,6 +177,7 @@ const sampleEvaluation = {
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  apiMocks.listProjects.mockResolvedValue({items: []});
   apiMocks.getEvaluation.mockResolvedValue(sampleEvaluation);
   apiMocks.report.mockResolvedValue({sections: {}, hard_risk: false, disclaimer: ''});
 });
@@ -244,6 +245,31 @@ test('renders v1.1 workbench with selected project context', async () => {
 });
 
 test('v1.1 workbench action buttons call APIs', async () => {
+  apiMocks.listProjects.mockResolvedValue({items: [{
+    project_id: 'proj_1',
+    name: '测试项目',
+    city: '西安市',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+    stats: {food_count: 1},
+  }]} as any);
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByText('采集高德 POI'));
+  await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
+  await waitFor(() => expect(screen.getByRole('button', {name: 'AI 数据核验'})).toBeEnabled());
+  fireEvent.click(screen.getByText('AI 数据核验'));
+  await waitFor(() => expect(apiMocks.getProjectDataQuality).toHaveBeenCalledWith('proj_1'));
+  await waitFor(() => expect(screen.getByRole('button', {name: '开始评分分析'})).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', {name: '开始评分分析'}));
+  await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
+  await waitFor(() => expect(screen.getByRole('button', {name: /生成 AI 报告/})).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', {name: /生成 AI 报告/}));
+  await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
+});
+
+test('workbench enforces quality and scoring prerequisites', async () => {
   apiMocks.listProjects.mockResolvedValueOnce({items: [{
     project_id: 'proj_1',
     name: '测试项目',
@@ -251,15 +277,13 @@ test('v1.1 workbench action buttons call APIs', async () => {
     address: '小寨地铁站',
     radius_meters: 1000,
     business_type: '电竞馆',
+    stats: {poi_count: 1},
   }]} as any);
   render(<MemoryRouter><App /></MemoryRouter>);
   expect((await screen.findAllByText('测试项目')).length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByText('采集高德 POI'));
-  fireEvent.click(screen.getByText('开始评分分析'));
-  fireEvent.click(screen.getByText('生成 AI 报告'));
-  await waitFor(() => expect(apiMocks.collectProjectAmap).toHaveBeenCalledWith('proj_1'));
-  await waitFor(() => expect(apiMocks.scoreProject).toHaveBeenCalledWith('proj_1'));
-  await waitFor(() => expect(apiMocks.generateAiReport).toHaveBeenCalledWith('proj_1'));
+  expect(screen.getByRole('button', {name: '开始评分分析'})).toBeDisabled();
+  expect(screen.getByRole('button', {name: /生成 AI 报告/})).toBeDisabled();
+  expect(screen.getByLabelText('选址流程完成进度')).toBeInTheDocument();
 });
 
 test('workbench displays city insight scope and collects government data', async () => {
