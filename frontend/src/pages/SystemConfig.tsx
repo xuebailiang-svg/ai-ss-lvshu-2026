@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   Button,
@@ -97,6 +97,8 @@ export default function SystemConfig() {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [savingConfig, setSavingConfig] = useState(false);
   const [savingDimensions, setSavingDimensions] = useState(false);
+  const [crawlerDirty, setCrawlerDirty] = useState(false);
+  const configLoadedRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const [configSaveFeedback, setConfigSaveFeedback] = useState<{
     type: 'success' | 'error' | 'info' | 'warning';
@@ -151,6 +153,7 @@ export default function SystemConfig() {
         gov_data_rate_limit_seconds: Number(config?.gov_data_rate_limit_seconds || 1),
       });
     } finally {
+      configLoadedRef.current = true;
       setLoading(false);
     }
   };
@@ -260,7 +263,7 @@ export default function SystemConfig() {
     return saveConfigPatch(values);
   };
 
-  const saveCrawlerConfig = () => {
+  const saveCrawlerConfig = async () => {
     const values = configForm.getFieldsValue([
       'crawler_enabled',
       'crawler_provider',
@@ -276,7 +279,9 @@ export default function SystemConfig() {
       'crawler_search_timeout_seconds',
       'crawler_search_allowed_domains',
     ]);
-    return saveConfigPatch(values);
+    const ok = await saveConfigPatch(values);
+    if (ok) setCrawlerDirty(false);
+    return ok;
   };
 
   const saveGovernmentDataConfig = () => {
@@ -484,7 +489,19 @@ export default function SystemConfig() {
       </Card>
 
       <Card title="Key 和模型配置">
-        <Form form={configForm} layout="vertical">
+        <Form
+          form={configForm}
+          layout="vertical"
+          onValuesChange={(changed) => {
+            if (!configLoadedRef.current) return;
+            if (Object.keys(changed).some(key => key.startsWith('crawler_'))) {
+              setCrawlerDirty(true);
+              if (changed.crawler_search_enabled !== undefined && token.trim()) {
+                void saveCrawlerConfig();
+              }
+            }
+          }}
+        >
           <Row gutter={16}>
             <Col xs={24} md={12}>
               <Card size="small" title="DeepSeek">
@@ -574,6 +591,15 @@ export default function SystemConfig() {
                     || '主系统安装不会下载浏览器。请在服务器单独执行 scripts/crawler/install.sh。'
                   }
                 />
+                {crawlerDirty && (
+                  <Alert
+                    style={{marginBottom: 12}}
+                    type="warning"
+                    showIcon
+                    message="爬虫配置有未保存的改动"
+                    description="『启用搜索发现』等改动需要点击下方『保存爬虫配置』按钮（需在『管理员验证』处输入 ADMIN_CONFIG_TOKEN）后才会保存到服务器，否则刷新页面后会恢复为关闭状态。"
+                  />
+                )}
                 <Row gutter={12}>
                   <Col xs={24} md={6}>
                     <Form.Item name="crawler_enabled" label="启用爬虫" valuePropName="checked">

@@ -21,6 +21,10 @@ export const getProjectDataset = (projectId: string) => api.get(`/projects/${pro
 export const getProjectDataQuality = (projectId: string) => api.get(`/projects/${projectId}/data-quality`).then(response => response.data);
 export const getProjectMissingData = (projectId: string) => api.get(`/projects/${projectId}/missing-data`).then(response => response.data);
 export const collectProjectAmap = (projectId: string) => api.post(`/projects/${projectId}/collect/amap`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+export const geocodeProject = (projectId: string, force = false) => api.post(`/projects/${projectId}/geocode`, undefined, {
+  params: force ? {force: true} : undefined,
+  timeout: LONG_REQUEST_TIMEOUT_MS,
+}).then(response => response.data);
 export const collectProjectCompetitors = (projectId: string) => api.post(`/projects/${projectId}/collect/competitors`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectSupporting = (projectId: string) => api.post(`/projects/${projectId}/collect/supporting`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
 export const collectProjectGovernmentStats = (projectId: string) => api
@@ -113,11 +117,76 @@ export const enrichProjectCrawler = (
   maxItems = 20,
   discoverUrls = true,
 ) => api
-  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems, discover_urls: discoverUrls})
+  .post(`/projects/${projectId}/crawl/enrich`, {types, max_items: maxItems, discover_urls: discoverUrls, planning_mode: 'ai_assisted'})
   .then(response => response.data);
 
 export const listProjectCrawlTasks = (projectId: string) => api
   .get(`/projects/${projectId}/crawl/tasks`)
+  .then(response => response.data);
+
+export const retryProjectCrawlTask = (projectId: string, taskId: number) => api
+  .post(`/projects/${projectId}/crawl/tasks/${taskId}/retry`)
+  .then(response => response.data);
+
+export type CrawlerFieldSuggestion = {
+  id: number;
+  task_id: number;
+  record_type: string;
+  record_id?: number | null;
+  field_name: string;
+  suggested_value: unknown;
+  reviewed_value?: unknown;
+  source_url: string;
+  source_domain?: string | null;
+  evidence_excerpt?: string | null;
+  extraction_method: string;
+  confidence: number;
+  source_quality: 'high' | 'medium' | 'low';
+  freshness_status: 'fresh' | 'aging' | 'stale' | 'unknown';
+  conflict_status: string;
+  status: 'pending_review' | 'accepted' | 'rejected';
+};
+
+export const listCrawlerFieldSuggestions = (projectId: string, status?: string) => api
+  .get<{items: CrawlerFieldSuggestion[]; total: number}>(`/projects/${projectId}/crawler-suggestions`, {params: status ? {status} : undefined})
+  .then(response => response.data);
+
+export const reviewCrawlerFieldSuggestion = (
+  projectId: string,
+  suggestionId: number,
+  action: 'accepted' | 'rejected',
+  finalValue?: unknown,
+) => api
+  .post<CrawlerFieldSuggestion>(`/projects/${projectId}/crawler-suggestions/${suggestionId}/review`, {
+    action,
+    final_value: finalValue,
+  })
+  .then(response => response.data);
+
+export type BusinessOutcome = {
+  id?: number;
+  project_id?: string;
+  actual_monthly_rent?: number | null;
+  actual_area_sqm?: number | null;
+  actual_machine_count?: number | null;
+  opening_date?: string | null;
+  actual_investment?: number | null;
+  occupancy_rate?: number | null;
+  result_status?: string | null;
+  success_reasons?: string[];
+  failure_reasons?: string[];
+  notes?: string | null;
+  status?: string;
+};
+
+export const getBusinessOutcome = (projectId: string) => api
+  .get<BusinessOutcome | null>(`/projects/${projectId}/business-outcome`)
+  .then(response => response.data);
+export const saveBusinessOutcome = (projectId: string, data: BusinessOutcome) => api
+  .put<BusinessOutcome>(`/projects/${projectId}/business-outcome`, data)
+  .then(response => response.data);
+export const reviewBusinessOutcome = (projectId: string, status: 'pending_review' | 'confirmed' | 'rejected') => api
+  .post<BusinessOutcome>(`/projects/${projectId}/business-outcome/review`, {status})
   .then(response => response.data);
 
 export const createCrawlerManualUrlTask = (
@@ -136,6 +205,15 @@ export const createCrawlerManualUrlTask = (
 export type ProjectSupportingStatus = 'pending_review' | 'confirmed' | 'rejected';
 export type ProjectSupportingCategory = 'food' | 'entertainment' | 'night_business';
 
+export type CrawlerSuggestion = {
+  fields: Record<string, unknown>;
+  source_url?: string | null;
+  source_domain?: string | null;
+  field_evidence: Array<{field: string; value: unknown; excerpt?: string; confidence?: number; method?: string}>;
+  review_status: 'pending_review' | 'confirmed' | 'rejected';
+  notice: string;
+};
+
 export type ProjectSupportingItem = {
   id: string;
   name: string;
@@ -145,6 +223,7 @@ export type ProjectSupportingItem = {
   source: string;
   status: ProjectSupportingStatus;
   detail_completed: boolean;
+  crawler_suggestion?: CrawlerSuggestion | null;
 };
 
 export type ProjectSupportingManualDetail = {
@@ -223,6 +302,7 @@ export type ProjectCompetitor = {
   annual_sales?: number | null;
   recharge_info?: string | null;
   remark?: string | null;
+  crawler_suggestion?: CrawlerSuggestion | null;
 };
 
 export type ProjectCompetitorDetailUpdate = Pick<
@@ -287,6 +367,7 @@ export type ProjectRentItem = {
   timestamp?: string | null;
   missing_fields: string[];
   detail_completed: boolean;
+  crawler_suggestion?: CrawlerSuggestion | null;
 };
 
 export type ProjectRentStatus = 'pending_review' | 'confirmed' | 'rejected';

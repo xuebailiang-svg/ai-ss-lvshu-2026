@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.data_source.crawler.evidence import crawler_suggestion_from_raw
+
 from app.data_source.base import DataSourceRequest
 from app.data_source.registry import DataSourceRegistry, build_default_registry
 from app.models import RentDataRecord
@@ -221,6 +223,7 @@ def _rent_item(row: RentDataRecord) -> dict[str, Any]:
         "timestamp": row.timestamp,
         "missing_fields": missing_fields,
         "detail_completed": bool(manual_detail.get("property_type") and manual_detail.get("source_url")),
+        "crawler_suggestion": crawler_suggestion_from_raw(raw_data, row.status),
     }
 
 

@@ -47,7 +47,8 @@ competitor:
   quality_bonus: 5
   too_many_threshold: 5
   too_many_penalty: -5
-  pending_review_weight: 0.5
+  # 待确认竞品只作调查提示，不进入正式评分。
+  pending_review_weight: 0
   count_scores:
     low_max: 2
     medium_max: 5

@@ -17,6 +17,7 @@ from app.memory.service import relevant_memory_context
 from app.projects.service import data_quality, dataset, get_project
 from app.scoring_engine.service import score_project
 from app.data_source.government_stats.service import city_insight as build_city_insight
+from app.data_source.crawler.review_service import confirmed_evidence_summary
 
 
 class ProjectNotFoundError(RuntimeError):
@@ -119,6 +120,7 @@ def build_ai_input(db: Session, project_id: str) -> AIAnalysisInput:
         data_quality=quality,
         simulation_data_summary=simulation_summary,
         memory_context=memories,
+        crawler_evidence_summary=confirmed_evidence_summary(db, project_id),
         risks=list(score.get("risks") or []) + list(quality.get("warnings") or []),
     )
 

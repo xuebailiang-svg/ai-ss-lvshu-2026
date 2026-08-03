@@ -51,6 +51,7 @@ class CrawledPage:
     markdown: str
     success: bool
     error_message: str | None = None
+    html: str | None = None
 
 
 class Crawl4AIClient:
@@ -71,6 +72,7 @@ class Crawl4AIClient:
                     markdown=str(markdown or ""),
                     success=bool(getattr(result, "success", True)),
                     error_message=getattr(result, "error_message", None),
+                    html=str(getattr(result, "cleaned_html", None) or getattr(result, "html", None) or ""),
                 )
 
         return await asyncio.wait_for(_run(), timeout=timeout_seconds)

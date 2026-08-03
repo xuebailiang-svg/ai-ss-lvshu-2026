@@ -41,6 +41,7 @@ class CompetitorListItem(BaseModel):
     annual_sales: float | None = None
     recharge_info: str | None = None
     remark: str | None = None
+    crawler_suggestion: dict | None = None
 
 
 class CompetitorListResponse(BaseModel):

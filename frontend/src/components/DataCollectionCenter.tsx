@@ -5,6 +5,7 @@ import {
   CloseCircleOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
+  LinkOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import {useNavigate} from 'react-router-dom';
@@ -38,7 +39,45 @@ import {
   type ProjectRentItem,
   type ProjectRentDetail,
   type ProjectRentStatus,
+  type CrawlerSuggestion,
 } from '../api/projects';
+
+const CRAWLER_FIELD_LABELS: Record<string, string> = {
+  business_hours: '营业时间', hour_price: '小时价格', member_price: '会员价', machine_count: '机器数量',
+  area_sqm: '面积', occupancy_rate: '上座率', rating: '评分', night_operation: '夜间营业', is_24_hours: '24小时',
+  monthly_rent: '月租金', rent_per_sqm: '租金单价', property_fee: '物业费', transfer_fee: '转让费',
+  floor: '楼层', publish_date: '发布时间', address: '地址',
+};
+
+function CrawlerEvidence({suggestion}: {suggestion?: CrawlerSuggestion | null}) {
+  if (!suggestion) return null;
+  return (
+    <div style={{marginTop: 8, padding: '8px 10px', border: '1px solid #ffe58f', borderRadius: 8, background: '#fffbe6'}}>
+      <Space direction="vertical" size={4} style={{width: '100%'}}>
+        <Space size={[4, 4]} wrap>
+          <Tag color="gold">爬虫待确认线索</Tag>
+          {Object.entries(suggestion.fields || {}).map(([field, value]) => (
+            <Tag key={field}>{CRAWLER_FIELD_LABELS[field] || field}：{String(value)}</Tag>
+          ))}
+        </Space>
+        {(suggestion.field_evidence || []).slice(0, 3).map((item, index) => (
+          <Typography.Text key={`${item.field}-${index}`} type="secondary">
+            {CRAWLER_FIELD_LABELS[item.field] || item.field}：{item.excerpt || '请打开来源网页核对'}
+            {item.confidence != null ? `（置信度 ${Math.round(item.confidence * 100)}%）` : ''}
+          </Typography.Text>
+        ))}
+        {suggestion.source_url && (
+          <Typography.Link href={suggestion.source_url} target="_blank" rel="noreferrer">
+            <LinkOutlined /> 打开来源网页（{suggestion.source_domain || '公开网页'}）
+          </Typography.Link>
+        )}
+        <Typography.Text type={suggestion.review_status === 'confirmed' ? 'success' : 'warning'}>
+          {suggestion.review_status === 'confirmed' ? '该记录已完成人工确认。' : '确认前不会作为最终经营事实。'}
+        </Typography.Text>
+      </Space>
+    </div>
+  );
+}
 
 type CollectionStatus = 'not_started' | 'collecting' | 'completed' | 'failed';
 
@@ -773,11 +812,14 @@ export default function DataCollectionCenter({
                     </Space>
                   )}
                   description={(
-                    <Space wrap split={<span>·</span>}>
-                      <span>面积：{rent.area_sqm == null ? '未填写' : `${rent.area_sqm} ㎡`}</span>
-                      <span>月租：{rent.monthly_rent == null ? '未填写' : `${rent.monthly_rent} 元`}</span>
-                      <span>单价：{rent.rent_unit_price == null ? '未计算' : `${rent.rent_unit_price} 元/㎡/月`}</span>
-                    </Space>
+                    <div>
+                      <Space wrap split={<span>·</span>}>
+                        <span>面积：{rent.area_sqm == null ? '未填写' : `${rent.area_sqm} ㎡`}</span>
+                        <span>月租：{rent.monthly_rent == null ? '未填写' : `${rent.monthly_rent} 元`}</span>
+                        <span>单价：{rent.rent_unit_price == null ? '未计算' : `${rent.rent_unit_price} 元/㎡/月`}</span>
+                      </Space>
+                      <CrawlerEvidence suggestion={rent.crawler_suggestion} />
+                    </div>
                   )}
                 />
               </List.Item>
@@ -873,10 +915,13 @@ export default function DataCollectionCenter({
                       </Space>
                     )}
                     description={(
-                      <Space wrap split={<span>·</span>}>
-                        <span>{item.address || '地址未提供'}</span>
-                        <span>{item.distance_meters != null ? `距离 ${item.distance_meters} 米` : '距离未知'}</span>
-                      </Space>
+                      <div>
+                        <Space wrap split={<span>·</span>}>
+                          <span>{item.address || '地址未提供'}</span>
+                          <span>{item.distance_meters != null ? `距离 ${item.distance_meters} 米` : '距离未知'}</span>
+                        </Space>
+                        <CrawlerEvidence suggestion={item.crawler_suggestion} />
+                      </div>
                     )}
                   />
                 </List.Item>
@@ -1143,10 +1188,13 @@ export default function DataCollectionCenter({
                     </Space>
                   )}
                   description={(
-                    <Space wrap split={<span>·</span>}>
-                      <span>{competitor.address || '地址未提供'}</span>
-                      <span>{competitor.distance_meters != null ? `距离 ${competitor.distance_meters} 米` : '距离未知'}</span>
-                    </Space>
+                    <div>
+                      <Space wrap split={<span>·</span>}>
+                        <span>{competitor.address || '地址未提供'}</span>
+                        <span>{competitor.distance_meters != null ? `距离 ${competitor.distance_meters} 米` : '距离未知'}</span>
+                      </Space>
+                      <CrawlerEvidence suggestion={competitor.crawler_suggestion} />
+                    </div>
                   )}
                 />
               </List.Item>

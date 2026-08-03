@@ -38,6 +38,7 @@ class RentListItem(BaseModel):
     timestamp: datetime | None = None
     missing_fields: list[str] = Field(default_factory=list)
     detail_completed: bool = False
+    crawler_suggestion: dict | None = None
 
 
 class RentListResponse(BaseModel):

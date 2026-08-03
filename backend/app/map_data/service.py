@@ -37,6 +37,8 @@ def _upsert_poi(db: Session, payload: dict[str, Any]) -> UnifiedPOIRecord:
     if existing:
         for key, value in payload.items():
             if key != "id" and hasattr(existing, key):
+                if key == "business_hours" and not value and existing.business_hours:
+                    continue
                 setattr(existing, key, value)
         return existing
     row = UnifiedPOIRecord(**payload)
@@ -80,15 +82,17 @@ async def _ensure_project_location(
     db: Session,
     project: SiteProjectRecord,
     amap_client: AmapMapDataClient,
+    *,
+    force: bool = False,
 ) -> dict[str, Any]:
-    if project.longitude is not None and project.latitude is not None:
+    if not force and project.longitude is not None and project.latitude is not None:
         return {"needed": False}
 
     geocode_data = await amap_client.geocode(city=project.city, address=project.address)
     longitude, latitude = _extract_geocode_location(geocode_data)
     project.longitude = longitude
     project.latitude = latitude
-    raw_data = project.raw_data if isinstance(project.raw_data, dict) else {}
+    raw_data = dict(project.raw_data) if isinstance(project.raw_data, dict) else {}
     first = (geocode_data.get("geocodes") or [{}])[0]
     raw_data["geocode"] = {
         "source": "amap",
@@ -100,9 +104,52 @@ async def _ensure_project_location(
     db.commit()
     return {
         "needed": True,
+        "forced": force,
         "success": True,
         "longitude": longitude,
         "latitude": latitude,
+    }
+
+
+async def geocode_project(
+    db: Session,
+    project_id: str,
+    *,
+    client: AmapMapDataClient | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    project: SiteProjectRecord | None = get_project(db, project_id)
+    if not project:
+        raise ProjectNotFoundError("Project not found")
+
+    amap_client = client or AmapMapDataClient()
+    try:
+        result = await _ensure_project_location(db, project, amap_client, force=force)
+    except AmapConfigError:
+        return {
+            "success": False,
+            "project_id": project.project_id,
+            "message": "AMAP_WEB_SERVICE_KEY未配置，无法解析地址",
+            "diagnostics": {"geocode": {"success": False, "reason": "not_configured"}},
+        }
+    except Exception as exc:  # noqa: BLE001 - 返回客户可读错误，不暴露 Key
+        return {
+            "success": False,
+            "project_id": project.project_id,
+            "message": f"地址解析失败：{exc}",
+            "diagnostics": {"geocode": {"success": False, "reason": str(exc)}},
+        }
+
+    return {
+        "success": True,
+        "project_id": project.project_id,
+        "location": {
+            "longitude": project.longitude,
+            "latitude": project.latitude,
+        },
+        "already_located": not result.get("needed", False),
+        "message": "项目已有经纬度，无需重新解析" if not result.get("needed", False) else "地址解析成功",
+        "diagnostics": result,
     }
 
 

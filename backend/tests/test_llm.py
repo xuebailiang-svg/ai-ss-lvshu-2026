@@ -202,6 +202,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
         "data_quality",
         "simulation_data_summary",
         "memory_context",
+        "crawler_evidence_summary",
         "risks",
     }
     assert data["city_insight"]["lbs_context"]["available"] is False

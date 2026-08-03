@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 import httpx
 
 from app.data_source.crawler.base import CrawlerSettings
+from app.data_source.crawler.source_planner import build_rule_search_queries
 from app.models import SiteProjectRecord
 
 
@@ -116,33 +117,7 @@ class SearchDiscoveryClient:
 
 
 def build_search_queries(project: SiteProjectRecord, payload: dict[str, Any]) -> list[str]:
-    city = project.city or ""
-    district = project.district or ""
-    project_address = project.address or ""
-    name = str(payload.get("name") or "").strip()
-    address = str(payload.get("address") or project_address or "").strip()
-    task_type = payload.get("task_type")
-    base_location = " ".join(part for part in (city, district, address) if part).strip()
-
-    if task_type == "competitor":
-        target = " ".join(part for part in (base_location, name) if part).strip()
-        return _dedupe([f"{target} 价格", f"{target} 营业时间", f"{target} 机器配置"])
-
-    if task_type == "supporting":
-        target = " ".join(part for part in (base_location, name) if part).strip()
-        return _dedupe([f"{target} 营业时间", f"{target} 评分"])
-
-    if task_type == "rent":
-        expected_area = _expected_area(project)
-        return _dedupe(
-            [
-                f"{city} {district} {project_address} 商铺出租 {expected_area}平",
-                f"{city} {project_address} 商铺租金",
-                f"{city} {project_address} 电竞馆 商铺 转让",
-            ]
-        )
-
-    return []
+    return build_rule_search_queries(project, payload)
 
 
 async def discover_urls_for_payload(
@@ -151,6 +126,7 @@ async def discover_urls_for_payload(
     *,
     settings: CrawlerSettings,
     client: SearchDiscoveryClient,
+    queries: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], str | None, list[dict[str, str]]]:
     if not settings.search_enabled:
         return [], [], [], "爬虫搜索发现未启用", [
@@ -158,7 +134,7 @@ async def discover_urls_for_payload(
         ]
 
     providers = _provider_list(settings.search_provider)
-    queries = build_search_queries(project, payload)
+    queries = queries or build_search_queries(project, payload)
     relevant_results: list[tuple[int, SearchResult, dict[str, Any]]] = []
     considered_results: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -170,10 +146,13 @@ async def discover_urls_for_payload(
         for provider in providers:
             try:
                 if hasattr(client, "discover_provider"):
-                    results = await client.discover_provider(
-                        provider,
-                        query,
-                        max_results=max(1, settings.search_max_results),
+                    from app.data_source.crawler.search_provider import provider_registry
+
+                    registry = provider_registry(client)
+                    if provider not in registry:
+                        raise ValueError(f"不支持的搜索 Provider: {provider}")
+                    results = await registry[provider].search(
+                        query, max_results=max(1, settings.search_max_results),
                         timeout_seconds=max(3, settings.search_timeout_seconds),
                     )
                 else:

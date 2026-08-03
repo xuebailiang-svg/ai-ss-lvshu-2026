@@ -10,12 +10,16 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.data_source.crawler.base import crawler_settings
+from app.data_source.crawler.adapters import extract_structured_fields
 from app.data_source.crawler.crawl4ai_client import Crawl4AIClient
+from app.data_source.crawler.evidence import build_field_evidence, meaningful_fields, retain_evidenced_fields
 from app.data_source.crawler.search_discovery import (
     SearchDiscoveryClient,
     discover_urls_for_payload,
     page_matches_target,
 )
+from app.data_source.crawler.source_planner import build_ai_source_plan, build_rule_source_plan, rank_real_candidates
+from app.data_source.crawler.review_service import persist_task_suggestions
 from app.models import (
     CrawlTaskRecord,
     EntertainmentRecord,
@@ -92,6 +96,11 @@ def _source_url(raw: Any) -> str | None:
 
 
 def _task_to_public(row: CrawlTaskRecord) -> dict[str, Any]:
+    input_snapshot = row.input_snapshot if isinstance(row.input_snapshot, dict) else {}
+    result_snapshot = row.result_snapshot if isinstance(row.result_snapshot, dict) else {}
+    extracted_fields = result_snapshot.get("extracted_fields") if isinstance(result_snapshot.get("extracted_fields"), dict) else {}
+    field_evidence = result_snapshot.get("field_evidence") if isinstance(result_snapshot.get("field_evidence"), list) else []
+    candidate_attempts = result_snapshot.get("candidate_attempts") if isinstance(result_snapshot.get("candidate_attempts"), list) else []
     return {
         "id": row.id,
         "project_id": row.project_id,
@@ -106,6 +115,10 @@ def _task_to_public(row: CrawlTaskRecord) -> dict[str, Any]:
         "created_at": row.created_at,
         "started_at": row.started_at,
         "finished_at": row.finished_at,
+        "planning_mode": input_snapshot.get("planning_mode") or "rules",
+        "extracted_fields": extracted_fields,
+        "evidence_count": len(field_evidence),
+        "attempt_count": len(candidate_attempts),
     }
 
 
@@ -235,15 +248,11 @@ def _extract_rent(markdown: str, url: str) -> dict[str, Any]:
 
 
 def _has_value(data: dict[str, Any]) -> bool:
-    return any(value not in (None, "", []) for key, value in data.items() if key not in {"source_url", "review_summary"})
+    return bool(meaningful_fields(data))
 
 
 def _meaningful_fields(data: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in data.items()
-        if key not in {"source_url", "review_summary"} and value not in (None, "", [])
-    }
+    return meaningful_fields(data)
 
 
 def _detail_is_sufficient(
@@ -278,6 +287,9 @@ def _merge_raw(row: Any, detail: dict[str, Any]) -> None:
 def _apply_competitor(row: UnifiedCompetitorRecord, detail: dict[str, Any]) -> bool:
     changed = False
     _merge_raw(row, detail)
+    if row.status == "confirmed":
+        # 已确认记录只保存爬虫建议；必须经过字段审核后才能改动正式字段。
+        return _has_value(detail)
     for field in ("area_sqm", "machine_count", "hour_price", "member_price", "occupancy_rate"):
         value = detail.get(field)
         if value is not None and getattr(row, field) is None:
@@ -296,6 +308,8 @@ def _apply_competitor(row: UnifiedCompetitorRecord, detail: dict[str, Any]) -> b
 def _apply_supporting(row: Any, detail: dict[str, Any]) -> bool:
     changed = False
     _merge_raw(row, detail)
+    if row.status == "confirmed":
+        return _has_value(detail)
     if detail.get("business_hours") and not row.business_hours:
         row.business_hours = detail["business_hours"]
         changed = True
@@ -311,6 +325,8 @@ def _apply_supporting(row: Any, detail: dict[str, Any]) -> bool:
 def _apply_rent(row: RentDataRecord, detail: dict[str, Any]) -> bool:
     changed = False
     _merge_raw(row, detail)
+    if row.status == "confirmed":
+        return _has_value(detail)
     for field in ("monthly_rent", "area_sqm", "rent_per_sqm"):
         value = detail.get(field)
         if value is not None and getattr(row, field) is None:
@@ -423,6 +439,34 @@ def _create_supporting_from_crawler(db: Session, project_id: str, payload: dict[
 
 def _candidate_payload(row: Any, task_type: str, record_type: str | None = None) -> dict[str, Any]:
     raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+    manual = raw.get("manual_detail") if isinstance(raw.get("manual_detail"), dict) else {}
+    if task_type == "competitor":
+        current = {
+            "business_hours": manual.get("business_hours"),
+            "hour_price": getattr(row, "hour_price", None),
+            "member_price": getattr(row, "member_price", None),
+            "machine_count": getattr(row, "machine_count", None),
+            "area_sqm": getattr(row, "area_sqm", None),
+            "occupancy_rate": getattr(row, "occupancy_rate", None),
+        }
+    elif task_type == "supporting":
+        current = {
+            "business_hours": getattr(row, "business_hours", None) or manual.get("business_hours"),
+            "night_operation": getattr(row, "night_business", None) if getattr(row, "night_business", None) is not None else manual.get("night_operation"),
+            "is_24_hours": manual.get("is_24_hours"),
+            "rating": getattr(row, "rating", None),
+        }
+    else:
+        current = {
+            "address": getattr(row, "location_type", None) or raw.get("address"),
+            "area_sqm": getattr(row, "area_sqm", None),
+            "monthly_rent": getattr(row, "monthly_rent", None),
+            "rent_per_sqm": getattr(row, "rent_per_sqm", None),
+            "property_fee": manual.get("property_fee") or raw.get("property_fee"),
+            "transfer_fee": manual.get("transfer_fee") or raw.get("transfer_fee"),
+            "floor": manual.get("floor"),
+            "publish_date": manual.get("publish_date"),
+        }
     return {
         "task_type": task_type,
         "record_type": record_type,
@@ -432,6 +476,7 @@ def _candidate_payload(row: Any, task_type: str, record_type: str | None = None)
         "url": _source_url(raw),
         "source": getattr(row, "source", None),
         "status": getattr(row, "status", None),
+        "missing_fields": [key for key, value in current.items() if value in (None, "")],
     }
 
 
@@ -447,6 +492,7 @@ def _project_rent_payload(project: SiteProjectRecord) -> dict[str, Any]:
         "source": "project",
         "status": "pending_review",
         "expected_area_sqm": raw.get("expected_area_sqm"),
+        "missing_fields": ["address", "area_sqm", "monthly_rent", "rent_per_sqm", "property_fee", "transfer_fee", "floor", "publish_date"],
     }
 
 
@@ -506,6 +552,21 @@ def _get_target_row(db: Session, project_id: str, payload: dict[str, Any]) -> An
     return None
 
 
+def _latest_created_target(db: Session, project_id: str, payload: dict[str, Any]) -> Any | None:
+    if payload["task_type"] == "competitor":
+        return db.scalar(select(UnifiedCompetitorRecord).where(
+            UnifiedCompetitorRecord.project_id == project_id,
+            UnifiedCompetitorRecord.source == "crawler",
+        ).order_by(UnifiedCompetitorRecord.id.desc()))
+    if payload["task_type"] == "rent":
+        return db.scalar(select(RentDataRecord).where(
+            RentDataRecord.project_id == project_id,
+            RentDataRecord.source == "crawler",
+        ).order_by(RentDataRecord.id.desc()))
+    model = EntertainmentRecord if payload.get("record_type") == "entertainment" else FoodBusinessRecord
+    return db.scalar(select(model).where(model.project_id == project_id, model.source == "crawler").order_by(model.id.desc()))
+
+
 def _create_task(project_id: str, payload: dict[str, Any]) -> CrawlTaskRecord:
     url = payload.get("url")
     return CrawlTaskRecord(
@@ -549,16 +610,25 @@ async def _run_existing_task(
     payload = dict(task.input_snapshot or {})
     url = task.target_url or payload.get("url")
     discovered_url_count = 0
+    candidate_payloads: list[dict[str, Any]] = [{**payload, "url": url}] if url else []
     task.status = "running"
     task.started_at = task.started_at or _now()
     db.flush()
 
     if not url and payload.get("discover_urls", True):
+        rule_plan = build_rule_source_plan(project, payload)
+        planning_mode = str(payload.get("planning_mode") or "rules")
+        source_plan = rule_plan
+        if planning_mode == "ai_assisted":
+            source_plan = await build_ai_source_plan(project, payload)
+        queries_for_search = source_plan.get("search_queries") or rule_plan["search_queries"]
+        payload["source_plan"] = source_plan
         discovered_payloads, queries, discovered_results, error_message, search_errors = await discover_urls_for_payload(
             project,
             payload,
             settings=settings,
             client=discovery_client,
+            queries=queries_for_search,
         )
         discovered_url_count = len(discovered_results)
         payload = {
@@ -573,17 +643,24 @@ async def _run_existing_task(
             task.input_snapshot = payload
             _skip_task(task, payload, error_message or "未搜索到可访问的公开网页，建议人工补充或手动提供来源链接。")
             return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
-        selected_payload = discovered_payloads[0]
+        ranking = {"mode": "rules", "ordered_urls": [item.get("url") for item in discovered_payloads]}
+        if planning_mode == "ai_assisted" and len(discovered_payloads) > 1:
+            ranking = await rank_real_candidates(
+                project,
+                payload,
+                [item.get("search_result") or {"url": item.get("url")} for item in discovered_payloads],
+            )
+            order = {url: index for index, url in enumerate(ranking.get("ordered_urls") or [])}
+            discovered_payloads.sort(key=lambda item: order.get(item.get("url"), len(order)))
         payload = {
             **payload,
-            **selected_payload,
             "search_queries": queries,
             "search_results": discovered_results,
             "search_errors": search_errors,
+            "source_plan": source_plan,
+            "ai_ranking": ranking,
         }
-        url = selected_payload.get("url")
-        task.target_url = url
-        task.source_domain = _domain(url)
+        candidate_payloads = discovered_payloads[: max(1, settings.max_pages_per_task)]
         task.input_snapshot = payload
         task.result_snapshot = {
             **(task.result_snapshot or {}),
@@ -591,102 +668,149 @@ async def _run_existing_task(
             "search_results": discovered_results,
             "search_errors": search_errors,
             "discovered_url_count": discovered_url_count,
+            "source_plan": source_plan,
+            "ai_ranking": ranking,
         }
     else:
         task.input_snapshot = payload
 
-    ok, reason = _domain_allowed(url)
-    if not ok:
-        _skip_task(task, payload, reason or "缺少可访问的公开来源 URL")
-        return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+    attempts: list[dict[str, Any]] = []
+    merged_detail: dict[str, Any] = {}
+    merged_evidence: list[dict[str, Any]] = []
+    field_conflicts: list[dict[str, Any]] = []
+    adapters_used: set[str] = set()
+    accepted_payload: dict[str, Any] | None = None
+    target = _get_target_row(db, task.project_id, payload)
 
-    try:
-        page = await crawler.crawl(url, timeout_seconds=settings.timeout_seconds)
-        markdown = page.markdown or ""
-        page_relevant, page_relevance_reasons = page_matches_target(payload, markdown)
-        task.result_snapshot = {
-            **(task.result_snapshot or {}),
-            "url": url,
-            "search_query": payload.get("search_query"),
-            "search_result": payload.get("search_result"),
-            "page_relevance": {
-                "eligible": page_relevant,
-                "reasons": page_relevance_reasons,
-            },
-        }
+    for candidate in candidate_payloads[: max(1, settings.max_pages_per_task)]:
+        candidate_url = candidate.get("url")
+        ok, reason = _domain_allowed(candidate_url)
+        if not ok:
+            attempts.append({"url": candidate_url, "status": "blocked", "message": reason})
+            continue
+        try:
+            page = await crawler.crawl(candidate_url, timeout_seconds=settings.timeout_seconds)
+            markdown = page.markdown or ""
+        except Exception as exc:
+            attempts.append({"url": candidate_url, "status": "failed", "message": _friendly_crawl_error(exc)})
+            continue
+
+        candidate_context = {**payload, **candidate}
+        page_relevant, relevance_reasons = page_matches_target(candidate_context, markdown)
         if not page_relevant:
-            message = "搜索到的网页与目标名称、位置或业务类型不匹配，已跳过且未写入数据。"
-            _skip_task(task, payload, message)
-            return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+            attempts.append({"url": candidate_url, "status": "irrelevant", "message": "；".join(relevance_reasons)})
+            continue
 
         if payload["task_type"] == "competitor":
-            detail = _extract_competitor(markdown, url)
+            extracted = _extract_competitor(markdown, candidate_url)
         elif payload["task_type"] == "supporting":
-            detail = _extract_supporting(markdown, url)
+            extracted = _extract_supporting(markdown, candidate_url)
         else:
-            detail = _extract_rent(markdown, url)
-
-        target = _get_target_row(db, task.project_id, payload)
-        sufficient, insufficient_reason = _detail_is_sufficient(
-            payload["task_type"],
-            detail,
-            target_exists=target is not None,
+            extracted = _extract_rent(markdown, candidate_url)
+        structured, adapter_names = extract_structured_fields(
+            payload["task_type"], candidate_url, getattr(page, "html", None)
         )
+        adapters_used.update(adapter_names)
+        extracted = {**extracted, **{key: value for key, value in structured.items() if value not in (None, "", [])}}
+        evidence = build_field_evidence(extracted, markdown, candidate_url)
+        detail = retain_evidenced_fields(extracted, evidence)
+        detail["field_evidence"] = evidence
+        sufficient, insufficient_reason = _detail_is_sufficient(payload["task_type"], detail, target_exists=target is not None)
         if not sufficient:
-            task.result_snapshot = {
-                **(task.result_snapshot or {}),
-                "extracted": detail,
-                "extracted_fields": _meaningful_fields(detail),
-                "changed": False,
-                "message": insufficient_reason,
-            }
-            task.status = "skipped"
-            task.error_message = insufficient_reason
-            task.finished_at = _now()
-            return {"status": "skipped", "saved": None, "discovered_url_count": discovered_url_count}
+            attempts.append({"url": candidate_url, "status": "insufficient", "message": insufficient_reason, "extracted_fields": list(_meaningful_fields(detail))})
+            continue
 
-        changed = False
-        saved_type: str | None = None
-        if target is not None:
-            if payload["task_type"] == "competitor":
-                changed = _apply_competitor(target, detail)
-                saved_type = "competitors" if changed else None
-            elif payload["task_type"] == "supporting":
-                changed = _apply_supporting(target, detail)
-                saved_type = "supporting" if changed else None
-            else:
-                changed = _apply_rent(target, detail)
-                saved_type = "rent" if changed else None
-        elif payload["task_type"] == "rent":
-            changed = _create_rent_from_crawler(db, task.project_id, payload, detail)
-            saved_type = "rent" if changed else None
-        elif payload["task_type"] == "competitor":
-            changed = _create_competitor_from_crawler(db, task.project_id, payload, detail)
-            saved_type = "competitors" if changed else None
-        elif payload["task_type"] == "supporting":
-            changed = _create_supporting_from_crawler(db, task.project_id, payload, detail)
-            saved_type = "supporting" if changed else None
+        accepted_payload = accepted_payload or candidate
+        attempts.append({"url": candidate_url, "status": "accepted", "extracted_fields": list(_meaningful_fields(detail)), "evidence_count": len(evidence)})
+        if payload["task_type"] == "rent":
+            # 一个租金样本的面积和月租必须来自同一挂牌页，禁止跨房源拼接。
+            merged_detail = detail
+            merged_evidence = evidence
+            break
+        existing_fields = set(_meaningful_fields(merged_detail))
+        for field, value in _meaningful_fields(detail).items():
+            if field not in existing_fields:
+                merged_detail[field] = value
+                merged_evidence.extend(item for item in evidence if item.get("field") == field)
+            elif merged_detail.get(field) != value:
+                field_conflicts.append({
+                    "field": field,
+                    "kept_value": merged_detail.get(field),
+                    "conflicting_value": value,
+                    "source_url": candidate_url,
+                })
+        merged_detail.setdefault("source_url", candidate_url)
+        merged_detail.setdefault("review_summary", extracted.get("review_summary"))
 
+    if not accepted_payload or not _meaningful_fields(merged_detail):
+        message = "候选网页均未通过相关性和字段证据校验，未识别到可用业务字段，未写入业务数据。"
         task.result_snapshot = {
             **(task.result_snapshot or {}),
-            "url": url,
-            "search_query": payload.get("search_query"),
-            "search_result": payload.get("search_result"),
-            "extracted": detail,
-            "extracted_fields": _meaningful_fields(detail),
-            "changed": changed,
+            "candidate_attempts": attempts,
+            "extracted_fields": {},
+            "field_evidence": [],
+            "field_conflicts": field_conflicts,
+            "changed": False,
+            "message": message,
         }
-        task.status = "success" if changed else "skipped"
-        if not changed:
-            task.error_message = "页面可访问，但没有可写入的新字段，未修改现有数据。"
-            task.result_snapshot["message"] = task.error_message
+        task.status = "failed" if attempts and all(item.get("status") == "failed" for item in attempts) else "skipped"
+        task.error_message = message
         task.finished_at = _now()
-        return {"status": task.status, "saved": saved_type, "discovered_url_count": discovered_url_count}
-    except Exception as exc:
-        task.status = "failed"
-        task.error_message = _friendly_crawl_error(exc)
-        task.finished_at = _now()
-        return {"status": "failed", "saved": None, "discovered_url_count": discovered_url_count}
+        return {"status": task.status, "saved": None, "discovered_url_count": discovered_url_count}
+
+    merged_detail["field_evidence"] = merged_evidence
+    payload = {**payload, **accepted_payload}
+    url = accepted_payload.get("url")
+    task.target_url = url
+    task.source_domain = _domain(url)
+    task.input_snapshot = payload
+
+    changed = False
+    saved_type: str | None = None
+    if target is not None:
+        if payload["task_type"] == "competitor":
+            changed = _apply_competitor(target, merged_detail)
+            saved_type = "competitors" if changed else None
+        elif payload["task_type"] == "supporting":
+            changed = _apply_supporting(target, merged_detail)
+            saved_type = "supporting" if changed else None
+        else:
+            changed = _apply_rent(target, merged_detail)
+            saved_type = "rent" if changed else None
+    elif payload["task_type"] == "rent":
+        changed = _create_rent_from_crawler(db, task.project_id, payload, merged_detail)
+        saved_type = "rent" if changed else None
+    elif payload["task_type"] == "competitor":
+        changed = _create_competitor_from_crawler(db, task.project_id, payload, merged_detail)
+        saved_type = "competitors" if changed else None
+    elif payload["task_type"] == "supporting":
+        changed = _create_supporting_from_crawler(db, task.project_id, payload, merged_detail)
+        saved_type = "supporting" if changed else None
+
+    db.flush()
+    suggestion_target = target or (_latest_created_target(db, task.project_id, payload) if changed else None)
+    suggestion_count = persist_task_suggestions(
+        db, task, payload, merged_detail, merged_evidence, suggestion_target
+    )
+
+    task.result_snapshot = {
+        **(task.result_snapshot or {}),
+        "url": url,
+        "candidate_attempts": attempts,
+        "extracted": merged_detail,
+        "extracted_fields": _meaningful_fields(merged_detail),
+        "field_evidence": merged_evidence,
+        "field_conflicts": field_conflicts,
+        "adapters_used": sorted(adapters_used),
+        "suggestion_count": suggestion_count,
+        "changed": changed,
+    }
+    task.status = "success" if changed else "skipped"
+    if not changed:
+        task.error_message = "候选页面通过校验，但没有可写入的新字段，未修改现有数据。"
+        task.result_snapshot["message"] = task.error_message
+    task.finished_at = _now()
+    return {"status": task.status, "saved": saved_type, "discovered_url_count": discovered_url_count}
 
 
 async def _expand_payloads_with_discovery(
@@ -866,6 +990,7 @@ def queue_project_crawler_tasks(
     types: list[str],
     max_items: int,
     discover_urls: bool = True,
+    planning_mode: str = "rules",
 ) -> dict[str, Any]:
     project: SiteProjectRecord | None = get_project(db, project_id)
     if not project:
@@ -894,7 +1019,7 @@ def queue_project_crawler_tasks(
 
     task_ids: list[int] = []
     for payload in payloads:
-        task = _create_task(project_id, {**payload, "discover_urls": discover_urls})
+        task = _create_task(project_id, {**payload, "discover_urls": discover_urls, "planning_mode": planning_mode})
         db.add(task)
         db.flush()
         task_ids.append(task.id)

@@ -4,19 +4,22 @@ import {
   Button,
   Card,
   Col,
+  Divider,
   Form,
   Input,
   InputNumber,
   Row,
   Select,
   Space,
+  Table,
+  Tag,
   Typography,
   message,
 } from 'antd';
-import {ArrowLeftOutlined, DeleteOutlined, PlusOutlined, SaveOutlined} from '@ant-design/icons';
+import {ArrowLeftOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, SaveOutlined} from '@ant-design/icons';
 import {useNavigate, useParams, useSearchParams} from 'react-router-dom';
 import {submitManualInput} from '../../api/data';
-import {getProjectDataQuality, listProjectCompetitors, type ProjectCompetitor} from '../../api/projects';
+import {getProjectDataQuality, getProjectDataset, listProjectCompetitors, type ProjectCompetitor} from '../../api/projects';
 
 const {TextArea} = Input;
 
@@ -25,6 +28,42 @@ const EMPTY_VALUES = {
   rents: [{}],
   populations: [{}],
   supports: [{}],
+};
+
+type DatasetPoi = {
+  id: number;
+  name: string;
+  category?: string | null;
+  sub_category?: string | null;
+  address?: string | null;
+  distance_meters?: number | null;
+  phone?: string | null;
+  business_hours?: string | null;
+  source?: string | null;
+};
+
+const POI_GROUP_ORDER = ['competitor', 'food', 'entertainment', 'transport', 'education', 'residential', 'commercial', 'sensitive', 'other'];
+const POI_GROUP_LABELS: Record<string, string> = {
+  competitor: '竞品',
+  food: '餐饮',
+  entertainment: '娱乐',
+  transport: '交通',
+  education: '教育',
+  residential: '住宅',
+  commercial: '商业',
+  sensitive: '敏感场所',
+  other: '其他',
+};
+const POI_GROUP_COLORS: Record<string, string> = {
+  competitor: 'orange',
+  food: 'cyan',
+  entertainment: 'blue',
+  transport: 'geekblue',
+  education: 'purple',
+  residential: 'green',
+  commercial: 'magenta',
+  sensitive: 'red',
+  other: 'default',
 };
 
 const FOCUS_GUIDE: Record<string, {title: string; description: string; fields: string[]}> = {
@@ -109,7 +148,46 @@ function competitorToFormRow(item: ProjectCompetitor) {
     opening_date: item.opening_date,
     occupancy_rate: item.occupancy_rate,
     monthly_revenue: item.monthly_sales,
+    crawler_suggestion: item.crawler_suggestion,
   });
+}
+
+const CRAWLER_FIELD_LABELS: Record<string, string> = {
+  business_hours: '营业时间', hour_price: '小时价格', member_price: '会员价', machine_count: '机器数量',
+  area_sqm: '面积', occupancy_rate: '上座率', rating: '评分', night_operation: '夜间营业',
+  monthly_rent: '月租金', rent_per_sqm: '租金单价', property_fee: '物业费', transfer_fee: '转让费',
+};
+
+function CrawlerSuggestionPanel({suggestion}: {suggestion?: ProjectCompetitor['crawler_suggestion']}) {
+  if (!suggestion) return null;
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{marginBottom: 12}}
+      message="爬虫已提供待确认线索"
+      description={(
+        <Space direction="vertical" size={6} style={{width: '100%'}}>
+          <Typography.Text>{suggestion.notice}</Typography.Text>
+          <Space size={[6, 6]} wrap>
+            {Object.entries(suggestion.fields || {}).map(([field, value]) => (
+              <Tag key={field} color="gold">{CRAWLER_FIELD_LABELS[field] || field}：{String(value)}</Tag>
+            ))}
+          </Space>
+          {suggestion.source_url && (
+            <Typography.Link href={suggestion.source_url} target="_blank" rel="noreferrer">
+              <LinkOutlined /> 查看来源网页（{suggestion.source_domain || '公开网页'}）
+            </Typography.Link>
+          )}
+          {(suggestion.field_evidence || []).slice(0, 3).map((item, index) => (
+            <Typography.Text key={`${item.field}-${index}`} type="secondary">
+              {CRAWLER_FIELD_LABELS[item.field] || item.field}证据：{item.excerpt || '已提取到字段，但页面片段需人工打开来源核对'}
+            </Typography.Text>
+          ))}
+        </Space>
+      )}
+    />
+  );
 }
 
 function rentPayload(row: Record<string, any>) {
@@ -205,9 +283,28 @@ export default function ProjectSupplementPage() {
   const [prefillLoading, setPrefillLoading] = useState(false);
   const [prefillCount, setPrefillCount] = useState(0);
   const [submitResult, setSubmitResult] = useState<{imported: number; failed: number; qualityScore?: number; errors: string[]} | null>(null);
+  const [poiGroups, setPoiGroups] = useState<Record<string, DatasetPoi[]>>({});
+  const [poiLoading, setPoiLoading] = useState(false);
   const storageKey = `project-supplement:${projectId}`;
   const focus = searchParams.get('focus') || 'general';
   const focusGuide = FOCUS_GUIDE[focus] || FOCUS_GUIDE.general;
+
+  useEffect(() => {
+    setPoiLoading(true);
+    getProjectDataset(projectId)
+      .then((data: {pois?: DatasetPoi[]}) => {
+        const pois: DatasetPoi[] = Array.isArray(data?.pois) ? data.pois : [];
+        const groups: Record<string, DatasetPoi[]> = {};
+        for (const poi of pois) {
+          const key = poi.category || 'other';
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(poi);
+        }
+        setPoiGroups(groups);
+      })
+      .catch(() => undefined)
+      .finally(() => setPoiLoading(false));
+  }, [projectId]);
 
   useEffect(() => {
     const stored = localStorage.getItem(storageKey);
@@ -283,6 +380,32 @@ export default function ProjectSupplementPage() {
     }
   };
 
+  const poiColumns = [
+    {title: '名称', dataIndex: 'name', key: 'name', render: (value: string) => value || '-'},
+    {
+      title: '距离',
+      dataIndex: 'distance_meters',
+      key: 'distance_meters',
+      width: 90,
+      render: (value?: number | null) => (value != null ? `${value} 米` : '-'),
+    },
+    {
+      title: '营业时间',
+      dataIndex: 'business_hours',
+      key: 'business_hours',
+      width: 170,
+      render: (value?: string | null) => (
+        value
+          ? <Tag color={/24|00:00|00:00-23:59/i.test(value) ? 'green' : 'blue'}>{value}</Tag>
+          : <Typography.Text type="secondary">高德未提供，待核实</Typography.Text>
+      ),
+    },
+    {title: '电话', dataIndex: 'phone', key: 'phone', width: 130, render: (value?: string | null) => value || '-'},
+    {title: '地址', dataIndex: 'address', key: 'address', ellipsis: true, render: (value?: string | null) => value || '-'},
+  ];
+
+  const poiTotal = Object.values(poiGroups).reduce((sum, list) => sum + list.length, 0);
+
   return (
     <div className="page supplement-page">
       <div className="page-title-row">
@@ -356,6 +479,48 @@ export default function ProjectSupplementPage() {
         )}
       />
 
+      <Card
+        size="small"
+        title={(
+          <Space>
+            已采集 POI 列表（高德）
+            <Tag color="blue">共 {poiTotal} 条</Tag>
+          </Space>
+        )}
+        style={{marginBottom: 16}}
+      >
+        <Typography.Paragraph type="secondary">
+          以下为高德自动采集并分类好的周边 POI。请结合现场调研核对名称、距离和营业时间，再在下方表单填写价格、配置、租金等人工数据；高德有营业时间的会自动带入。
+        </Typography.Paragraph>
+        {poiLoading && <Alert type="info" showIcon style={{marginBottom: 12}} message="正在读取已采集 POI 列表..." />}
+        {!poiLoading && poiTotal === 0 && (
+          <Alert type="info" showIcon message="当前项目还没有采集到高德 POI，请先在 Step 3 点击“采集高德 POI”。" />
+        )}
+        <Divider style={{margin: '8px 0'}} />
+        {Object.entries(poiGroups)
+          .filter(([, list]) => list.length > 0)
+          .sort(([a], [b]) => {
+            const indexA = POI_GROUP_ORDER.indexOf(a);
+            const indexB = POI_GROUP_ORDER.indexOf(b);
+            return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+          })
+          .map(([group, list]) => (
+            <div key={group} style={{marginBottom: 12}}>
+              <Space style={{marginBottom: 8}}>
+                <Tag color={POI_GROUP_COLORS[group] || 'default'}>{POI_GROUP_LABELS[group] || group}</Tag>
+                <Typography.Text type="secondary">{list.length} 条</Typography.Text>
+              </Space>
+              <Table
+                size="small"
+                rowKey="id"
+                columns={poiColumns}
+                dataSource={list}
+                pagination={list.length > 10 ? {pageSize: 10, showSizeChanger: false} : false}
+              />
+            </div>
+          ))}
+      </Card>
+
       <Form form={form} layout="vertical" initialValues={EMPTY_VALUES} onFinish={saveDraft}>
         <Space direction="vertical" size={16} style={{width: '100%'}}>
           <ListSection
@@ -366,6 +531,13 @@ export default function ProjectSupplementPage() {
           >
             {fieldName => (
               <>
+                <Col span={24}>
+                  <Form.Item noStyle shouldUpdate>
+                    {({getFieldValue}) => (
+                      <CrawlerSuggestionPanel suggestion={getFieldValue(['competitors', fieldName, 'crawler_suggestion'])} />
+                    )}
+                  </Form.Item>
+                </Col>
                 <Col xs={24} md={8}><Form.Item name={[fieldName, 'name']} label="竞品名称"><Input placeholder="例如：XX电竞馆" /></Form.Item></Col>
                 <Form.Item name={[fieldName, 'competitor_id']} hidden><Input /></Form.Item>
                 <Col xs={24} md={8}><NumberField name={[fieldName, 'distance_meters'] as any} label="距离" suffix="米" /></Col>

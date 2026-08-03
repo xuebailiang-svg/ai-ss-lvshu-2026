@@ -11,6 +11,7 @@ from app.data_model import normalize_data
 from app.demo_data.service import simulation_data_summary
 from app.models import (
     CrawlTaskRecord,
+    CrawlerFieldSuggestionRecord,
     EntertainmentRecord,
     FoodBusinessRecord,
     PopulationDataRecord,
@@ -163,7 +164,7 @@ def dataset(db: Session, project: SiteProjectRecord) -> dict[str, Any]:
     project_id = project.project_id
     return {
         "project": project_to_dict(project),
-        "pois": rows_for_project(db, UnifiedPOIRecord, project_id),
+        "pois": poi_rows_for_project(db, project_id),
         "competitors": [
             row_to_dict(row)
             for row in db.scalars(
@@ -179,6 +180,21 @@ def dataset(db: Session, project: SiteProjectRecord) -> dict[str, Any]:
         "population_data": latest_for_project(db, PopulationDataRecord, project_id) or {},
         "supplements": rows_for_project(db, SupplementRecord, project_id),
     }
+
+
+def poi_rows_for_project(db: Session, project_id: str) -> list[dict[str, Any]]:
+    rows = db.scalars(
+        select(UnifiedPOIRecord)
+        .where(UnifiedPOIRecord.project_id == project_id)
+        .order_by(UnifiedPOIRecord.id.asc())
+    ).all()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = row_to_dict(row)
+        raw_data = row.raw_data if isinstance(row.raw_data, dict) else {}
+        item["phone"] = raw_data.get("tel") or raw_data.get("phone")
+        items.append(item)
+    return items
 
 
 def rows_for_project(db: Session, model: Any, project_id: str) -> list[dict[str, Any]]:
@@ -483,6 +499,12 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
         *active_rent,
     ]
     pending_review_count = sum(1 for row in crawler_records if row.status == "pending_review")
+    field_suggestions = list(db.scalars(select(CrawlerFieldSuggestionRecord).where(
+        CrawlerFieldSuggestionRecord.project_id == project_id
+    )).all())
+    pending_field_suggestion_count = sum(1 for row in field_suggestions if row.status == "pending_review")
+    accepted_field_suggestion_count = sum(1 for row in field_suggestions if row.status == "accepted")
+    conflict_field_suggestion_count = sum(1 for row in field_suggestions if row.conflict_status != "none")
     discovered_url_count = 0
     for row in rows:
         input_snapshot = row.input_snapshot or {}
@@ -498,6 +520,10 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
         warnings.append("爬虫任务仍在执行中，请稍后刷新结果")
     if pending_review_count:
         warnings.append("爬虫数据尚未人工确认，不能作为最终事实")
+    if pending_field_suggestion_count:
+        warnings.append("存在待审核的爬虫字段证据，请逐项接受或拒绝")
+    if conflict_field_suggestion_count:
+        warnings.append("部分爬虫字段与现有值冲突，系统未自动覆盖")
     if skipped_count:
         warnings.append("部分爬虫任务未搜索到可访问的公开网页，建议人工补充或手动提供来源链接")
     if failed_count:
@@ -508,6 +534,9 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
         "supporting_crawler_count": len(active_food) + len(active_entertainment),
         "rent_crawler_count": len(active_rent),
         "pending_review_count": pending_review_count,
+        "pending_field_suggestion_count": pending_field_suggestion_count,
+        "accepted_field_suggestion_count": accepted_field_suggestion_count,
+        "conflict_field_suggestion_count": conflict_field_suggestion_count,
         "running_task_count": running_count,
         "success_task_count": completed_count,
         "failed_task_count": failed_count,

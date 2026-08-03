@@ -375,6 +375,59 @@ class CrawlTaskRecord(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CrawlerFieldSuggestionRecord(Base):
+    __tablename__ = "crawler_field_suggestions"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id", "record_type", "record_id", "field_name", "source_url",
+            name="uq_crawler_suggestion_task_record_field_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(80), index=True)
+    task_id: Mapped[int] = mapped_column(Integer, index=True)
+    record_type: Mapped[str] = mapped_column(String(40), index=True)
+    record_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    field_name: Mapped[str] = mapped_column(String(80), index=True)
+    suggested_value: Mapped[Any | None] = mapped_column(JSON)
+    reviewed_value: Mapped[Any | None] = mapped_column(JSON)
+    source_url: Mapped[str] = mapped_column(Text)
+    source_domain: Mapped[str | None] = mapped_column(String(200), index=True)
+    evidence_excerpt: Mapped[str | None] = mapped_column(Text)
+    extraction_method: Mapped[str] = mapped_column(String(40), default="rule_extract")
+    confidence: Mapped[float] = mapped_column(Float, default=.6)
+    source_quality: Mapped[str] = mapped_column(String(30), default="medium")
+    freshness_status: Mapped[str] = mapped_column(String(30), default="unknown")
+    conflict_status: Mapped[str] = mapped_column(String(30), default="none")
+    status: Mapped[str] = mapped_column(String(30), default="pending_review", index=True)
+    review_remark: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class BusinessOutcomeRecord(Base):
+    __tablename__ = "business_outcomes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    actual_monthly_rent: Mapped[float | None] = mapped_column(Float)
+    actual_area_sqm: Mapped[float | None] = mapped_column(Float)
+    actual_machine_count: Mapped[int | None] = mapped_column(Integer)
+    opening_date: Mapped[date | None] = mapped_column(Date)
+    actual_investment: Mapped[float | None] = mapped_column(Float)
+    occupancy_rate: Mapped[float | None] = mapped_column(Float)
+    result_status: Mapped[str | None] = mapped_column(String(50))
+    success_reasons: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    failure_reasons: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="pending_review", index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class RegionalStatisticRecord(Base):
     __tablename__ = "regional_statistics"
     __table_args__ = (

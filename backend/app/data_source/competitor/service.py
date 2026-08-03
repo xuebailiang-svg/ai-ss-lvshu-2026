@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.data_source.base import DataSourceRequest, ProviderCallStatus
+from app.data_source.crawler.evidence import crawler_suggestion_from_raw
 from app.data_source.registry import DataSourceRegistry, build_default_registry
 from app.models import SiteProjectRecord, UnifiedCompetitorRecord
 from app.projects.service import get_project
@@ -47,6 +48,7 @@ def competitor_to_public(row: UnifiedCompetitorRecord) -> dict[str, Any]:
         "annual_sales": row.annual_sales,
         "recharge_info": manual_detail.get("recharge_info"),
         "remark": manual_detail.get("remark"),
+        "crawler_suggestion": crawler_suggestion_from_raw(raw, row.status),
     }
 
 

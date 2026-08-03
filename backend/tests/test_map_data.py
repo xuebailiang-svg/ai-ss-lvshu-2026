@@ -81,6 +81,83 @@ def test_amap_mapper_converts_to_unified_poi():
     assert mapped["confidence"] == 0.9
 
 
+def test_amap_mapper_extracts_business_hours_from_open_time():
+    row = _fake_amap_rows()[2]
+    row["biz_ext"] = {"open_time": "10:00-23:00", "rating": "4.5"}
+    mapped = amap_poi_to_unified(row, category="food", sub_category="烧烤")
+    assert mapped["business_hours"] == "10:00-23:00"
+
+    list_row = _fake_amap_rows()[2]
+    list_row["biz_ext"] = {"open_time": ["10:00-14:00", "17:00-21:30"]}
+    mapped = amap_poi_to_unified(list_row, category="food", sub_category="烧烤")
+    assert mapped["business_hours"] == "10:00-14:00、17:00-21:30"
+
+    empty_row = _fake_amap_rows()[2]
+    empty_row["biz_ext"] = {"open_time": []}
+    mapped = amap_poi_to_unified(empty_row, category="food", sub_category="烧烤")
+    assert mapped["business_hours"] is None
+
+
+def test_geocode_project_endpoint_resolves_and_saves_coordinates(client):
+    payload = _project_payload()
+    payload.pop("longitude")
+    payload.pop("latitude")
+    project_id = client.post("/api/projects", json=payload).json()["project_id"]
+
+    response = client.post(f"/api/projects/{project_id}/geocode")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["location"]["longitude"] is not None
+    assert body["location"]["latitude"] is not None
+    assert body["already_located"] is False
+
+    project = client.get(f"/api/projects/{project_id}").json()["project"]
+    assert project["longitude"] == body["location"]["longitude"]
+    assert project["latitude"] == body["location"]["latitude"]
+
+
+def test_geocode_project_endpoint_idempotent_when_already_located(client):
+    project_id = client.post("/api/projects", json=_project_payload()).json()["project_id"]
+
+    response = client.post(f"/api/projects/{project_id}/geocode")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["already_located"] is True
+    assert body["location"]["longitude"] == 108.946767
+    assert body["location"]["latitude"] == 34.222838
+
+
+def test_geocode_project_endpoint_force_refreshes_coordinates(client, monkeypatch):
+    async def fake_geocode(self, **kwargs):
+        return {
+            "geocodes": [{
+                "location": "108.950000,34.230000",
+                "formatted_address": "陕西省西安市雁塔区小寨地铁站",
+            }]
+        }
+
+    monkeypatch.setattr("app.map_data.amap_client.AmapMapDataClient.geocode", fake_geocode)
+    project_id = client.post("/api/projects", json=_project_payload()).json()["project_id"]
+
+    response = client.post(f"/api/projects/{project_id}/geocode?force=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["already_located"] is False
+    assert body["location"] == {"longitude": 108.95, "latitude": 34.23}
+    assert body["diagnostics"]["forced"] is True
+
+
+def test_geocode_project_endpoint_not_found(client):
+    response = client.post("/api/projects/not-exists/geocode")
+    assert response.status_code == 404
+
+
 def test_collect_amap_pois_saves_project_data(client, monkeypatch):
     async def fake_collect_pois(self, **kwargs):
         return _fake_amap_rows(), {"mocked": True}
@@ -120,6 +197,30 @@ def test_collect_amap_pois_upserts_duplicates(client, monkeypatch):
     assert second.status_code == 200
     dataset = client.get(f"/api/projects/{project_id}/dataset").json()
     assert len(dataset["pois"]) == 4
+
+
+def test_collect_amap_preserves_business_hours_and_exposes_phone(client, monkeypatch):
+    call_count = 0
+
+    async def fake_collect_pois(self, **kwargs):
+        nonlocal call_count
+        rows = _fake_amap_rows()
+        rows[2]["tel"] = "029-12345678"
+        if call_count == 0:
+            rows[2]["biz_ext"] = {"open_time": "10:00-23:00"}
+        call_count += 1
+        return rows, {"mocked": True}
+
+    monkeypatch.setattr("app.map_data.amap_client.AmapMapDataClient.collect_pois", fake_collect_pois)
+    project_id = client.post("/api/projects", json=_project_payload()).json()["project_id"]
+
+    assert client.post(f"/api/projects/{project_id}/collect/amap").status_code == 200
+    assert client.post(f"/api/projects/{project_id}/collect/amap").status_code == 200
+
+    dataset = client.get(f"/api/projects/{project_id}/dataset").json()
+    food = next(row for row in dataset["pois"] if row["category"] == "food")
+    assert food["business_hours"] == "10:00-23:00"
+    assert food["phone"] == "029-12345678"
 
 
 def test_collect_amap_reports_unique_stored_count(client, monkeypatch):

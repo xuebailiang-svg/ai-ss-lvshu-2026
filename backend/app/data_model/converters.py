@@ -18,6 +18,25 @@ from .schemas import (
 from .validators import parse_location, to_bool, to_float, to_int
 
 
+def _amap_business_hours(raw: dict[str, Any]) -> str | None:
+    """从高德 POI 原始数据中提取营业时间（biz_ext.open_time）。
+
+    高德 place/around 接口返回的营业时间在 ``biz_ext.open_time``，
+    可能是字符串或数组，统一规范为逗号分隔的字符串。
+    """
+    biz_ext = raw.get("biz_ext") if isinstance(raw.get("biz_ext"), dict) else {}
+    value = biz_ext.get("open_time") or raw.get("opentime")
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        if not parts:
+            return None
+        value = "、".join(parts)
+    text = str(value).strip()
+    return text or None
+
+
 CHINESE_COMPETITOR_FIELD_MAP = {
     "名称": "name",
     "地址": "address",
@@ -65,7 +84,7 @@ def convert_amap_poi(raw: dict[str, Any], *, category: str | POICategory | None 
         "latitude": latitude,
         "distance_meters": to_int(raw.get("distance") or raw.get("distance_meters") or raw.get("距离")),
         "walking_distance_meters": to_int(raw.get("walking_distance_meters") or raw.get("walking_distance") or raw.get("步行距离")),
-        "business_hours": raw.get("business_hours") or raw.get("营业时间"),
+        "business_hours": _amap_business_hours(raw) or raw.get("business_hours") or raw.get("营业时间"),
         "source": DataSourceType.amap,
         "confidence": 0.95,
         "status": DataStatus.confirmed,
@@ -137,7 +156,7 @@ def coerce_food(raw: dict[str, Any]) -> dict[str, Any]:
         "category": raw.get("category") or raw.get("品类"),
         "opening_date": raw.get("opening_date") or raw.get("开业时间"),
         "opening_years": to_float(raw.get("opening_years") or raw.get("开业年限")),
-        "business_hours": raw.get("business_hours") or raw.get("营业时间"),
+        "business_hours": _amap_business_hours(raw) or raw.get("business_hours") or raw.get("营业时间"),
         "night_business": to_bool(raw.get("night_business") or raw.get("是否夜间营业") or raw.get("夜间营业")),
         "rating": to_float(raw.get("rating") or raw.get("评分")),
         "raw_data": raw,
@@ -163,7 +182,7 @@ def coerce_entertainment(raw: dict[str, Any]) -> dict[str, Any]:
         "type": type_map.get(text_type, EntertainmentType.other),
         "distance_meters": to_int(raw.get("distance_meters") or raw.get("距离")),
         "opening_date": raw.get("opening_date") or raw.get("开业时间"),
-        "business_hours": raw.get("business_hours") or raw.get("营业时间"),
+        "business_hours": _amap_business_hours(raw) or raw.get("business_hours") or raw.get("营业时间"),
         "night_business": to_bool(raw.get("night_business") or raw.get("是否夜间营业") or raw.get("夜间营业")),
         "raw_data": raw,
     }

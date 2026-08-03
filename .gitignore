@@ -18,5 +18,8 @@ data/
 chat1.log
 ai-ss-lvshu-2026/
 crawler/.venv/
+backend/.venv*/
+backend/.verify-venv/
+.playwright-mcp/
 crawler/offline-bundle/
 crawler/*.tar.gz

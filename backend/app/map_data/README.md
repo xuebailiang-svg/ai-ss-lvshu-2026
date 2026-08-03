@@ -14,8 +14,15 @@
 接口：
 
 ```http
+POST /api/projects/{project_id}/geocode
 POST /api/projects/{project_id}/collect/amap
 ```
+
+- `POST /geocode`：仅解析项目地址并写入经纬度，不采集任何 POI。用于工作台 Step 2「解析并确认地址」，保证 Step 3 采集前地址已确认。
+- `POST /collect/amap`：若项目尚无经纬度，会先自动解析地址再采集 POI。
+
+营业时间说明：高德 `place/around` 接口把营业时间放在 `biz_ext.open_time`（可能是字符串或数组），
+统一由 `app.data_model.converters._amap_business_hours` 提取并规范为字符串后写入 `business_hours` 列。
 
 配置：
 

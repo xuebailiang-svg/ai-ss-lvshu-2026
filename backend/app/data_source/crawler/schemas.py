@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ class CrawlEnrichRequest(BaseModel):
     types: list[CrawlTaskType] = Field(default_factory=lambda: ["competitor", "supporting", "rent"])
     max_items: int = Field(default=20, ge=1, le=100)
     discover_urls: bool = True
+    planning_mode: Literal["rules", "ai_assisted"] = "rules"
 
 
 class CrawlManualUrlRequest(BaseModel):
@@ -57,6 +58,10 @@ class CrawlTaskItem(BaseModel):
     created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    planning_mode: str | None = None
+    extracted_fields: dict = Field(default_factory=dict)
+    evidence_count: int = 0
+    attempt_count: int = 0
 
 
 class CrawlTaskListResponse(BaseModel):
@@ -67,3 +72,37 @@ class CrawlTaskListResponse(BaseModel):
 class CrawlTaskDetailResponse(CrawlTaskItem):
     input_snapshot: dict = Field(default_factory=dict)
     result_snapshot: dict = Field(default_factory=dict)
+
+
+class CrawlerSuggestionReviewRequest(BaseModel):
+    action: Literal["accepted", "rejected"]
+    final_value: Any | None = None
+    remark: str | None = Field(default=None, max_length=1000)
+
+
+class CrawlerFieldSuggestionItem(BaseModel):
+    id: int
+    project_id: str
+    task_id: int
+    record_type: str
+    record_id: int | None = None
+    field_name: str
+    suggested_value: Any | None = None
+    reviewed_value: Any | None = None
+    source_url: str
+    source_domain: str | None = None
+    evidence_excerpt: str | None = None
+    extraction_method: str
+    confidence: float
+    source_quality: str
+    freshness_status: str
+    conflict_status: str
+    status: str
+    review_remark: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class CrawlerFieldSuggestionList(BaseModel):
+    items: list[CrawlerFieldSuggestionItem]
+    total: int

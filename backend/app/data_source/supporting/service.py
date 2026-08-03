@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.data_source.base import DataSourceRequest, ProviderCallStatus
+from app.data_source.crawler.evidence import crawler_suggestion_from_raw
 from app.data_source.registry import DataSourceRegistry, build_default_registry
 from app.models import EntertainmentRecord, FoodBusinessRecord, SiteProjectRecord
 from app.projects.service import get_project
@@ -62,6 +63,7 @@ def _supporting_to_public(row: Any, record_type: str) -> dict[str, Any]:
             value is not None and (not isinstance(value, str) or value.strip())
             for value in _manual_detail(row).values()
         ),
+        "crawler_suggestion": crawler_suggestion_from_raw(row.raw_data, row.status),
     }
 
 

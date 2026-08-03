@@ -41,12 +41,20 @@ import {
   enrichProjectCrawler,
   generateDemoData,
   generateProjectAiReview,
+  geocodeProject,
   getProjectDataQuality,
   getProjectCityInsight,
   listProjectCrawlTasks,
+  listCrawlerFieldSuggestions,
+  retryProjectCrawlTask,
+  reviewCrawlerFieldSuggestion,
+  getBusinessOutcome,
+  saveBusinessOutcome,
+  reviewBusinessOutcome,
   listProjects,
   type ProjectCreatePayload,
   type CityInsight,
+  type CrawlerFieldSuggestion,
 } from '../../api/projects';
 import {scoreProject} from '../../api/score';
 import {generateAiReport} from '../../api/report';
@@ -95,6 +103,11 @@ type CrawlTaskItem = {
   target_url?: string | null;
   status: string;
   error_message?: string | null;
+  source_domain?: string | null;
+  planning_mode?: string | null;
+  extracted_fields?: Record<string, unknown>;
+  evidence_count?: number;
+  attempt_count?: number;
 };
 
 const QUICK_MESSAGES = [
@@ -283,7 +296,7 @@ function buildWorkflowSteps(
       description: hasProject
         ? hasProjectLocation(project)
           ? '项目已有经纬度，可直接采集周边数据。'
-          : '项目暂缺经纬度，采集高德 POI 时会先尝试根据城市和地址解析坐标。'
+          : '项目暂缺经纬度，请先点击下方“解析并确认地址”后再采集数据。'
         : '创建项目时填写城市、详细地址、分析半径、经营类型。',
       status: !hasProject ? 'wait' : hasProjectLocation(project) ? 'finish' : 'process',
     },
@@ -413,6 +426,16 @@ function summarizeAction(action: string, result: any) {
       `任务ID：${result.task_ids.join('、')}`,
       '系统将在后台搜索公开网页并抓取线索。请查看本步骤下方任务中心，结果默认待人工确认。',
     ].join('\n');
+  }
+
+  if (action === '地址解析') {
+    if (result?.success === false) {
+      return `${action}失败：${result.message || '服务暂时不可用，请检查配置或稍后重试。'}`;
+    }
+    const location = result?.location || {};
+    return result?.already_located
+      ? `项目已有经纬度（${location.longitude}, ${location.latitude}），无需重新解析。`
+      : `地址解析成功：${location.longitude}, ${location.latitude}。下一步建议：点击“采集高德 POI”获取周边基础数据。`;
   }
 
   if (action === '高德 POI 采集') {
@@ -584,6 +607,7 @@ export default function WorkbenchPage() {
   const reportPrintRef = useRef<HTMLDivElement | null>(null);
   const [projectForm] = Form.useForm<ProjectCreatePayload>();
   const [manualUrlForm] = Form.useForm();
+  const [outcomeForm] = Form.useForm();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [creating, setCreating] = useState(false);
@@ -601,8 +625,10 @@ export default function WorkbenchPage() {
   const [sideContextLoading, setSideContextLoading] = useState(false);
   const [crawlTasks, setCrawlTasks] = useState<CrawlTaskItem[]>([]);
   const [crawlTasksLoading, setCrawlTasksLoading] = useState(false);
+  const [crawlerSuggestions, setCrawlerSuggestions] = useState<CrawlerFieldSuggestion[]>([]);
   const [crawlerSearchEnabled, setCrawlerSearchEnabled] = useState(true);
   const [manualUrlOpen, setManualUrlOpen] = useState(false);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [sessionId, setSessionId] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [actionResults, setActionResults] = useState<Record<string, ActionResult>>({});
@@ -666,12 +692,34 @@ export default function WorkbenchPage() {
     }
     if (!silent) setCrawlTasksLoading(true);
     try {
-      const result = await listProjectCrawlTasks(projectId);
+      const [result, suggestionResult] = await Promise.all([
+        listProjectCrawlTasks(projectId),
+        listCrawlerFieldSuggestions(projectId).catch(() => ({items: [], total: 0})),
+      ]);
       setCrawlTasks(Array.isArray(result?.items) ? result.items : []);
+      setCrawlerSuggestions(Array.isArray(suggestionResult?.items) ? suggestionResult.items : []);
     } catch {
       if (!silent) message.warning('爬虫任务状态暂时不可用');
     } finally {
       if (!silent) setCrawlTasksLoading(false);
+    }
+  };
+
+  const retryCrawlerTask = async (taskId: number) => {
+    const result = await runAction('crawlerRetry', '重试爬虫任务', () => retryProjectCrawlTask(selectedProjectId, taskId));
+    if (result) await loadCrawlTasks(selectedProjectId, true);
+  };
+
+  const reviewCrawlerSuggestion = async (item: CrawlerFieldSuggestion, action: 'accepted' | 'rejected') => {
+    setActionLoading(`suggestion-${item.id}`);
+    try {
+      await reviewCrawlerFieldSuggestion(selectedProjectId, item.id, action);
+      message.success(action === 'accepted' ? '字段证据已接受' : '字段证据已拒绝');
+      await loadCrawlTasks(selectedProjectId, true);
+    } catch (error: any) {
+      message.error(errorText(error, '字段审核失败'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -846,6 +894,40 @@ export default function WorkbenchPage() {
     } catch (error: any) {
       if (error?.errorFields) return;
       message.error(errorText(error, '手动 URL 任务创建失败'));
+    }
+  };
+
+  const openBusinessOutcome = async () => {
+    setOutcomeOpen(true);
+    if (!selectedProjectId) return;
+    try {
+      const value = await getBusinessOutcome(selectedProjectId);
+      if (value) outcomeForm.setFieldsValue({
+        ...value,
+        success_reasons: (value.success_reasons || []).join('、'),
+        failure_reasons: (value.failure_reasons || []).join('、'),
+      });
+    } catch {
+      outcomeForm.resetFields();
+    }
+  };
+
+  const submitBusinessOutcome = async (confirm = false) => {
+    try {
+      const values = await outcomeForm.validateFields();
+      const normalizeReasons = (value?: string) => String(value || '').split(/[、,，]/).map(item => item.trim()).filter(Boolean);
+      await saveBusinessOutcome(selectedProjectId, {
+        ...values,
+        success_reasons: normalizeReasons(values.success_reasons),
+        failure_reasons: normalizeReasons(values.failure_reasons),
+      });
+      if (confirm) await reviewBusinessOutcome(selectedProjectId, 'confirmed');
+      message.success(confirm ? '真实经营结果已确认并沉淀为案例记忆' : '经营结果已保存，等待确认');
+      setOutcomeOpen(false);
+      await loadSideContext(selectedProjectId);
+    } catch (error: any) {
+      if (error?.errorFields) return;
+      message.error(errorText(error, '经营结果保存失败'));
     }
   };
 
@@ -1207,10 +1289,25 @@ export default function WorkbenchPage() {
                   </Tag>
                 </Space>
                 <Typography.Text type="secondary">{selectedProject?.address || '创建项目时填写详细地址。'}</Typography.Text>
+                <Button
+                  icon={hasProjectLocation(selectedProject) ? <CheckCircleOutlined /> : undefined}
+                  type={hasProjectLocation(selectedProject) ? 'default' : 'primary'}
+                  loading={actionLoading === 'geocode'}
+                  disabled={!selectedProjectId}
+                  onClick={() => runAction(
+                    'geocode',
+                    '地址解析',
+                    () => geocodeProject(selectedProjectId, hasProjectLocation(selectedProject)),
+                  )}
+                  block
+                >
+                  {hasProjectLocation(selectedProject) ? '地址已确认 / 重新解析' : '解析并确认地址'}
+                </Button>
+                {inlineResult('geocode')}
               </Space>
             </Card>
 
-            <Card size="small" className={hasAmapData ? 'v11-step-card done' : selectedProject ? 'v11-step-card active' : 'v11-step-card'} title="Step 3：采集基础数据" extra={doneTag(hasAmapData, actionLoading === 'amap' || actionLoading === 'competitor' || actionLoading === 'supporting' || actionLoading === 'governmentStats')}>
+            <Card size="small" className={hasAmapData ? 'v11-step-card done' : hasProjectLocation(selectedProject) ? 'v11-step-card active' : 'v11-step-card'} title="Step 3：采集基础数据" extra={doneTag(hasAmapData, actionLoading === 'amap' || actionLoading === 'competitor' || actionLoading === 'supporting' || actionLoading === 'governmentStats')}>
                 <Space direction="vertical" size={8} style={{width: '100%'}}>
                   <Space size={[4, 4]} wrap>
                     <Tag color={projectPoiCount > 0 ? 'green' : 'default'}>POI {projectPoiCount}</Tag>
@@ -1222,6 +1319,7 @@ export default function WorkbenchPage() {
                     icon={<CloudDownloadOutlined />}
                     type={hasAmapData ? 'default' : 'primary'}
                     loading={actionLoading === 'amap'}
+                    disabled={!hasProjectLocation(selectedProject)}
                     onClick={() => runAction('amap', '高德 POI 采集', () => collectProjectAmap(selectedProjectId))}
                     block
                   >
@@ -1231,6 +1329,7 @@ export default function WorkbenchPage() {
                     type={hasCompetitorData ? 'default' : 'primary'}
                     icon={hasCompetitorData ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'competitor'}
+                    disabled={!hasProjectLocation(selectedProject)}
                     onClick={() => runAction('competitor', '竞品采集', () => collectProjectCompetitors(selectedProjectId))}
                     block
                   >
@@ -1240,6 +1339,7 @@ export default function WorkbenchPage() {
                     type={hasSupportingData ? 'default' : 'primary'}
                     icon={hasSupportingData ? <CheckCircleOutlined /> : undefined}
                     loading={actionLoading === 'supporting'}
+                    disabled={!hasProjectLocation(selectedProject)}
                     onClick={() => runAction('supporting', '周边配套采集', () => collectProjectSupporting(selectedProjectId))}
                     block
                   >
@@ -1283,7 +1383,7 @@ export default function WorkbenchPage() {
                     showIcon
                     message={crawlerSearchAvailable ? '按名称和地址搜索公开网页' : crawlerAvailable ? '自动搜索发现已关闭' : '爬虫服务尚未就绪'}
                     description={crawlerSearchAvailable
-                      ? '系统会先校验目标名称、位置和业务类型，再抓取相关网页。结果默认待人工确认，不直接作为最终事实。'
+                      ? '系统会基于高德 POI 判断缺失字段，AI 辅助规划应该搜索的来源类型和关键词；最终只抓取真实搜索结果，并保存字段证据。结果默认待人工确认。'
                       : crawlerAvailable
                         ? '仍可使用下方“手动添加公开网页链接”；如需自动搜索，请在配置页启用搜索发现。'
                         : `请先安装并启用独立爬虫服务。${crawlerDisabledReason}`}
@@ -1350,18 +1450,46 @@ export default function WorkbenchPage() {
                           size="small"
                           dataSource={crawlTasks.slice(0, 5)}
                           renderItem={task => (
-                            <List.Item>
+                            <List.Item actions={(task.status === 'failed' || task.status === 'skipped') ? [
+                              <Button key="retry" size="small" loading={actionLoading === 'crawlerRetry'} onClick={() => retryCrawlerTask(task.id)}>重试</Button>,
+                            ] : undefined}>
                               <Space direction="vertical" size={0} style={{width: '100%'}}>
                                 <Space size={[4, 4]} wrap>
                                   <Tag>{CRAWLER_SOURCE_LABELS[task.task_type] || task.task_type}</Tag>
                                   <Tag color={task.status === 'success' || task.status === 'partial' ? 'green' : task.status === 'failed' ? 'red' : task.status === 'skipped' ? 'orange' : 'blue'}>{CRAWLER_TASK_STATUS_LABELS[task.status] || task.status}</Tag>
+                                  <Tag color={task.planning_mode === 'ai_assisted' ? 'purple' : 'default'}>{task.planning_mode === 'ai_assisted' ? 'AI来源规划' : '规则来源规划'}</Tag>
                                   <Typography.Text>{task.target_name || task.target_address || task.target_url || `任务 ${task.id}`}</Typography.Text>
                                 </Space>
+                                {(task.source_domain || Object.keys(task.extracted_fields || {}).length > 0) && (
+                                  <Typography.Text type="secondary">
+                                    {task.source_domain ? `来源：${task.source_domain}；` : ''}
+                                    尝试网页 {task.attempt_count || 0} 个，提取字段 {Object.keys(task.extracted_fields || {}).length} 个，证据 {task.evidence_count || 0} 条
+                                  </Typography.Text>
+                                )}
                                 {task.error_message && <Typography.Text type="secondary">{task.error_message}</Typography.Text>}
                               </Space>
                             </List.Item>
                           )}
                         />
+                        {crawlerSuggestions.some(item => item.status === 'pending_review') && (
+                          <Card size="small" title={`字段证据待确认（${crawlerSuggestions.filter(item => item.status === 'pending_review').length}）`}>
+                            <List
+                              size="small"
+                              dataSource={crawlerSuggestions.filter(item => item.status === 'pending_review').slice(0, 8)}
+                              renderItem={item => (
+                                <List.Item actions={[
+                                  <Button key="accept" type="link" size="small" loading={actionLoading === `suggestion-${item.id}`} onClick={() => reviewCrawlerSuggestion(item, 'accepted')}>接受</Button>,
+                                  <Button key="reject" type="link" danger size="small" loading={actionLoading === `suggestion-${item.id}`} onClick={() => reviewCrawlerSuggestion(item, 'rejected')}>拒绝</Button>,
+                                ]}>
+                                  <List.Item.Meta
+                                    title={<Space wrap><Tag>{item.record_type}</Tag><Typography.Text>{item.field_name}：{String(item.suggested_value ?? '--')}</Typography.Text>{item.conflict_status !== 'none' && <Tag color="red">与现值冲突</Tag>}</Space>}
+                                    description={<Space direction="vertical" size={0}><Typography.Text type="secondary">{item.source_domain || '未知来源'} · 来源质量 {item.source_quality} · 时效 {item.freshness_status}</Typography.Text><Typography.Text type="secondary" ellipsis={{tooltip: item.evidence_excerpt}}>{item.evidence_excerpt || '无证据摘录'}</Typography.Text></Space>}
+                                  />
+                                </List.Item>
+                              )}
+                            />
+                          </Card>
+                        )}
                       </Space>
                     </Card>
                   )}
@@ -1672,6 +1800,12 @@ export default function WorkbenchPage() {
                     </Space>
                   </Space>
                 </Card>
+                <Card size="small" title="项目经营结果回填">
+                  <Space direction="vertical" size={8}>
+                    <Typography.Text type="secondary">项目落地后回填真实租金、面积、机器数和经营结果；确认后会形成案例记忆，不接受 AI 推测值。</Typography.Text>
+                    <Button onClick={openBusinessOutcome}>回填真实经营结果</Button>
+                  </Space>
+                </Card>
               </>
             )}
           </Card>
@@ -1870,6 +2004,33 @@ export default function WorkbenchPage() {
           >
             <Input placeholder="https://..." />
           </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title="真实经营结果回填"
+        open={outcomeOpen}
+        onCancel={() => setOutcomeOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setOutcomeOpen(false)}>取消</Button>,
+          <Button key="save" onClick={() => submitBusinessOutcome(false)}>保存待审核</Button>,
+          <Popconfirm key="confirm" title="确认这些都是真实经营数据？" description="确认后将沉淀为本项目案例记忆。" onConfirm={() => submitBusinessOutcome(true)}>
+            <Button type="primary">确认并沉淀记忆</Button>
+          </Popconfirm>,
+        ]}
+      >
+        <Alert type="warning" showIcon style={{marginBottom: 12}} message="只填写实际发生且可核实的数据，禁止填写 AI 模拟值。" />
+        <Form form={outcomeForm} layout="vertical">
+          <Row gutter={12}>
+            <Col span={12}><Form.Item name="actual_monthly_rent" label="实际月租（元/月）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="actual_area_sqm" label="实际面积（㎡）"><InputNumber min={1} style={{width: '100%'}} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="actual_machine_count" label="实际机器数（台）"><InputNumber min={0} precision={0} style={{width: '100%'}} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="actual_investment" label="实际投资额（万元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="occupancy_rate" label="核实上座率（0-1）"><InputNumber min={0} max={1} step={0.01} style={{width: '100%'}} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="result_status" label="经营状态"><Select allowClear options={[{value: 'preparing', label: '筹备中'}, {value: 'operating', label: '经营中'}, {value: 'successful', label: '达到预期'}, {value: 'failed', label: '未达到预期'}, {value: 'closed', label: '已关闭'}]} /></Form.Item></Col>
+          </Row>
+          <Form.Item name="success_reasons" label="成功原因（顿号分隔）"><Input /></Form.Item>
+          <Form.Item name="failure_reasons" label="失败原因（顿号分隔）"><Input /></Form.Item>
+          <Form.Item name="notes" label="补充说明"><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
     </div>

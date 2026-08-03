@@ -20,6 +20,7 @@ from app.scoring_engine.config_router import router as scoring_config_router
 from app.system_config import router as system_config_router
 from app.memory import router as memory_router
 from app.data_source.government_stats.router import router as government_stats_router
+from app.business_outcome.router import router as business_outcome_router
 import app.models
 @asynccontextmanager
 async def lifespan(app):
@@ -45,3 +46,4 @@ app.include_router(chat_router)
 app.include_router(system_config_router)
 app.include_router(memory_router)
 app.include_router(government_stats_router)
+app.include_router(business_outcome_router)

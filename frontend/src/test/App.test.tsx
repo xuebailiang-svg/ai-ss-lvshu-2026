@@ -43,10 +43,17 @@ const apiMocks = vi.hoisted(() => ({
   generateProjectAiReview: vi.fn(() => Promise.resolve({success: true, content: '# 数据核验结论\n\n建议补充租金。', model: 'deepseek-chat'})),
   getProjectMissingData: vi.fn(() => Promise.resolve({project_id: 'proj_1', missing: []})),
   collectProjectAmap: vi.fn(() => Promise.resolve({success: true, collected: {poi_count: 1, competitor_count: 0, food_count: 0, entertainment_count: 0}})),
+  geocodeProject: vi.fn(() => Promise.resolve({success: true, location: {longitude: 108.946767, latitude: 34.222838}, already_located: true})),
   collectProjectCompetitors: vi.fn(() => Promise.resolve({success: true, discovered_count: 1})),
   collectProjectSupporting: vi.fn(() => Promise.resolve({success: true, food_count: 1, entertainment_count: 1, night_business_count: 0})),
   collectProjectGovernmentStats: vi.fn(() => Promise.resolve({success: true, status: 'collecting'})),
   listProjectCrawlTasks: vi.fn(() => Promise.resolve({items: []})),
+  listCrawlerFieldSuggestions: vi.fn(() => Promise.resolve({items: [], total: 0})),
+  retryProjectCrawlTask: vi.fn(() => Promise.resolve({success: true, task_ids: [2]})),
+  reviewCrawlerFieldSuggestion: vi.fn(() => Promise.resolve({status: 'accepted'})),
+  getBusinessOutcome: vi.fn(() => Promise.resolve(null)),
+  saveBusinessOutcome: vi.fn(() => Promise.resolve({status: 'pending_review'})),
+  reviewBusinessOutcome: vi.fn(() => Promise.resolve({status: 'confirmed'})),
   createCrawlerManualUrlTask: vi.fn(() => Promise.resolve({success: true, task_ids: [1]})),
   getProjectCityInsight: vi.fn(() => Promise.resolve({
     project_id: 'proj_1',
@@ -110,12 +117,19 @@ vi.mock('../api/projects', () => ({
   generateProjectAiReview: apiMocks.generateProjectAiReview,
   getProjectMissingData: apiMocks.getProjectMissingData,
   collectProjectAmap: apiMocks.collectProjectAmap,
+  geocodeProject: apiMocks.geocodeProject,
   collectProjectCompetitors: apiMocks.collectProjectCompetitors,
   collectProjectSupporting: apiMocks.collectProjectSupporting,
   collectProjectGovernmentStats: apiMocks.collectProjectGovernmentStats,
   getProjectCityInsight: apiMocks.getProjectCityInsight,
   enrichProjectCrawler: apiMocks.enrichProjectCrawler,
   listProjectCrawlTasks: apiMocks.listProjectCrawlTasks,
+  listCrawlerFieldSuggestions: apiMocks.listCrawlerFieldSuggestions,
+  retryProjectCrawlTask: apiMocks.retryProjectCrawlTask,
+  reviewCrawlerFieldSuggestion: apiMocks.reviewCrawlerFieldSuggestion,
+  getBusinessOutcome: apiMocks.getBusinessOutcome,
+  saveBusinessOutcome: apiMocks.saveBusinessOutcome,
+  reviewBusinessOutcome: apiMocks.reviewBusinessOutcome,
   createCrawlerManualUrlTask: apiMocks.createCrawlerManualUrlTask,
   listProjectCompetitors: apiMocks.listProjectCompetitors,
   listProjectSupporting: apiMocks.listProjectSupporting,
@@ -183,6 +197,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   apiMocks.listProjects.mockResolvedValue({items: []});
   apiMocks.listProjectCrawlTasks.mockResolvedValue({items: []});
+  apiMocks.listCrawlerFieldSuggestions.mockResolvedValue({items: [], total: 0});
   apiMocks.getEvaluation.mockResolvedValue(sampleEvaluation);
   apiMocks.report.mockResolvedValue({sections: {}, hard_risk: false, disclaimer: ''});
 });
@@ -249,12 +264,28 @@ test('renders v1.1 workbench with selected project context', async () => {
   expect(screen.getByText('已确认记忆')).toBeInTheDocument();
 });
 
+test('workbench geocodes missing coordinates', async () => {
+  apiMocks.listProjects.mockResolvedValueOnce({items: [{
+    project_id: 'proj_1',
+    name: '待解析项目',
+    city: '西安市',
+    address: '小寨地铁站',
+    radius_meters: 1000,
+    business_type: '电竞馆',
+  }]} as any);
+  render(<MemoryRouter><App /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', {name: '解析并确认地址'}));
+  await waitFor(() => expect(apiMocks.geocodeProject).toHaveBeenCalledWith('proj_1', false));
+});
+
 test('v1.1 workbench action buttons call APIs', async () => {
   apiMocks.listProjects.mockResolvedValue({items: [{
     project_id: 'proj_1',
     name: '测试项目',
     city: '西安市',
     address: '小寨地铁站',
+    longitude: 108.946767,
+    latitude: 34.222838,
     radius_meters: 1000,
     business_type: '电竞馆',
     stats: {food_count: 1},
@@ -414,6 +445,34 @@ test('project supplement saves manual input to backend and refreshes quality', a
     data: {monthly_rent: 30000},
   });
   await waitFor(() => expect(apiMocks.getProjectDataQuality).toHaveBeenCalledWith('proj_1'));
+});
+
+test('project supplement displays collected POI business hours and phone', async () => {
+  apiMocks.getProjectDataset.mockResolvedValueOnce({
+    project: {project_id: 'proj_1'},
+    pois: [{
+      id: 1,
+      name: '夜宵烧烤',
+      category: 'food',
+      sub_category: '烧烤',
+      address: '小寨东路',
+      distance_meters: 320,
+      business_hours: '10:00-23:00',
+      phone: '029-12345678',
+    }],
+    competitors: [],
+    food_businesses: [],
+    entertainments: [],
+    rent_data: {},
+    population_data: {},
+    supplements: [],
+  } as any);
+
+  render(<MemoryRouter initialEntries={['/projects/proj_1/supplement']}><App /></MemoryRouter>);
+
+  expect(await screen.findByText('夜宵烧烤')).toBeInTheDocument();
+  expect(screen.getByText('10:00-23:00')).toBeInTheDocument();
+  expect(screen.getByText('029-12345678')).toBeInTheDocument();
 });
 
 test('renders project chat page', async () => {

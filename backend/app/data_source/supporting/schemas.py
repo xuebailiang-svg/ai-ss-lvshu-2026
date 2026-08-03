@@ -39,6 +39,7 @@ class SupportingListItem(BaseModel):
     source: str
     status: SupportingStatus
     detail_completed: bool = False
+    crawler_suggestion: dict | None = None
 
 
 class SupportingCategoryStats(BaseModel):

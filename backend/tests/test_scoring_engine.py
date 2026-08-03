@@ -249,7 +249,7 @@ def test_rejected_competitor_is_excluded_from_scoring(client):
     assert analysis["average_hour_price"] is None
 
 
-def test_pending_competitors_use_lower_count_weight(client):
+def test_pending_competitors_do_not_affect_formal_count(client):
     project_id = create_project(client)
     import_data(
         client,
@@ -268,7 +268,7 @@ def test_pending_competitors_use_lower_count_weight(client):
     assert analysis["candidate_competitor_count"] == 3
     assert analysis["confirmed_competitor_count"] == 1
     assert analysis["pending_review_count"] == 2
-    assert analysis["weighted_competitor_count"] == 2
+    assert analysis["weighted_competitor_count"] == 1
     assert analysis["average_distance"] == 400
 
 

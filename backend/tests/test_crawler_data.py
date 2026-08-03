@@ -81,6 +81,23 @@ class FakeIrrelevantDiscovery:
         ]
 
 
+class FakeMultiDiscovery:
+    async def discover_provider(self, provider: str, query: str, *, max_results: int, timeout_seconds: int):
+        from app.data_source.crawler.search_discovery import SearchResult
+
+        return [
+            SearchResult(url="https://example.com/wrong", title="测试电竞馆 价格详情", snippet="测试电竞馆 小寨", query=query, provider=provider),
+            SearchResult(url="https://example.com/right", title="测试电竞馆 营业时间", snippet="测试电竞馆 小寨", query=query, provider=provider),
+        ]
+
+
+class FakeFallbackCrawler:
+    async def crawl(self, url: str, timeout_seconds: int):
+        if url.endswith("/wrong"):
+            return SimpleNamespace(markdown="这是一个不包含目标名称的普通页面 价格 99")
+        return SimpleNamespace(markdown="测试电竞馆 小寨 营业时间 10:00-02:00 价格 12 机器 120")
+
+
 def test_crawler_enrich_disabled_returns_clear_message(client):
     project_id = _create_project(client)
 
@@ -443,6 +460,62 @@ def test_crawler_queue_creates_pending_tasks_without_running(client, monkeypatch
         assert task.status == "pending"
 
 
+def test_crawler_queue_only_plans_fields_missing_from_record(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    get_settings.cache_clear()
+    with SessionLocal() as db:
+        db.add(UnifiedCompetitorRecord(
+            project_id=project_id,
+            name="已有价格电竞馆",
+            address="小寨",
+            hour_price=15,
+            machine_count=80,
+            source="amap",
+            confidence=0.9,
+            status="pending_review",
+            raw_data={"manual_detail": {"business_hours": "24小时"}},
+        ))
+        db.commit()
+        result = queue_project_crawler_tasks(db, project_id=project_id, types=["competitor"], max_items=1)
+        task = db.get(CrawlTaskRecord, result["task_ids"][0])
+        assert "hour_price" not in task.input_snapshot["missing_fields"]
+        assert "machine_count" not in task.input_snapshot["missing_fields"]
+        assert "business_hours" not in task.input_snapshot["missing_fields"]
+        assert "member_price" in task.input_snapshot["missing_fields"]
+
+
+def test_worker_falls_back_to_second_candidate_and_records_attempts(client, monkeypatch):
+    project_id = _create_project(client)
+    monkeypatch.setenv("CRAWLER_ENABLED", "true")
+    monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
+    monkeypatch.setenv("CRAWLER_SEARCH_MAX_RESULTS", "3")
+    get_settings.cache_clear()
+    monkeypatch.setattr(crawler_service, "Crawl4AIClient", lambda: FakeFallbackCrawler())
+    monkeypatch.setattr(crawler_service, "SearchDiscoveryClient", lambda: FakeMultiDiscovery())
+    with SessionLocal() as db:
+        db.add(UnifiedCompetitorRecord(
+            project_id=project_id,
+            name="测试电竞馆",
+            address="小寨",
+            source="amap",
+            confidence=0.9,
+            status="pending_review",
+            raw_data={},
+        ))
+        db.commit()
+        result = queue_project_crawler_tasks(db, project_id=project_id, types=["competitor"], max_items=1, planning_mode="rules")
+        task_id = result["task_ids"][0]
+
+    asyncio.run(process_crawl_task_ids([task_id]))
+
+    with SessionLocal() as db:
+        task = db.get(CrawlTaskRecord, task_id)
+        assert task.status == "success"
+        assert [item["status"] for item in task.result_snapshot["candidate_attempts"]] == ["irrelevant", "accepted"]
+        assert task.target_url == "https://example.com/right"
+
+
 def test_crawler_api_only_queues_for_independent_worker(client, monkeypatch):
     project_id = _create_project(client)
     monkeypatch.setenv("CRAWLER_ENABLED", "true")
@@ -529,6 +602,14 @@ def test_manual_url_task_runs_in_independent_session(client, monkeypatch):
         assert len(competitors) == 1
         assert competitors[0].status == "pending_review"
         assert competitors[0].hour_price == 12
+        evidence = competitors[0].raw_data["crawler_detail"]["field_evidence"]
+        assert any(item["field"] == "hour_price" and item["source_url"] == "https://example.com/manual/shop" for item in evidence)
+
+    response = client.get(f"/api/projects/{project_id}/competitors")
+    suggestion = response.json()["items"][0]["crawler_suggestion"]
+    assert suggestion["review_status"] == "pending_review"
+    assert suggestion["source_domain"] == "example.com"
+    assert suggestion["field_evidence"]
 
 
 def test_manual_url_supporting_task_creates_pending_food_record(client, monkeypatch):

@@ -104,6 +104,18 @@ SITE_SELECTION_REPORT_PROMPT = (
 """
 ).strip()
 
+SITE_SELECTION_REPORT_PROMPT = (
+    SITE_SELECTION_REPORT_PROMPT
+    + """
+
+字段证据与可信度要求：
+1. crawler_evidence_summary 只包含人工接受后的字段证据；只能按其字段、值和来源描述，不得扩展推测。
+2. 报告必须增加“## 十三、数据证据与可信度附录”，用 Markdown 表格列出记录类型、字段、值、来源域名、来源质量、时效状态和证据摘录。
+3. 没有已接受爬虫证据时，明确写“暂无已人工接受的爬虫字段证据”，不得引用待审核爬虫线索。
+4. 来源质量为 low、时效为 stale 或存在口径风险时，必须提示继续人工核实。
+"""
+).strip()
+
 
 AI_DATA_REVIEW_PROMPT = """
 你是一名电竞馆选址项目的数据审核顾问。

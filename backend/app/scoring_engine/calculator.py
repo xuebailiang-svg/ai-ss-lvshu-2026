@@ -273,8 +273,8 @@ class ProjectScoreCalculator:
         confirmed = [row for row in competitors if row.get("status") == "confirmed"]
         pending = [row for row in competitors if row.get("status") == "pending_review"]
         cfg = self.rules["competitor"]
-        pending_weight = float(cfg.get("pending_review_weight", 0.5))
-        weighted_count = len(confirmed) + len(pending) * pending_weight
+        # 待确认记录只作为调查清单，不影响正式竞争压力得分。
+        weighted_count = float(len(confirmed))
 
         count_cfg = cfg.get("count_scores", {})
         low_max = float(count_cfg.get("low_max", 2))
@@ -332,6 +332,12 @@ class ProjectScoreCalculator:
             reasons.append("当前项目未录入竞品，竞争压力暂低")
             missing.append("竞品经营数据")
             confidence = 0.4
+        elif confirmed_count == 0:
+            reasons.append("尚无已确认竞品，暂不判断竞争压力")
+            missing.extend(["已确认竞品经营信息", "竞品价格", "竞品机器数量", "竞品显卡配置", "竞品上座率"])
+            if pending_count:
+                risks.append(f"仍有 {pending_count} 家疑似竞品待人工确认，未计入正式评分")
+            confidence = 0.25
         else:
             count_cfg = cfg.get("count_scores")
             if count_cfg:
@@ -382,19 +388,13 @@ class ProjectScoreCalculator:
             else:
                 missing.append("竞品上座率")
 
-            if confirmed_count == 0:
-                missing.append("已确认竞品经营信息")
-                if pending_count:
-                    risks.append(f"仍有 {pending_count} 家疑似竞品待确认，当前仅按较低权重参考")
-                confidence = 0.35
-            else:
-                completeness = float(analysis.get("operating_data_completeness") or 0)
-                confidence = 0.45 + 0.45 * completeness
-                if pending_count:
-                    risks.append(f"另有 {pending_count} 家疑似竞品待确认，按较低权重计入数量压力")
-                    confidence -= 0.05
-                if completeness < 0.5:
-                    missing.append("竞品经营信息不足")
+            completeness = float(analysis.get("operating_data_completeness") or 0)
+            confidence = 0.45 + 0.45 * completeness
+            if pending_count:
+                risks.append(f"另有 {pending_count} 家疑似竞品待人工确认，未计入正式评分")
+                confidence -= 0.05
+            if completeness < 0.5:
+                missing.append("竞品经营信息不足")
 
         result = self.dimension(score, max_score, reasons, risks, list(dict.fromkeys(missing)), confidence)
         result["analysis"] = analysis
