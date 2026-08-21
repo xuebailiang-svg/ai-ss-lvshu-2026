@@ -1,6 +1,6 @@
 """backfill amap business_hours from raw_data.biz_ext.open_time
 
-Revision ID: 0014_backfill_amap_business_hours
+Revision ID: 0014_amap_hours
 Revises: 0013_government_statistics
 Create Date: 2026-07-31
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from migrations.helpers import column_exists, table_exists
 
 
-revision = "0014_backfill_amap_business_hours"
+revision = "0014_amap_hours"
 down_revision = "0013_government_statistics"
 branch_labels = None
 depends_on = None

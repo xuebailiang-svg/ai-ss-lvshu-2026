@@ -192,6 +192,35 @@ def test_rent_detail_is_saved_in_manual_detail_without_losing_raw_data(client):
         assert row.raw_data["manual_detail"]["property_type"] == "临街商铺"
 
 
+def test_rent_core_fields_and_manual_audit_can_be_corrected(client):
+    project_id = create_project(client)
+    upload_rent_csv(client, project_id, "地址,面积,月租金\n原始地址,400,24000\n")
+    rent_id = client.get(f"/api/projects/{project_id}/rent").json()["items"][0]["id"]
+
+    response = client.put(
+        f"/api/projects/{project_id}/rent/{rent_id}",
+        json={
+            "address": "现场确认地址",
+            "area_sqm": 420,
+            "monthly_rent": 25200,
+            "property_fee": 1600,
+            "use_allowed": True,
+            "fire_confirmed": False,
+            "unknown_fields": ["transfer_fee"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["address"] == "现场确认地址"
+    assert body["area_sqm"] == 420
+    assert body["monthly_rent"] == 25200
+    assert body["rent_unit_price"] == 60
+    assert body["property_fee"] == 1600
+    assert body["manual_meta"]["field_sources"]["address"] == "manual"
+    assert body["manual_meta"]["field_sources"]["transfer_fee"] == "manual_unknown"
+
+
 def test_rent_detail_and_review_are_isolated_by_project(client):
     owner_project_id = create_project(client)
     other_project_id = create_project(client)
@@ -264,7 +293,7 @@ def test_rent_quality_excludes_pending_and_rejected_when_no_confirmed_data(clien
         "missing_summary": [],
         "incomplete_items": [],
     }
-    assert "真实租金" in body["missing"]
+    assert "候选物业核心条件" in body["missing"]
 
 
 def test_rent_quality_reports_missing_core_fields(client):
@@ -282,7 +311,7 @@ def test_rent_quality_reports_missing_core_fields(client):
     assert area_missing == {"field": "area_sqm", "label": "面积", "missing_count": 1, "importance": "core"}
     assert rent_quality["incomplete_items"][0]["rent_id"] == row["id"]
     assert "面积" in rent_quality["incomplete_items"][0]["missing_fields"]
-    assert "租金核心字段" in body["missing"]
+    assert "候选物业核心条件" in body["missing"]
 
 
 def test_rent_quality_detail_missing_disappears_after_supplement(client):
@@ -318,7 +347,7 @@ def test_rent_quality_detail_missing_disappears_after_supplement(client):
     assert after["missing_summary"] == []
 
 
-def test_rent_quality_core_penalty_is_applied_without_changing_cost_score(client):
+def test_readiness_uses_fixed_property_check_instead_of_per_row_penalty(client):
     project_id = create_project(client)
     import_rent_record(
         client,
@@ -334,4 +363,5 @@ def test_rent_quality_core_penalty_is_applied_without_changing_cost_score(client
     )
     after = client.get(f"/api/projects/{project_id}/data-quality").json()["quality_score"]
 
-    assert after == before - 1
+    assert before == 15
+    assert after == 0

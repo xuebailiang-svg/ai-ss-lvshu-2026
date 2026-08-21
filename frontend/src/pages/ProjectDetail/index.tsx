@@ -1,17 +1,15 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   Button,
   Card,
   Col,
   Descriptions,
-  Divider,
   List,
   Progress,
   Row,
   Space,
   Statistic,
-  Steps,
   Tag,
   Typography,
   message,
@@ -19,20 +17,19 @@ import {
 import {
   CheckCircleOutlined,
   CloudDownloadOutlined,
+  DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
   FormOutlined,
-  RobotOutlined,
+  PrinterOutlined,
   SafetyCertificateOutlined,
-  SearchOutlined,
 } from '@ant-design/icons';
 import {useNavigate, useParams} from 'react-router-dom';
-import {collectProjectAmap, collectProjectCompetitors, collectProjectSupporting, getProject, getProjectDataQuality} from '../../api/projects';
+import {collectProjectAmap, collectProjectCompetitors, collectProjectSupporting, geocodeProject, getProject, getProjectDataQuality} from '../../api/projects';
 import {generateAiReport} from '../../api/report';
-import {scoreProject} from '../../api/score';
 import MarkdownReport from '../../components/MarkdownReport';
-import ProjectAssistant from '../../components/ProjectAssistant';
 import DataCollectionCenter from '../../components/DataCollectionCenter';
+import AIQuestionForm from '../../components/AIQuestionForm';
 
 const STATUS_TEXT: Record<string, string> = {
   pending_review: '初始化',
@@ -41,15 +38,6 @@ const STATUS_TEXT: Record<string, string> = {
   supplementing: '数据补充中',
   scored: '分析完成',
   reported: '已生成报告',
-};
-
-const DIMENSION_TEXT: Record<string, string> = {
-  population: '人口条件',
-  traffic: '交通条件',
-  competitor: '竞争环境',
-  support: '夜间消费环境',
-  rent: '租金成本',
-  risk: '风险情况',
 };
 
 function safeText(value: unknown, fallback = '-') {
@@ -83,6 +71,13 @@ function stringList(value: unknown): string[] {
   });
 }
 
+function htmlEscape(value: unknown) {
+  const entities: Record<string, string> = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
+  };
+  return String(value ?? '').replace(/[&<>"']/g, character => entities[character] || character);
+}
+
 function StepCard({
   step,
   title,
@@ -92,6 +87,9 @@ function StepCard({
   actionText,
   actionLoading,
   actionFirst,
+  actionDisabled,
+  prerequisite,
+  status,
   onAction,
 }: {
   step: number;
@@ -99,33 +97,117 @@ function StepCard({
   description: string;
   icon: React.ReactNode;
   children?: React.ReactNode;
-  actionText: string;
+  actionText?: string;
   actionLoading?: boolean;
   actionFirst?: boolean;
-  onAction: () => void;
+  actionDisabled?: boolean;
+  prerequisite?: string;
+  status: 'completed' | 'active' | 'pending';
+  onAction?: () => void;
 }) {
-  const actionButton = (
-    <Button style={{marginTop: 12}} loading={actionLoading} onClick={onAction}>
+  const actionButton = actionText && onAction ? (
+    <Button style={{marginTop: 12}} loading={actionLoading} disabled={actionDisabled} onClick={onAction}>
       {actionText}
     </Button>
-  );
+  ) : null;
+  const statusView = status === 'completed'
+    ? {text: '已完成', color: 'green'}
+    : status === 'active'
+      ? {text: '当前步骤', color: 'blue'}
+      : {text: '待开始', color: 'default'};
 
   return (
-    <Card className="workflow-step-card">
-      <Space align="start" size={16}>
-        <div className="workflow-step-icon">{icon}</div>
-        <div style={{flex: 1}}>
-          <Space>
+    <Card id={`workflow-step-${step}`} className={`workflow-step-card status-${status}`} data-step-status={status}>
+      <Space align="start" size={16} className="workflow-step-layout">
+        <div className="workflow-step-icon">{status === 'completed' ? <CheckCircleOutlined /> : icon}</div>
+        <div className="workflow-step-content">
+          <Space wrap>
             <Tag color="blue">Step {step}</Tag>
             <Typography.Title level={4} style={{margin: 0}}>{title}</Typography.Title>
+            <Tag color={statusView.color}>{statusView.text}</Tag>
           </Space>
           <Typography.Paragraph type="secondary" style={{marginTop: 8}}>{description}</Typography.Paragraph>
+          {status === 'pending' && prerequisite && (
+            <Alert type="info" showIcon message={`前置条件：${prerequisite}`} style={{marginBottom: 12}} />
+          )}
           {actionFirst && actionButton}
           {children}
           {!actionFirst && actionButton}
         </div>
       </Space>
     </Card>
+  );
+}
+
+const READINESS_GROUPS = [
+  ['technical_prerequisites', '技术前置条件'],
+  ['key_unknowns', '关键未知'],
+  ['recommended', '建议补充'],
+  ['optional', '可选信息'],
+] as const;
+
+const READINESS_STATUS: Record<string, {text: string; color: string}> = {
+  complete: {text: '已完成', color: 'green'},
+  not_applicable: {text: '无需补充', color: 'green'},
+  optional: {text: '可选', color: 'default'},
+  acknowledged_unknown: {text: '已标记未知', color: 'blue'},
+  missing: {text: '待补充', color: 'orange'},
+  blocked: {text: '阻塞', color: 'red'},
+};
+
+function ReadinessPanel({result, onSupplement}: {result: any; onSupplement: () => void}) {
+  const readiness = result?.readiness || {};
+  const percent = Math.max(0, Math.min(100, Number(readiness?.completion_percent) || 0));
+  const groups = readiness?.groups || {};
+  const statusText = readiness?.status === 'ready'
+    ? '可以生成正式报告'
+    : readiness?.status === 'blocked'
+      ? '技术前置条件未完成'
+      : '可以继续，但建议先补充关键数据';
+  return (
+    <Space direction="vertical" size={12} style={{width: '100%'}}>
+      <Alert
+        type={readiness?.status === 'ready' ? 'success' : readiness?.status === 'blocked' ? 'error' : 'warning'}
+        showIcon
+        message={statusText}
+        description={readiness?.score_explanation || '准备度仅表示数据准备情况，不代表项目推荐概率。'}
+      />
+      <Card size="small" title="数据准备度">
+        <Progress percent={percent} status={readiness?.status === 'ready' ? 'success' : 'normal'} />
+        <Typography.Text type="secondary">
+          已完成 {Number(readiness?.summary?.complete) || 0} 项，
+          待补充 {Number(readiness?.summary?.missing) || 0} 项，
+          阻塞 {Number(readiness?.summary?.blocked) || 0} 项。
+        </Typography.Text>
+      </Card>
+      <Row gutter={[12, 12]}>
+        {READINESS_GROUPS.map(([key, title]) => (
+          <Col xs={24} lg={12} key={key}>
+            <Card size="small" title={title} style={{height: '100%'}}>
+              <List
+                size="small"
+                dataSource={Array.isArray(groups[key]) ? groups[key] : []}
+                locale={{emptyText: '暂无检查项'}}
+                renderItem={(item: any) => {
+                  const view = READINESS_STATUS[item?.status] || {text: item?.status || '未知', color: 'default'};
+                  return (
+                    <List.Item>
+                      <List.Item.Meta
+                        title={<Space wrap><Tag color={view.color}>{view.text}</Tag><Typography.Text strong>{safeText(item?.label)}</Typography.Text></Space>}
+                        description={<><div>{safeText(item?.summary)}</div>{item?.action && <Typography.Text type="secondary">下一步：{safeText(item.action)}</Typography.Text>}</>}
+                      />
+                    </List.Item>
+                  );
+                }}
+              />
+            </Card>
+          </Col>
+        ))}
+      </Row>
+      {(readiness?.status === 'needs_input' || readiness?.status === 'blocked') && (
+        <Button onClick={onSupplement}>进入人工补充</Button>
+      )}
+    </Space>
   );
 }
 
@@ -147,12 +229,11 @@ export default function ProjectDetailPage() {
   const [checkingQuality, setCheckingQuality] = useState(false);
   const [qualityResult, setQualityResult] = useState<any>(null);
   const [qualityError, setQualityError] = useState<string>('');
-  const [scoring, setScoring] = useState(false);
-  const [scoreResult, setScoreResult] = useState<any>(null);
-  const [scoreError, setScoreError] = useState<string>('');
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportResult, setReportResult] = useState<any>(null);
   const [reportError, setReportError] = useState<string>('');
+  const [importantInfoSaved, setImportantInfoSaved] = useState(false);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!projectId) return;
@@ -167,7 +248,6 @@ export default function ProjectDetailPage() {
   }, [projectId]);
 
   const currentStatus = useMemo(() => project?.status || 'confirmed', [project]);
-  const placeholder = () => message.info('该步骤将在后续小任务中接入真实功能');
 
   const runAmapCollect = async () => {
     if (!projectId) return;
@@ -176,11 +256,43 @@ export default function ProjectDetailPage() {
     try {
       const result = await collectProjectAmap(projectId);
       setCollectResult(result);
-      message.success('高德采集完成');
+      if (result?.success === false) {
+        message.warning(result?.message || '高德采集未完成');
+      } else {
+        const refreshed = await getProject(projectId);
+        setProject(refreshed?.project || refreshed);
+        setProjectStats(refreshed?.stats || {});
+        message.success(result?.message || '高德采集完成');
+      }
     } catch (error: any) {
       const reason = error?.response?.data?.detail || error?.message || '采集失败';
       setCollectError(typeof reason === 'string' ? reason : JSON.stringify(reason));
       message.error('采集失败');
+    } finally {
+      setCollecting(false);
+    }
+  };
+
+  const confirmGeocodeCandidate = async (candidateIndex: number) => {
+    if (!projectId) return;
+    setCollecting(true);
+    setCollectError('');
+    try {
+      const geocode = await geocodeProject(projectId, true, candidateIndex);
+      if (geocode?.success === false) {
+        throw new Error(geocode?.message || '地址确认失败');
+      }
+      const result = await collectProjectAmap(projectId);
+      setCollectResult(result);
+      const refreshed = await getProject(projectId);
+      setProject(refreshed?.project || refreshed);
+      setProjectStats(refreshed?.stats || {});
+      if (result?.success === false) message.warning(result?.message || '地址已确认，但采集未完成');
+      else message.success(result?.message || '地址已确认并完成高德采集');
+    } catch (error: any) {
+      const reason = error?.response?.data?.detail || error?.message || '地址确认失败';
+      setCollectError(typeof reason === 'string' ? reason : JSON.stringify(reason));
+      message.error('地址确认失败');
     } finally {
       setCollecting(false);
     }
@@ -194,7 +306,7 @@ export default function ProjectDetailPage() {
     try {
       const result = await getProjectDataQuality(projectId);
       setQualityResult(result);
-      message.success('数据完整度检查完成');
+      message.success('数据准备度检查完成');
     } catch (error: any) {
       const reason = error?.response?.data?.detail || error?.message || '数据核验失败';
       setQualityError(typeof reason === 'string' ? reason : reason?.message || '请求失败，请稍后重试');
@@ -259,28 +371,8 @@ export default function ProjectDetailPage() {
     }
   };
 
-  const runScoring = async () => {
-    if (!projectId) return;
-    setScoring(true);
-    setScoreError('');
-    setScoreResult(null);
-    setReportResult(null);
-    setReportError('');
-    try {
-      const result = await scoreProject(projectId);
-      setScoreResult(result);
-      message.success('评分分析完成');
-    } catch (error: any) {
-      const reason = error?.response?.data?.detail || error?.message || '评分分析失败';
-      setScoreError(typeof reason === 'string' ? reason : reason?.message || '请求失败，请稍后重试');
-      message.error('评分分析失败');
-    } finally {
-      setScoring(false);
-    }
-  };
-
   const runReportGeneration = async () => {
-    if (!projectId || !scoreResult) return;
+    if (!projectId) return;
     setGeneratingReport(true);
     setReportError('');
     setReportResult(null);
@@ -303,77 +395,73 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const exportReportHtml = () => {
+    if (!reportRef.current || !reportResult?.content) {
+      message.warning('请先生成报告');
+      return;
+    }
+    const title = `${project?.name || '电竞馆选址'}分析报告`;
+    const documentHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)}</title><style>body{margin:0;background:#f3f5f8;color:#263548;font-family:"Microsoft YaHei",sans-serif;line-height:1.8}.report-export-root{max-width:980px;margin:24px auto;padding:40px;background:#fff}h1{color:#102033}h2{margin-top:32px;padding-bottom:8px;border-bottom:1px solid #d9e4ef;color:#153b62}table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border:1px solid #dce4ec;text-align:left;vertical-align:top}th{background:#edf4fa}blockquote{margin:16px 0;padding:12px 16px;border-left:4px solid #4a86bd;background:#f5f9fd}@media print{body{background:#fff}.report-export-root{max-width:none;margin:0;padding:0}}</style></head><body><main class="report-export-root">${reportRef.current.innerHTML}</main></body></html>`;
+    const blob = new Blob([documentHtml], {type: 'text/html;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${String(project?.name || '电竞馆选址报告').replace(/[\\/:*?"<>|]/g, '-')}.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+    message.success('HTML 报告已导出');
+  };
+
+  const printReport = () => {
+    if (!reportRef.current) {
+      message.warning('请先生成报告');
+      return;
+    }
+    const cleanup = () => document.body.classList.remove('project-report-printing');
+    document.body.classList.add('project-report-printing');
+    window.addEventListener('afterprint', cleanup, {once: true});
+    window.print();
+  };
+
   const collected = collectResult?.collected || {};
-  const qualityScore = Math.max(0, Math.min(100, Number(qualityResult?.quality_score) || 0));
+  const collectionStatus = String(collectResult?.collection_status || '');
+  const collectionDiagnostics = collectResult?.diagnostics || {};
+  const geocodeCandidates = Array.isArray(collectionDiagnostics?.geocode?.candidates)
+    ? collectionDiagnostics.geocode.candidates
+    : [];
+  const categorySummary = collectionDiagnostics?.category_summary && typeof collectionDiagnostics.category_summary === 'object'
+    ? Object.entries(collectionDiagnostics.category_summary) as Array<[string, any]>
+    : [];
+  const categoryNames: Record<string, string> = {
+    transport: '交通', competitor: '疑似竞品', education: '教育', residential: '住宅', food: '餐饮', entertainment: '娱乐',
+  };
   const missingItems = stringList(qualityResult?.missing);
-  const warningItems = stringList(qualityResult?.warnings);
-  const competitorDetailQuality = qualityResult?.competitor_detail_quality || {};
-  const competitorMissingSummary = Array.isArray(competitorDetailQuality?.missing_summary)
-    ? competitorDetailQuality.missing_summary
-    : [];
-  const incompleteCompetitors = Array.isArray(competitorDetailQuality?.incomplete_items)
-    ? competitorDetailQuality.incomplete_items
-    : [];
-  const supportingDetailQuality = qualityResult?.supporting_detail_quality || {};
-  const supportingMissingSummary = Array.isArray(supportingDetailQuality?.missing_summary)
-    ? supportingDetailQuality.missing_summary
-    : [];
-  const incompleteSupportingItems = Array.isArray(supportingDetailQuality?.incomplete_items)
-    ? supportingDetailQuality.incomplete_items
-    : [];
-  const rentQuality = qualityResult?.rent_quality || {};
-  const rentMissingSummary = Array.isArray(rentQuality?.missing_summary)
-    ? rentQuality.missing_summary
-    : [];
-  const incompleteRentItems = Array.isArray(rentQuality?.incomplete_items)
-    ? rentQuality.incomplete_items
-    : [];
-  const dimensionEntries = Object.entries(scoreResult?.dimensions || {}) as Array<[string, any]>;
-  const scoreAdvantages = stringList(scoreResult?.advantages);
-  const scoreRisks = stringList(scoreResult?.risks);
-  const scoreMissing = stringList(scoreResult?.missing_data);
-  const competitorAnalysis = scoreResult?.competitor_analysis || {};
-  const supportingAnalysis = scoreResult?.supporting_analysis || {};
-  const rentAnalysis = scoreResult?.rent_analysis || {};
-  const competitionLevelText: Record<string, string> = {
-    low: '较低',
-    medium: '中等',
-    high: '较高',
+  const locationReady = project?.longitude != null && project?.latitude != null;
+  const amapReady = Boolean(
+    collectResult?.success && collectionStatus !== 'failed' && collectionStatus !== 'needs_confirmation'
+    || Number(projectStats?.poi_count) > 0,
+  );
+  const flowFinished = Boolean(reportResult?.content);
+  const stepStatus = (step: number): 'completed' | 'active' | 'pending' => {
+    if (flowFinished) return 'completed';
+    if (step === 1) return locationReady ? 'completed' : 'active';
+    if (step === 2) return amapReady ? 'completed' : locationReady ? 'active' : 'pending';
+    if (step === 3) return qualityResult ? 'completed' : amapReady ? 'active' : 'pending';
+    if (step === 4) return qualityResult ? 'completed' : checkingQuality ? 'active' : 'pending';
+    if (step === 5) return importantInfoSaved ? 'completed' : qualityResult ? 'active' : 'pending';
+    return importantInfoSaved ? 'active' : 'pending';
   };
-  const nightActivityLevelText: Record<string, string> = {
-    none: '未形成',
-    low: '较低',
-    medium: '中等',
-    high: '较高',
-  };
-  const rentPressureText: Record<string, string> = {
-    low: '较低',
-    medium: '中等',
-    high: '较高',
-    unknown: '数据不足',
-  };
-
-  const locateCompetitorDetail = (competitorId: number) => {
-    const target = document.getElementById(`competitor-item-${competitorId}`)
-      || document.getElementById('competitor-review-section');
-    target?.scrollIntoView({behavior: 'smooth', block: 'center'});
-    message.info('请在竞品列表中点击“补充详情”继续完善经营信息');
-  };
-
-  const locateSupportingDetail = (supportingId: string) => {
-    const targetId = `supporting-item-${String(supportingId).replace(':', '-')}`;
-    const target = document.getElementById(targetId)
-      || document.getElementById('supporting-review-section');
-    target?.scrollIntoView({behavior: 'smooth', block: 'center'});
-    message.info('请在周边配套列表中点击“补充详情”继续完善营业信息');
-  };
-
-  const locateRentDetail = (rentId: number) => {
-    const target = document.getElementById(`rent-item-${rentId}`)
-      || document.getElementById('rent-data-section');
-    target?.scrollIntoView({behavior: 'smooth', block: 'center'});
-    message.info('请在租金数据列表中点击“补充详情”继续完善物业和来源信息。');
-  };
+  const currentStage = flowFinished
+    ? {step: 6, title: '流程已完成', next: '查看报告，或在补充新数据后重新生成。'}
+    : importantInfoSaved
+      ? {step: 6, title: '生成 AI 选址报告', next: '生成并核对最终报告。'}
+      : qualityResult
+        ? {step: 5, title: '确认重要信息', next: '回答关键问题，也可将暂时无法获得的信息标记为未知。'}
+        : amapReady
+          ? {step: 3, title: '查看与人工补充', next: '确认竞品、配套及候选物业信息，再检查数据准备度。'}
+          : locationReady
+            ? {step: 2, title: '获取高德 POI', next: '采集周边交通、疑似竞品、餐饮和娱乐数据。'}
+            : {step: 1, title: '确认地址和范围', next: '请先确保地址可以准确定位。'};
 
   return (
     <div className="page">
@@ -398,56 +486,13 @@ export default function ProjectDetailPage() {
         </Descriptions>
       </Card>
 
-      <DataCollectionCenter
-        projectId={projectId}
-        stats={projectStats}
-        collecting={collecting}
-        collectResult={collectResult}
-        collectError={collectError}
-        collectingCompetitors={collectingCompetitors}
-        competitorCollectResult={competitorCollectResult}
-        competitorCollectError={competitorCollectError}
-        onCollectCompetitors={runCompetitorCollect}
-        collectingSupporting={collectingSupporting}
-        supportingCollectResult={supportingCollectResult}
-        supportingCollectError={supportingCollectError}
-        onCollectSupporting={runSupportingCollect}
-        onCompetitorReviewed={async () => {
-          const refreshed = await getProject(projectId);
-          setProjectStats(refreshed?.stats || {});
-        }}
-        onCompetitorDetailSaved={async () => {
-          const previousScore = qualityResult?.quality_score === undefined
-            ? null
-            : Number(qualityResult.quality_score);
-          const refreshedQuality = await getProjectDataQuality(projectId);
-          setQualityResult(refreshedQuality);
-          setQualityError('');
-          try {
-            const refreshedProject = await getProject(projectId);
-            setProjectStats(refreshedProject?.stats || {});
-          } catch {
-            // Step 5 已更新，项目顶部统计刷新失败不影响数据质量结果。
-          }
-          return {
-            previousScore: Number.isFinite(previousScore) ? previousScore : null,
-            currentScore: Number(refreshedQuality?.quality_score) || 0,
-          };
-        }}
-      />
-
-      <Card title="选址分析流程" style={{marginBottom: 16}}>
-        <Steps
-          current={collectResult ? 1 : 0}
-          items={[
-            {title: '地址输入'},
-            {title: '高德 POI'},
-            {title: '爬虫补充'},
-            {title: '人工补充'},
-            {title: '数据核验'},
-            {title: '评分与报告'},
-          ]}
-        />
+      <Card className="workflow-current-stage" style={{marginBottom: 16}}>
+        <div>
+          <Typography.Text type="secondary">当前阶段</Typography.Text>
+          <Typography.Title level={3}>Step {currentStage.step}：{currentStage.title}</Typography.Title>
+          <Typography.Paragraph type="secondary">下一步：{currentStage.next}</Typography.Paragraph>
+        </div>
+        <Tag color={flowFinished ? 'green' : 'blue'}>{flowFinished ? '全部完成' : `进行到 ${currentStage.step} / 6`}</Tag>
       </Card>
 
       <Row gutter={[16, 16]}>
@@ -457,8 +502,7 @@ export default function ProjectDetailPage() {
             title="输入地址和范围"
             description="确认项目地址、城市和分析半径，这是后续采集和分析的基础。"
             icon={<EditOutlined />}
-            actionText="编辑项目信息"
-            onAction={placeholder}
+            status={stepStatus(1)}
           >
             <Descriptions column={3} size="small">
               <Descriptions.Item label="城市">{safeText(project?.city)}</Descriptions.Item>
@@ -474,6 +518,8 @@ export default function ProjectDetailPage() {
             title="获取高德 POI"
             description="调用高德获取周边 POI、竞品、交通、餐饮、娱乐等基础数据。"
             icon={<CloudDownloadOutlined />}
+            status={stepStatus(2)}
+            prerequisite="先确认项目地址"
             actionText={collecting ? '正在获取数据...' : '获取高德 POI'}
             actionLoading={collecting}
             onAction={runAmapCollect}
@@ -484,8 +530,37 @@ export default function ProjectDetailPage() {
             {collectError && (
               <Alert style={{marginBottom: 12}} type="error" showIcon message="采集失败" description={collectError} />
             )}
-            {collectResult && (
-              <Alert style={{marginBottom: 12}} type="success" showIcon message="高德采集完成" description="已保存本次成功采集的数据。" />
+            {collectResult && collectionStatus !== 'needs_confirmation' && (
+              <Alert
+                style={{marginBottom: 12}}
+                type={collectionStatus === 'failed' ? 'error' : collectionStatus === 'partial' || collectionStatus === 'truncated' ? 'warning' : 'success'}
+                showIcon
+                message={collectResult?.message || '高德采集完成'}
+                description={
+                  collectionStatus === 'success_zero' ? '接口调用成功，但当前地址和范围内没有有效结果。' :
+                  collectionStatus === 'partial' ? '已保存成功返回的数据；失败关键词可稍后重试。' :
+                  collectionStatus === 'truncated' ? '结果达到配置上限；当前结果已去重保存。' :
+                  collectionStatus === 'failed' ? '没有保存本次失败请求的数据，请检查提示后重试。' :
+                  '已按高德 POI ID 去重并保存本次有效数据。'
+                }
+              />
+            )}
+            {collectionStatus === 'needs_confirmation' && (
+              <Card size="small" title="请选择准确地址" style={{marginBottom: 12}}>
+                <Alert type="warning" showIcon message="地址存在多个候选结果" description="确认后系统才会使用该坐标采集周边 POI。" />
+                <List
+                  size="small"
+                  dataSource={geocodeCandidates}
+                  renderItem={(candidate: any) => (
+                    <List.Item actions={[<Button key="select" type="primary" size="small" onClick={() => confirmGeocodeCandidate(Number(candidate.index))}>选择此地址</Button>]}>
+                      <List.Item.Meta
+                        title={safeText(candidate.formatted_address, '未提供完整地址')}
+                        description={`${safeText(candidate.district, '')} ${safeText(candidate.level, '')} · ${candidate.longitude}, ${candidate.latitude}`}
+                      />
+                    </List.Item>
+                  )}
+                />
+              </Card>
             )}
             <Row gutter={16}>
               <Col span={6}><Statistic title="POI数量" value={countValue(collected.poi_count)} /></Col>
@@ -493,41 +568,83 @@ export default function ProjectDetailPage() {
               <Col span={6}><Statistic title="餐饮数量" value={countValue(collected.food_count)} /></Col>
               <Col span={6}><Statistic title="娱乐场所数量" value={countValue(collected.entertainment_count)} /></Col>
             </Row>
+            {categorySummary.length > 0 && (
+              <Space wrap style={{marginTop: 12}}>
+                {categorySummary.map(([category, summary]) => (
+                  <Tag key={category} color={summary?.truncated ? 'orange' : 'blue'}>
+                    {categoryNames[category] || category}：{Number(summary?.unique_count) || 0} 条
+                    {summary?.truncated ? '（已达上限）' : ''}
+                  </Tag>
+                ))}
+                <Tag>原始返回 {Number(collectionDiagnostics?.raw_return_count ?? collectionDiagnostics?.raw_discovered_count) || 0}</Tag>
+                <Tag>去重 {Number(collectionDiagnostics?.duplicate_count) || 0}</Tag>
+                <Tag>范围外排除 {Number(collectionDiagnostics?.outside_radius_count) || 0}</Tag>
+              </Space>
+            )}
           </StepCard>
         </Col>
 
         <Col span={24}>
           <StepCard
             step={3}
-            title="爬虫补充数据"
-            description="后续根据高德识别到的竞品、餐饮、娱乐场所，补充价格、营业时间、配置等信息。"
-            icon={<SearchOutlined />}
-            actionText="启动爬虫补充"
-            onAction={() => message.info('爬虫补充当前仅为占位，尚未接入')}
+            title="查看与人工补充"
+            description="查看高德采集结果，并补充价格、机器配置、租金、物业费等高德无法提供的真实信息。"
+            icon={<FormOutlined />}
+            status={stepStatus(3)}
+            prerequisite="先完成高德 POI 采集"
+            actionText="进入人工补充"
+            actionDisabled={!amapReady}
+            onAction={() => navigate(`/projects/${projectId}/supplement`)}
           >
-            <Tag>当前状态：暂未启动</Tag>
+            <DataCollectionCenter
+              projectId={projectId}
+              stats={projectStats}
+              collecting={collecting}
+              collectResult={collectResult}
+              collectError={collectError}
+              collectingCompetitors={collectingCompetitors}
+              competitorCollectResult={competitorCollectResult}
+              competitorCollectError={competitorCollectError}
+              onCollectCompetitors={runCompetitorCollect}
+              collectingSupporting={collectingSupporting}
+              supportingCollectResult={supportingCollectResult}
+              supportingCollectError={supportingCollectError}
+              onCollectSupporting={runSupportingCollect}
+              onCompetitorReviewed={async () => {
+                const refreshed = await getProject(projectId);
+                setProjectStats(refreshed?.stats || {});
+              }}
+              onCompetitorDetailSaved={async () => {
+                const previousScore = qualityResult?.quality_score === undefined ? null : Number(qualityResult.quality_score);
+                const refreshedQuality = await getProjectDataQuality(projectId);
+                setQualityResult(refreshedQuality);
+                setQualityError('');
+                try {
+                  const refreshedProject = await getProject(projectId);
+                  setProjectStats(refreshedProject?.stats || {});
+                } catch {
+                  // 数据质量已更新，顶部统计刷新失败不影响人工核实结果。
+                }
+                return {
+                  previousScore: Number.isFinite(previousScore) ? previousScore : null,
+                  currentScore: Number(refreshedQuality?.quality_score) || 0,
+                };
+              }}
+            />
           </StepCard>
         </Col>
 
         <Col span={24}>
           <StepCard
             step={4}
-            title="人工补充数据"
-            description="补充高德和爬虫无法获取的数据，例如竞品价格、机器配置、上座率、租金、物业费、转让费。"
-            icon={<FormOutlined />}
-            actionText="进入人工补充"
-            onAction={() => navigate(`/projects/${projectId}/supplement`)}
-          />
-        </Col>
-
-        <Col span={24}>
-          <StepCard
-            step={5}
-            title="数据核验"
-            description="检查数据完整度，判断是否可以生成报告。"
+            title="数据检查"
+            description="按固定目录区分技术前置、关键未知、建议补充和可选信息。"
             icon={<SafetyCertificateOutlined />}
-            actionText={checkingQuality ? '正在检查数据完整度...' : '检查数据完整度'}
+            status={stepStatus(4)}
+            prerequisite="先采集并查看基础数据"
+            actionText={checkingQuality ? '正在检查数据准备度...' : '检查数据准备度'}
             actionLoading={checkingQuality}
+            actionDisabled={!amapReady}
             onAction={runQualityCheck}
           >
             {qualityError && (
@@ -542,471 +659,115 @@ export default function ProjectDetailPage() {
 
             {!qualityResult && !qualityError && (
               <Space wrap>
-                <Statistic title="数据完整度" value="--" />
+                <Statistic title="数据准备度" value="--" />
                 <Tag>缺失字段：暂未检查</Tag>
               </Space>
             )}
 
             {qualityResult && (
-              <Space direction="vertical" size={12} style={{width: '100%'}}>
-                <Card size="small" title="数据完整度">
-                  <Progress
-                    percent={qualityScore}
-                    status={qualityScore >= 80 ? 'success' : 'normal'}
-                    strokeColor={qualityScore >= 80 ? '#389e0d' : '#d48806'}
-                  />
-                </Card>
-
-                <Row gutter={12}>
-                  <Col xs={24} md={12}>
-                    <Card size="small" title={`缺失数据（${missingItems.length}项）`}>
-                      {missingItems.length > 0 ? (
-                        <List size="small" dataSource={missingItems} renderItem={item => <List.Item>{item}</List.Item>} />
-                      ) : (
-                        <Typography.Text type="secondary">未发现明显缺失数据</Typography.Text>
-                      )}
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Card size="small" title={`风险提示（${warningItems.length}项）`}>
-                      {warningItems.length > 0 ? (
-                        <List size="small" dataSource={warningItems} renderItem={item => <List.Item>{item}</List.Item>} />
-                      ) : (
-                        <Typography.Text type="secondary">当前没有额外风险提示</Typography.Text>
-                      )}
-                    </Card>
-                  </Col>
-                </Row>
-
-                <Card size="small" title="竞品详情完整度">
-                  <Typography.Paragraph>
-                    已确认 {Number(competitorDetailQuality?.confirmed_competitors) || 0} 个竞品，
-                    其中 {Number(competitorDetailQuality?.incomplete_competitors) || 0} 个缺少经营信息。
-                  </Typography.Paragraph>
-
-                  {competitorMissingSummary.length > 0 ? (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>缺失较多的字段</Typography.Text>}
-                      dataSource={competitorMissingSummary}
-                      renderItem={(item: any) => (
-                        <List.Item>
-                          <Space wrap>
-                            <Tag color={item?.importance === 'important' ? 'red' : 'blue'}>
-                              {item?.importance === 'important' ? '关键' : '建议'}
-                            </Tag>
-                            <Typography.Text>{safeText(item?.label)}：{Number(item?.missing_count) || 0} 家未填写</Typography.Text>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {Number(competitorDetailQuality?.confirmed_competitors) > 0
-                        ? '已确认竞品的重要经营信息基本完整。'
-                        : '尚无已确认竞品，确认后系统将检查其经营信息完整度。'}
-                    </Typography.Text>
-                  )}
-
-                  {incompleteCompetitors.length > 0 && (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>需要继续补充的竞品</Typography.Text>}
-                      dataSource={incompleteCompetitors}
-                      renderItem={(item: any) => (
-                        <List.Item
-                          actions={[
-                            <Button
-                              key="continue"
-                              size="small"
-                              onClick={() => locateCompetitorDetail(Number(item?.competitor_id))}
-                            >
-                              继续补充
-                            </Button>,
-                          ]}
-                        >
-                          <List.Item.Meta
-                            title={safeText(item?.name)}
-                            description={`缺少：${stringList(item?.missing_fields).join('、') || '经营信息'}`}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  )}
-
-                  {incompleteCompetitors.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      style={{marginTop: 12}}
-                      message="建议补充竞品经营信息后再生成 AI 报告，以提高分析准确度。"
-                    />
-                  )}
-                </Card>
-
-                <Card size="small" title="周边配套完整度">
-                  <Typography.Paragraph>
-                    周边已确认 {Number(supportingDetailQuality?.total_confirmed) || 0} 家商户，
-                    已完整补充 {Number(supportingDetailQuality?.completed) || 0} 家，
-                    其中 {Number(supportingDetailQuality?.incomplete) || 0} 家缺少营业详情。
-                  </Typography.Paragraph>
-
-                  {supportingMissingSummary.length > 0 ? (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>缺失字段汇总</Typography.Text>}
-                      dataSource={supportingMissingSummary}
-                      renderItem={(item: any) => (
-                        <List.Item>
-                          <Typography.Text>{safeText(item?.label)}：{Number(item?.missing_count) || 0} 家未填写</Typography.Text>
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {Number(supportingDetailQuality?.total_confirmed) > 0
-                        ? '已确认配套的关键营业详情基本完整。'
-                        : '尚无已确认配套，确认后系统将检查营业详情完整度。'}
-                    </Typography.Text>
-                  )}
-
-                  {incompleteSupportingItems.length > 0 && (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>需要继续补充的周边配套</Typography.Text>}
-                      dataSource={incompleteSupportingItems}
-                      renderItem={(item: any) => (
-                        <List.Item
-                          actions={[
-                            <Button
-                              key="continue"
-                              size="small"
-                              onClick={() => locateSupportingDetail(String(item?.id || ''))}
-                            >
-                              继续补充
-                            </Button>,
-                          ]}
-                        >
-                          <List.Item.Meta
-                            title={safeText(item?.name)}
-                            description={`缺少：${stringList(item?.missing_fields).join('、') || '营业详情'}`}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  )}
-
-                  {incompleteSupportingItems.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      style={{marginTop: 12}}
-                      message="建议核实营业时间和夜间经营状态后再进行后续分析。"
-                    />
-                  )}
-                </Card>
-
-                <Card size="small" title="租金数据完整度">
-                  <Typography.Paragraph>
-                    已确认 {Number(rentQuality?.total_confirmed) || 0} 条租金，
-                    详情完整 {Number(rentQuality?.detail_completed) || 0} 条，
-                    其中 {Number(rentQuality?.incomplete) || 0} 条仍需补充。
-                  </Typography.Paragraph>
-
-                  {rentMissingSummary.length > 0 ? (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>缺失字段汇总</Typography.Text>}
-                      dataSource={rentMissingSummary}
-                      renderItem={(item: any) => (
-                        <List.Item>
-                          <Space wrap>
-                            <Tag color={item?.importance === 'core' ? 'red' : 'blue'}>
-                              {item?.importance === 'core' ? '核心' : '建议'}
-                            </Tag>
-                            <Typography.Text>
-                              {safeText(item?.label)}：{Number(item?.missing_count) || 0} 条未填写
-                            </Typography.Text>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {Number(rentQuality?.total_confirmed) > 0
-                        ? '已确认租金的核心字段和建议详情基本完整。'
-                        : '尚无已确认租金，确认后系统将检查租金数据完整度。'}
-                    </Typography.Text>
-                  )}
-
-                  {incompleteRentItems.length > 0 && (
-                    <List
-                      size="small"
-                      header={<Typography.Text strong>需要继续补充的租金记录</Typography.Text>}
-                      dataSource={incompleteRentItems}
-                      renderItem={(item: any) => (
-                        <List.Item
-                          actions={[
-                            <Button
-                              key="continue"
-                              size="small"
-                              onClick={() => locateRentDetail(Number(item?.rent_id))}
-                            >
-                              继续补充
-                            </Button>,
-                          ]}
-                        >
-                          <List.Item.Meta
-                            title={safeText(item?.address)}
-                            description={`缺少：${stringList(item?.missing_fields).join('、') || '租金详情'}`}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  )}
-
-                  {incompleteRentItems.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      style={{marginTop: 12}}
-                      message="建议核实租金地址、面积、月租金及物业来源信息后再进行成本分析。"
-                    />
-                  )}
-                </Card>
-
-                <Alert
-                  type={qualityScore >= 80 ? 'success' : 'warning'}
-                  showIcon
-                  message={qualityScore >= 80
-                    ? '数据基本完整，可以进入 AI 报告生成。'
-                    : '建议补充缺失数据后再生成报告。'}
-                />
-              </Space>
+              <ReadinessPanel
+                result={qualityResult}
+                onSupplement={() => navigate(`/projects/${projectId}/supplement`)}
+              />
             )}
 
+
             <Typography.Paragraph type="secondary" style={{marginTop: 12, marginBottom: 0}}>
-              当前人工补充数据为本地暂存，后续阶段将接入后端保存后参与核验。
+              准备度仅表示数据是否齐备，不代表项目推荐概率；人工补充会保存到当前项目。
             </Typography.Paragraph>
           </StepCard>
         </Col>
 
         <Col span={24}>
           <StepCard
-            step={6}
-            title="评分分析 → AI报告"
-            description="先根据现有项目数据生成结构化评分，再进入 AI 报告生成。"
-            icon={<RobotOutlined />}
-            actionText={scoring ? '正在分析选址条件...' : '开始评分分析'}
-            actionLoading={scoring}
-            actionFirst
-            onAction={runScoring}
+            step={5}
+            title="确认重要信息"
+            description="根据数据检查结果，确认影响选址结论的关键缺失信息。"
+            icon={<SafetyCertificateOutlined />}
+            status={stepStatus(5)}
+            prerequisite="先执行数据准备度检查"
+            actionText="查看并补充关键信息"
+            actionDisabled={!qualityResult}
+            onAction={() => navigate(`/projects/${projectId}/supplement`)}
           >
-            <Typography.Title level={5}>第一阶段：评分分析</Typography.Title>
-
-            {scoreError && (
+            {!qualityResult ? (
               <Alert
-                type="error"
+                type="info"
                 showIcon
-                style={{marginBottom: 12}}
-                message="评分分析失败"
-                description={scoreError}
+                message="请先执行数据检查，系统会列出需要确认的重要信息。"
               />
+            ) : missingItems.length > 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={`发现 ${missingItems.length} 项待确认信息`}
+                description={missingItems.slice(0, 5).join('；')}
+              />
+            ) : (
+              <Alert type="success" showIcon message="当前未发现明确的关键缺失信息。" />
             )}
+            <AIQuestionForm
+              projectId={projectId}
+              onSaved={async () => {
+                const refreshed = await getProjectDataQuality(projectId);
+                setQualityResult(refreshed);
+                setQualityError('');
+                setImportantInfoSaved(true);
+              }}
+            />
+          </StepCard>
+        </Col>
 
-            {!scoreResult && !scoreError && (
-              <Typography.Text type="secondary">尚未评分，请先完成数据核验后开始评分分析。</Typography.Text>
-            )}
-
-            {scoreResult && (
-              <Space direction="vertical" size={12} style={{width: '100%'}}>
-                <Row gutter={12}>
-                  <Col xs={24} md={8}>
-                    <Card size="small"><Statistic title="综合评分" value={scoreResult.total_score ?? '--'} suffix="分" /></Card>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Card size="small"><Statistic title="评级" value={safeText(scoreResult.level, '暂未评级')} /></Card>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Card size="small"><Statistic title="评分维度" value={dimensionEntries.length} suffix="项" /></Card>
-                  </Col>
-                </Row>
-
-                {dimensionEntries.length > 0 && (
-                  <Row gutter={[12, 12]}>
-                    {dimensionEntries.map(([key, value]) => (
-                      <Col xs={24} md={12} lg={8} key={key}>
-                        <Card size="small" title={DIMENSION_TEXT[key] || key}>
-                          <Statistic value={value?.score ?? '--'} suffix={value?.max !== undefined ? `/ ${value.max} 分` : '分'} />
-                          {key === 'competitor' && (
-                            <Descriptions column={1} size="small" style={{marginTop: 12}}>
-                              <Descriptions.Item label="竞争强度">
-                                {competitionLevelText[competitorAnalysis.competition_level] || '数据不足'}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="已确认竞品">
-                                {competitorAnalysis.confirmed_competitor_count ?? 0} 家
-                              </Descriptions.Item>
-                              <Descriptions.Item label="待核实竞品">
-                                {competitorAnalysis.pending_review_count ?? 0} 家
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均距离">
-                                {competitorAnalysis.average_distance == null
-                                  ? '未采集'
-                                  : `${competitorAnalysis.average_distance} 米`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均价格">
-                                {competitorAnalysis.average_hour_price == null
-                                  ? '经营信息不足'
-                                  : `${competitorAnalysis.average_hour_price} 元/小时`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均上座率">
-                                {competitorAnalysis.average_occupancy_rate == null
-                                  ? '经营信息不足'
-                                  : `${Math.round(Number(competitorAnalysis.average_occupancy_rate) * 100)}%`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均机器数量">
-                                {competitorAnalysis.average_machine_count == null
-                                  ? '经营信息不足'
-                                  : `${competitorAnalysis.average_machine_count} 台`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="常见显卡">
-                                {competitorAnalysis.common_gpu || '经营信息不足'}
-                              </Descriptions.Item>
-                            </Descriptions>
-                          )}
-                          {key === 'support' && (
-                            <>
-                              <Descriptions column={1} size="small" style={{marginTop: 12}}>
-                                <Descriptions.Item label="已确认餐饮">
-                                  {supportingAnalysis.food_count ?? 0} 家
-                                </Descriptions.Item>
-                                <Descriptions.Item label="夜间营业餐饮">
-                                  {supportingAnalysis.night_food_count ?? 0} 家
-                                </Descriptions.Item>
-                                <Descriptions.Item label="已确认娱乐">
-                                  {supportingAnalysis.entertainment_count ?? 0} 家
-                                </Descriptions.Item>
-                                <Descriptions.Item label="已核实夜间商业">
-                                  {supportingAnalysis.night_business_count ?? 0} 家
-                                </Descriptions.Item>
-                                <Descriptions.Item label="夜间活跃度">
-                                  {nightActivityLevelText[supportingAnalysis.night_activity_level] || '数据不足'}
-                                </Descriptions.Item>
-                                <Descriptions.Item label="详情完整度">
-                                  {supportingAnalysis.detail_completeness == null
-                                    ? '未检查'
-                                    : `${Math.round(Number(supportingAnalysis.detail_completeness) * 100)}%`}
-                                </Descriptions.Item>
-                              </Descriptions>
-                              {Number(supportingAnalysis.detail_completeness ?? 0) < 0.5 && (
-                                <Tag color="orange">夜间经营信息不足</Tag>
-                              )}
-                            </>
-                          )}
-                          {key === 'rent' && (
-                            <Descriptions column={1} size="small" style={{marginTop: 12}}>
-                              <Descriptions.Item label="有效租金样本">
-                                {rentAnalysis.confirmed_rent_count ?? 0} 条
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均面积">
-                                {rentAnalysis.average_area_sqm == null
-                                  ? '数据不足'
-                                  : `${rentAnalysis.average_area_sqm} ㎡`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均月租">
-                                {rentAnalysis.average_monthly_rent == null
-                                  ? '数据不足'
-                                  : `${rentAnalysis.average_monthly_rent} 元/月`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="平均单价">
-                                {rentAnalysis.average_rent_unit_price == null
-                                  ? '数据不足'
-                                  : `${rentAnalysis.average_rent_unit_price} 元/㎡/月`}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="租金压力">
-                                {rentPressureText[rentAnalysis.rent_pressure] || '数据不足'}
-                              </Descriptions.Item>
-                              <Descriptions.Item label="核心数据完整度">
-                                {rentAnalysis.data_completeness == null
-                                  ? '未检查'
-                                  : `${Math.round(Number(rentAnalysis.data_completeness) * 100)}%`}
-                              </Descriptions.Item>
-                            </Descriptions>
-                          )}
-                          {stringList(value?.reasons).length > 0 && (
-                            <List
-                              size="small"
-                              header={<Typography.Text strong>评分原因</Typography.Text>}
-                              dataSource={stringList(value.reasons)}
-                              renderItem={item => <List.Item>{item}</List.Item>}
-                            />
-                          )}
-                        </Card>
-                      </Col>
-                    ))}
-                  </Row>
-                )}
-
-                <Row gutter={12}>
-                  <Col xs={24} md={8}>
-                    <Card size="small" title="主要优势">
-                      {scoreAdvantages.length > 0
-                        ? <List size="small" dataSource={scoreAdvantages} renderItem={item => <List.Item>{item}</List.Item>} />
-                        : <Typography.Text type="secondary">暂无明确优势项</Typography.Text>}
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Card size="small" title="风险提示">
-                      {scoreRisks.length > 0
-                        ? <List size="small" dataSource={scoreRisks} renderItem={item => <List.Item>{item}</List.Item>} />
-                        : <Typography.Text type="secondary">暂无额外风险提示</Typography.Text>}
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Card size="small" title="建议补充">
-                      {scoreMissing.length > 0
-                        ? <List size="small" dataSource={scoreMissing} renderItem={item => <List.Item>{item}</List.Item>} />
-                        : <Typography.Text type="secondary">当前没有评分所需的缺失项</Typography.Text>}
-                    </Card>
-                  </Col>
-                </Row>
-              </Space>
-            )}
-
-            <Divider />
-            <Typography.Title level={5}>第二阶段：AI报告生成</Typography.Title>
+        <Col span={24}>
+          <StepCard
+            step={6}
+            title="生成 AI 选址报告"
+            description="使用已采集和人工确认的数据生成选址分析报告；缺失信息会在报告中明确说明。"
+            icon={<FileTextOutlined />}
+            status={stepStatus(6)}
+            prerequisite="先执行数据准备度检查，并确认重要信息"
+            actionText={generatingReport ? '正在生成选址分析报告...' : '生成 AI 报告'}
+            actionLoading={generatingReport}
+            actionDisabled={!qualityResult}
+            onAction={runReportGeneration}
+          >
             <Space direction="vertical" size={12} style={{width: '100%'}}>
-              <Space wrap>
-                <FileTextOutlined />
-                <Typography.Text type="secondary">
-                  {scoreResult ? '评分已完成，可以生成 AI 选址分析报告。' : '请先完成评分分析，再生成 AI 报告。'}
-                </Typography.Text>
-                <Button
-                  type="primary"
-                  disabled={!scoreResult}
-                  loading={generatingReport}
-                  icon={<CheckCircleOutlined />}
-                  onClick={runReportGeneration}
-                >
-                  {generatingReport ? '正在生成选址分析报告...' : '生成 AI 报告'}
-                </Button>
-              </Space>
-
               {reportError && (
                 <Alert type="error" showIcon message="报告生成失败" description={reportError} />
               )}
 
               {reportResult?.content && (
-                <Card title="电竞馆选址分析报告" className="ai-report-card">
-                  <MarkdownReport content={reportResult.content} />
+                <Card
+                  title="电竞馆选址分析报告"
+                  className="ai-report-card"
+                  extra={(
+                    <Space className="report-actions" wrap>
+                      <Button icon={<DownloadOutlined />} onClick={exportReportHtml}>导出 HTML</Button>
+                      <Button icon={<PrinterOutlined />} onClick={printReport}>打印 / PDF</Button>
+                    </Space>
+                  )}
+                >
+                  <div ref={reportRef} className="report-export-root">
+                    <Alert
+                      type="success"
+                      showIcon
+                      style={{marginBottom: 16}}
+                      message={reportResult.validation_status === 'passed' ? '真实性校验已通过' : '系统生成的数据不足报告'}
+                      description="报告只读取高德事实、用户人工提供信息和确定性计算；每次重新生成都会保存独立快照版本。"
+                    />
+                    <MarkdownReport content={reportResult.content} showToc />
+                  </div>
+                  <div className="report-bottom-actions report-actions">
+                    <Typography.Text type="secondary">报告核对完成后，可导出 HTML 或使用浏览器打印为 PDF。</Typography.Text>
+                    <Space wrap>
+                      <Button icon={<DownloadOutlined />} onClick={exportReportHtml}>导出 HTML</Button>
+                      <Button type="primary" icon={<PrinterOutlined />} onClick={printReport}>打印 / PDF</Button>
+                    </Space>
+                  </div>
                 </Card>
               )}
             </Space>
           </StepCard>
-        </Col>
-
-        <Col span={24}>
-          <ProjectAssistant projectId={projectId} />
         </Col>
       </Row>
     </div>

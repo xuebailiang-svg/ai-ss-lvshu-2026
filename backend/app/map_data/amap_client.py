@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import re
 from typing import Any
 
 import httpx
@@ -22,10 +24,73 @@ class AmapConfigError(RuntimeError):
     pass
 
 
+class AmapRequestError(RuntimeError):
+    def __init__(self, code: str, message: str, *, infocode: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.infocode = infocode
+
+
+def _normalized_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def poi_identity(poi: dict[str, Any]) -> tuple[Any, ...]:
+    amap_id = str(poi.get("id") or "").strip()
+    if amap_id:
+        return ("amap_id", amap_id)
+    location = str(poi.get("location") or "")
+    longitude, latitude = "", ""
+    if "," in location:
+        longitude, latitude = location.split(",", 1)
+    try:
+        longitude = f"{float(longitude):.6f}"
+        latitude = f"{float(latitude):.6f}"
+    except (TypeError, ValueError):
+        pass
+    return (
+        "fallback",
+        _normalized_text(poi.get("name")),
+        _normalized_text(poi.get("address")),
+        longitude,
+        latitude,
+    )
+
+
+def _distance_meters(poi: dict[str, Any], longitude: float, latitude: float) -> float | None:
+    try:
+        return float(poi.get("distance"))
+    except (TypeError, ValueError):
+        pass
+    location = str(poi.get("location") or "")
+    if "," not in location:
+        return None
+    try:
+        poi_lng, poi_lat = (float(item) for item in location.split(",", 1))
+    except (TypeError, ValueError):
+        return None
+    radius = 6_371_000.0
+    lat1, lat2 = math.radians(latitude), math.radians(poi_lat)
+    delta_lat = math.radians(poi_lat - latitude)
+    delta_lng = math.radians(poi_lng - longitude)
+    value = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(value))
+
+
 class AmapMapDataClient:
     base_url = "https://restapi.amap.com/v3"
 
-    def __init__(self, *, key: str | None = None, mock: bool | None = None, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        *,
+        key: str | None = None,
+        mock: bool | None = None,
+        client: httpx.AsyncClient | None = None,
+        page_size: int | None = None,
+        max_pages_per_keyword: int | None = None,
+        max_records_per_category: int | None = None,
+        rate_limit_seconds: float | None = None,
+    ):
         settings = get_settings()
         from app.system_config.service import resolve_config_value
 
@@ -34,79 +99,88 @@ class AmapMapDataClient:
         ).strip()
         self.mock = settings.amap_mock if mock is None else mock
         self.client = client
+        self.page_size = max(1, min(25, page_size or settings.amap_poi_page_size))
+        self.max_pages_per_keyword = max(1, max_pages_per_keyword or settings.amap_poi_max_pages_per_keyword)
+        self.max_records_per_category = max(1, max_records_per_category or settings.amap_poi_max_records_per_category)
+        self.rate_limit_seconds = max(
+            0.0,
+            settings.amap_poi_rate_limit_seconds if rate_limit_seconds is None else rate_limit_seconds,
+        )
 
     def ensure_configured(self) -> None:
         if not self.key and not self.mock:
             raise AmapConfigError("AMAP_WEB_SERVICE_KEY未配置")
+
+    async def _request_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        try:
+            response = await client.get(
+                f"{self.base_url}/{path}",
+                params=params,
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except httpx.TimeoutException as exc:
+            raise AmapRequestError("timeout", "高德接口请求超时，请稍后重试") from exc
+        except httpx.HTTPStatusError as exc:
+            raise AmapRequestError("http_error", f"高德接口返回 HTTP {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise AmapRequestError("network_error", "无法连接高德接口，请检查服务器网络") from exc
+        except ValueError as exc:
+            raise AmapRequestError("invalid_response", "高德接口返回内容无法解析") from exc
+        if not isinstance(data, dict):
+            raise AmapRequestError("invalid_response", "高德接口返回格式异常")
+        if str(data.get("status")) != "1":
+            info = str(data.get("info") or "unknown error")
+            infocode = str(data.get("infocode") or "")
+            raise AmapRequestError("amap_error", f"高德接口请求失败：{info} ({infocode})", infocode=infocode)
+        return data
 
     async def check_connectivity(self, *, timeout_seconds: float = 3.0) -> dict[str, Any]:
         """使用固定地址执行轻量检查，不向调用层暴露带 Key 的请求 URL。"""
         self.ensure_configured()
         if self.mock:
             return {"status": "1", "info": "OK", "infocode": "10000", "mock": True}
-
         owns_client = self.client is None
         client = self.client or httpx.AsyncClient(timeout=timeout_seconds)
         try:
-            response = await client.get(
-                f"{self.base_url}/geocode/geo",
-                params={
-                    "key": self.key,
-                    "city": "西安市",
-                    "address": "小寨地铁站",
-                    "output": "JSON",
-                },
-                timeout=timeout_seconds,
+            return await self._request_json(
+                client,
+                "geocode/geo",
+                {"key": self.key, "city": "西安市", "address": "小寨地铁站", "output": "JSON"},
+                timeout_seconds=timeout_seconds,
             )
-            response.raise_for_status()
-            data = response.json()
-            return data if isinstance(data, dict) else {}
         finally:
             if owns_client:
                 await client.aclose()
 
-    async def geocode(
-        self,
-        *,
-        city: str,
-        address: str,
-        timeout_seconds: float = 8.0,
-    ) -> dict[str, Any]:
+    async def geocode(self, *, city: str, address: str, timeout_seconds: float = 8.0) -> dict[str, Any]:
         self.ensure_configured()
         if self.mock:
             return {
                 "status": "1",
-                "geocodes": [
-                    {
-                        "formatted_address": f"{city}{address}",
-                        "location": "108.946767,34.222838",
-                    }
-                ],
+                "geocodes": [{"formatted_address": f"{city}{address}", "location": "108.946767,34.222838"}],
                 "mock": True,
             }
-
         owns_client = self.client is None
         client = self.client or httpx.AsyncClient(timeout=timeout_seconds)
         try:
-            response = await client.get(
-                f"{self.base_url}/geocode/geo",
-                params={
-                    "key": self.key,
-                    "city": city,
-                    "address": address,
-                    "output": "JSON",
-                },
-                timeout=timeout_seconds,
+            data = await self._request_json(
+                client,
+                "geocode/geo",
+                {"key": self.key, "city": city, "address": address, "output": "JSON"},
+                timeout_seconds=timeout_seconds,
             )
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict) or str(data.get("status")) != "1":
-                info = str(data.get("info", "unknown error")) if isinstance(data, dict) else "invalid response"
-                infocode = str(data.get("infocode", "")) if isinstance(data, dict) else ""
-                raise RuntimeError(f"Amap geocode failed: {info} ({infocode})")
             geocodes = data.get("geocodes")
             if not isinstance(geocodes, list) or not geocodes:
-                raise RuntimeError("Amap geocode returned no result")
+                raise AmapRequestError("no_geocode_result", "高德地址解析没有返回候选地址")
             return data
         finally:
             if owns_client:
@@ -123,73 +197,158 @@ class AmapMapDataClient:
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         self.ensure_configured()
         if self.mock:
-            return self._mock_pois(longitude=longitude, latitude=latitude), {"mock": True}
+            rows = self._mock_pois(longitude=longitude, latitude=latitude)
+            return rows, {
+                "mock": True,
+                "query_count": 1,
+                "successful_query_count": 1,
+                "failed_query_count": 0,
+                "raw_return_count": len(rows),
+                "effective_count": len(rows),
+                "unique_count": len(rows),
+                "duplicate_count": 0,
+                "outside_radius_count": 0,
+                "truncated": False,
+                "category_summary": {},
+                "queries": [],
+                "failed_keywords": [],
+            }
 
-        rows: list[dict[str, Any]] = []
-        diagnostics: dict[str, Any] = {"queries": [], "failed_keywords": []}
+        unique_rows: dict[tuple[Any, ...], dict[str, Any]] = {}
+        diagnostics: dict[str, Any] = {"queries": [], "failed_keywords": [], "category_summary": {}}
+        raw_return_count = 0
+        effective_count = 0
+        duplicate_count = 0
+        outside_radius_count = 0
+        truncated = False
         owns_client = self.client is None
         client = self.client or httpx.AsyncClient(timeout=15)
         try:
             for category, keywords in (category_keywords or AMAP_CATEGORY_KEYWORDS).items():
+                category_keys: set[tuple[Any, ...]] = set()
+                category_raw = 0
+                category_truncated = False
                 for keyword in keywords:
-                    params: dict[str, Any] = {
-                        "key": self.key,
-                        "location": f"{longitude},{latitude}",
-                        "radius": radius_meters,
-                        "keywords": keyword,
-                        "offset": 20,
-                        "page": 1,
-                        "extensions": "all",
-                        "output": "JSON",
-                        "citylimit": "false",
-                        "sortrule": "distance",
-                    }
-                    if city:
-                        params["city"] = city
-                    try:
-                        data = await self._get_place_around(client, params)
-                    except Exception as exc:  # noqa: BLE001 - 采集服务需要容错记录单个关键词失败
-                        diagnostics["failed_keywords"].append(
-                            {"category": category, "keyword": keyword, "message": str(exc)}
-                        )
-                        diagnostics["queries"].append(
-                            {"category": category, "keyword": keyword, "status": "failed", "count": 0}
-                        )
-                        await asyncio.sleep(0.3)
-                        continue
+                    if len(category_keys) >= self.max_records_per_category:
+                        category_truncated = True
+                        truncated = True
+                        break
+                    query_raw = 0
+                    query_unique_before = len(category_keys)
+                    pages_fetched = 0
+                    query_failed = False
+                    total_available: int | None = None
+                    for page in range(1, self.max_pages_per_keyword + 1):
+                        params: dict[str, Any] = {
+                            "key": self.key,
+                            "location": f"{longitude},{latitude}",
+                            "radius": radius_meters,
+                            "keywords": keyword,
+                            "offset": self.page_size,
+                            "page": page,
+                            "extensions": "all",
+                            "output": "JSON",
+                            "citylimit": "false",
+                            "sortrule": "distance",
+                        }
+                        if city:
+                            params["city"] = city
+                        try:
+                            data = await self._get_place_around(client, params)
+                        except AmapRequestError as exc:
+                            diagnostics["failed_keywords"].append(
+                                {"category": category, "keyword": keyword, "code": exc.code, "message": str(exc)}
+                            )
+                            query_failed = True
+                            break
 
-                    pois = data.get("pois") if isinstance(data, dict) else []
-                    if not isinstance(pois, list):
-                        pois = []
-                    for poi in pois:
-                        if isinstance(poi, dict):
-                            rows.append({"category": category, "sub_category": keyword, **poi})
+                        pages_fetched += 1
+                        try:
+                            total_available = int(data.get("count"))
+                        except (TypeError, ValueError):
+                            total_available = None
+                        pois = data.get("pois")
+                        if not isinstance(pois, list):
+                            pois = []
+                        query_raw += len(pois)
+                        category_raw += len(pois)
+                        raw_return_count += len(pois)
+                        for poi in pois:
+                            if not isinstance(poi, dict):
+                                continue
+                            distance = _distance_meters(poi, longitude, latitude)
+                            if distance is not None and distance > radius_meters:
+                                outside_radius_count += 1
+                                continue
+                            effective_count += 1
+                            enriched = {"category": category, "sub_category": keyword, **poi}
+                            identity = poi_identity(enriched)
+                            if identity in unique_rows:
+                                duplicate_count += 1
+                                continue
+                            if len(category_keys) >= self.max_records_per_category:
+                                category_truncated = True
+                                truncated = True
+                                break
+                            unique_rows[identity] = enriched
+                            category_keys.add(identity)
+                        if len(category_keys) >= self.max_records_per_category:
+                            category_truncated = True
+                            truncated = True
+                            break
+                        if not pois or len(pois) < self.page_size:
+                            break
+                        if total_available is not None and page * self.page_size >= total_available:
+                            break
+                        if page == self.max_pages_per_keyword:
+                            category_truncated = True
+                            truncated = True
+                        if self.rate_limit_seconds:
+                            await asyncio.sleep(self.rate_limit_seconds)
+
                     diagnostics["queries"].append(
                         {
                             "category": category,
                             "keyword": keyword,
-                            "status": "success",
-                            "count": len(pois),
-                            "infocode": data.get("infocode"),
-                            "info": data.get("info"),
+                            "status": "failed" if query_failed else "success",
+                            "pages_fetched": pages_fetched,
+                            "raw_count": query_raw,
+                            "unique_count": len(category_keys) - query_unique_before,
+                            "total_available": total_available,
+                            "truncated": category_truncated,
                         }
                     )
-                    await asyncio.sleep(0.3)
+                    if self.rate_limit_seconds:
+                        await asyncio.sleep(self.rate_limit_seconds)
+
+                diagnostics["category_summary"][category] = {
+                    "raw_count": category_raw,
+                    "unique_count": len(category_keys),
+                    "truncated": category_truncated,
+                }
         finally:
             if owns_client:
                 await client.aclose()
-        diagnostics["raw_count"] = len(rows)
-        return rows, diagnostics
+
+        query_count = len(diagnostics["queries"])
+        failed_count = sum(1 for item in diagnostics["queries"] if item["status"] == "failed")
+        diagnostics.update(
+            {
+                "query_count": query_count,
+                "successful_query_count": query_count - failed_count,
+                "failed_query_count": failed_count,
+                "raw_return_count": raw_return_count,
+                "effective_count": effective_count,
+                "unique_count": len(unique_rows),
+                "duplicate_count": duplicate_count,
+                "outside_radius_count": outside_radius_count,
+                "truncated": truncated,
+            }
+        )
+        return list(unique_rows.values()), diagnostics
 
     async def _get_place_around(self, client: httpx.AsyncClient, params: dict[str, Any]) -> dict[str, Any]:
-        response = await client.get(f"{self.base_url}/place/around", params=params)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("status") != "1":
-            info = str(data.get("info", "unknown error"))
-            infocode = str(data.get("infocode", ""))
-            raise RuntimeError(f"Amap place/around failed: {info} ({infocode})")
-        return data
+        return await self._request_json(client, "place/around", params)
 
     @staticmethod
     def _mock_pois(*, longitude: float, latitude: float) -> list[dict[str, Any]]:

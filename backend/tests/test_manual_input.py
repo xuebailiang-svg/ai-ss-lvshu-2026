@@ -116,7 +116,7 @@ def test_manual_data_overrides_empty_amap_competitor_fields(client):
 
     dataset = client.get(f"/api/projects/{project_id}/dataset").json()
     competitor = dataset["competitors"][0]
-    assert competitor["source"] == "manual"
+    assert competitor["source"] == "amap"
     assert competitor["hour_price"] == 18
     assert competitor["occupancy_rate"] == 0.75
     assert competitor["gpu"] == "RTX 4060"
@@ -159,7 +159,7 @@ def test_manual_competitor_accepts_workspace_form_fields(client):
     updated = response.json()["updated"]
     assert updated["distance_meters"] == 350
     assert updated["hour_price"] == 16
-    assert updated["raw_data"]["business_hours"] == "10:00-02:00"
+    assert updated["raw_data"]["manual_detail"]["business_hours"] == "10:00-02:00"
 
 
 def test_manual_input_history_is_saved(client):
@@ -210,3 +210,36 @@ def test_data_quality_improves_after_manual_input(client):
 
     after = client.get(f"/api/projects/{project_id}/data-quality").json()["quality_score"]
     assert after > before
+
+
+def test_candidate_property_manual_input_upserts_and_records_history(client):
+    project_id = create_project(client)
+    first = client.post(
+        f"/api/projects/{project_id}/manual-input",
+        json={
+            "type": "property",
+            "target_id": "primary",
+            "data": {
+                "address": "候选物业A",
+                "area_sqm": 520,
+                "monthly_rent": 32000,
+                "use_allowed": True,
+                "unknown_fields": ["fire_confirmed"],
+            },
+        },
+    )
+    second = client.post(
+        f"/api/projects/{project_id}/manual-input",
+        json={"type": "property", "target_id": "primary", "data": {"monthly_rent": 30000}},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    dataset = client.get(f"/api/projects/{project_id}/dataset").json()
+    properties = [item for item in dataset["supplements"] if item["target_type"] == "candidate_property"]
+    assert len(properties) == 1
+    assert properties[0]["value"]["address"] == "候选物业A"
+    assert properties[0]["value"]["monthly_rent"] == 30000
+    assert properties[0]["raw_data"]["_manual_meta"]["unknown_fields"] == ["fire_confirmed"]
+    history = client.get(f"/api/projects/{project_id}/manual-inputs").json()["items"]
+    assert sum(item["field_name"] == "monthly_rent" for item in history) == 2

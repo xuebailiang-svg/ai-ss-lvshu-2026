@@ -180,7 +180,7 @@ def test_rejected_competitor_is_excluded_from_effective_stats_and_dataset(client
     review_list = client.get(f"/api/projects/{project_id}/competitors").json()
 
     assert project["stats"]["competitor_count"] == 0
-    assert "竞品数据" in quality["missing"]
+    assert "疑似竞品清单" in quality["missing"]
     assert dataset["competitors"] == []
     assert review_list["items"][0]["status"] == "rejected"
     assert quality["competitor_detail_quality"]["total_competitors"] == 0
@@ -241,6 +241,44 @@ def test_get_and_update_competitor_detail_preserves_raw_data(client, monkeypatch
     assert raw_data["id"] == "amap-competitor-1"
     assert raw_data["manual_detail"]["business_hours"] == "24小时"
     assert raw_data["manual_detail"]["remark"] == "现场人工调研"
+
+
+def test_competitor_manual_audit_tracks_unknown_and_history(client, monkeypatch):
+    project_id, competitor_id = collect_competitor_for_review(client, monkeypatch)
+    client.post(
+        f"/api/projects/{project_id}/competitors/{competitor_id}/review",
+        json={"status": "confirmed"},
+    )
+    response = client.put(
+        f"/api/projects/{project_id}/competitors/{competitor_id}",
+        json={
+            "machine_count": 88,
+            "occupancy_observed_at": "2026-08-12 20:00",
+            "occupancy_period": "weekday_night",
+            "survey_method": "onsite",
+            "unknown_fields": ["member_price", "opening_date"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["machine_count"] == 88
+    assert body["occupancy_period"] == "weekday_night"
+    assert body["manual_meta"]["field_sources"]["machine_count"] == "manual"
+    assert body["manual_meta"]["field_sources"]["member_price"] == "manual_unknown"
+    assert set(body["manual_meta"]["unknown_fields"]) >= {"member_price", "opening_date"}
+    assert body["manual_meta"]["history_count"] >= 4
+
+    history = client.get(f"/api/projects/{project_id}/manual-inputs").json()["items"]
+    assert {item["field_name"] for item in history} >= {"status", "machine_count", "survey_method"}
+
+    cleared = client.put(
+        f"/api/projects/{project_id}/competitors/{competitor_id}",
+        json={"unknown_fields": []},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["manual_meta"]["unknown_fields"] == []
+    assert "member_price" not in cleared.json()["manual_meta"]["field_sources"]
 
 
 def test_competitor_detail_cannot_update_other_project_record(client, monkeypatch):

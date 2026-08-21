@@ -183,6 +183,10 @@ APP_ENV=production
 DATABASE_URL=postgresql+psycopg://site_selection:${db_password_url}@127.0.0.1:5432/site_selection
 AMAP_WEB_SERVICE_KEY=${amap_key}
 AMAP_MOCK=false
+AMAP_POI_PAGE_SIZE=20
+AMAP_POI_MAX_PAGES_PER_KEYWORD=3
+AMAP_POI_MAX_RECORDS_PER_CATEGORY=100
+AMAP_POI_RATE_LIMIT_SECONDS=0.3
 SCORING_CONFIG_PATH=app/scoring/default.yaml
 ENABLE_TRACE=true
 ENABLE_FEEDBACK=true
@@ -251,6 +255,25 @@ ensure_security_settings() {
   chmod 0640 "${ENV_FILE}"
   if [[ "${changed}" == true ]]; then
     echo "OK: 已补充配置中心安全密钥（未打印完整值）"
+  fi
+}
+
+ensure_amap_settings() {
+  local changed=false
+  declare -A defaults=(
+    [AMAP_POI_PAGE_SIZE]=20
+    [AMAP_POI_MAX_PAGES_PER_KEYWORD]=3
+    [AMAP_POI_MAX_RECORDS_PER_CATEGORY]=100
+    [AMAP_POI_RATE_LIMIT_SECONDS]=0.3
+  )
+  for key in "${!defaults[@]}"; do
+    if ! grep -q "^${key}=" "${ENV_FILE}"; then
+      printf '%s=%s\n' "${key}" "${defaults[$key]}" >>"${ENV_FILE}"
+      changed=true
+    fi
+  done
+  if [[ "${changed}" == true ]]; then
+    echo "OK: 已补齐高德 POI 分页和数量限制配置"
   fi
 }
 
@@ -414,7 +437,7 @@ install_backend() {
   "${APP_ROOT}/backend/.venv/bin/pip" uninstall -y crawl4ai playwright >/dev/null 2>&1 || true
   "${APP_ROOT}/backend/.venv/bin/pip" install -r "${APP_ROOT}/backend/requirements.txt"
   "${APP_ROOT}/backend/.venv/bin/pip" install -e "${APP_ROOT}/backend"
-  runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/alembic upgrade head"
+  runuser -u "${APP_USER}" -- bash -c "set -a; source '${ENV_FILE}'; set +a; cd '${APP_ROOT}/backend'; .venv/bin/python -m app.core.migration_compat && .venv/bin/alembic upgrade head"
 }
 
 backup_before_migration() {
@@ -658,6 +681,7 @@ main() {
   ensure_user_and_dirs
   ensure_backend_env
   ensure_security_settings
+  ensure_amap_settings
   ensure_crawler_settings
   ensure_government_data_settings
   normalize_frontend_runtime_config

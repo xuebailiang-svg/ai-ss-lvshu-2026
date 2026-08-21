@@ -38,7 +38,7 @@ class RentListItem(BaseModel):
     timestamp: datetime | None = None
     missing_fields: list[str] = Field(default_factory=list)
     detail_completed: bool = False
-    crawler_suggestion: dict | None = None
+    manual_meta: dict = Field(default_factory=dict)
 
 
 class RentListResponse(BaseModel):
@@ -69,9 +69,22 @@ class RentDetailResponse(RentListItem):
 class RentDetailUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    address: str | None = None
+    area_sqm: float | None = Field(default=None, ge=0)
+    monthly_rent: float | None = Field(default=None, ge=0)
+    property_fee: float | None = Field(default=None, ge=0)
+    transfer_fee: float | None = Field(default=None, ge=0)
     property_type: str | None = None
     floor: str | None = None
     location_remark: str | None = None
     source_url: str | None = None
     publish_date: str | None = None
     rent_remark: str | None = None
+    power_capacity_kw: float | None = Field(default=None, ge=0)
+    power_sufficient: bool | None = None
+    use_allowed: bool | None = None
+    fire_confirmed: bool | None = None
+    network_carriers: str | None = None
+    dual_line_supported: bool | None = None
+    night_entrance: bool | None = None
+    unknown_fields: list[str] = Field(default_factory=list)

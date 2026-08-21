@@ -15,6 +15,10 @@ class Settings(BaseModel):
     database_url: str
     amap_web_service_key: str
     amap_mock: bool
+    amap_poi_page_size: int
+    amap_poi_max_pages_per_keyword: int
+    amap_poi_max_records_per_category: int
+    amap_poi_rate_limit_seconds: float
     scoring_config_path: str
     enable_debug_endpoints: bool
     enable_trace: bool
@@ -59,6 +63,10 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL","sqlite:///./site_selection.db"),
         amap_web_service_key=os.getenv("AMAP_WEB_SERVICE_KEY",""),
         amap_mock=env_bool("AMAP_MOCK", False),
+        amap_poi_page_size=max(1, min(25, int(os.getenv("AMAP_POI_PAGE_SIZE", "20")))),
+        amap_poi_max_pages_per_keyword=max(1, int(os.getenv("AMAP_POI_MAX_PAGES_PER_KEYWORD", "3"))),
+        amap_poi_max_records_per_category=max(1, int(os.getenv("AMAP_POI_MAX_RECORDS_PER_CATEGORY", "100"))),
+        amap_poi_rate_limit_seconds=max(0, float(os.getenv("AMAP_POI_RATE_LIMIT_SECONDS", "0.3"))),
         scoring_config_path=os.getenv("SCORING_CONFIG_PATH","app/scoring/default.yaml"),
         enable_debug_endpoints=env_bool("ENABLE_DEBUG_ENDPOINTS", False) or enable_debug_api,
         enable_trace=env_bool("ENABLE_TRACE", True),

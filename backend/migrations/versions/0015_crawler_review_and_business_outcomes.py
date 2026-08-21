@@ -1,7 +1,7 @@
 """crawler field review and business outcomes
 
 Revision ID: 0015_crawler_review_outcomes
-Revises: 0014_backfill_amap_business_hours
+Revises: 0014_amap_hours
 Create Date: 2026-08-02
 """
 
@@ -12,7 +12,7 @@ from migrations.helpers import table_exists
 
 
 revision = "0015_crawler_review_outcomes"
-down_revision = "0014_backfill_amap_business_hours"
+down_revision = "0014_amap_hours"
 branch_labels = None
 depends_on = None
 

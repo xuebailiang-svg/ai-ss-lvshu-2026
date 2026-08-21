@@ -1,904 +1,278 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
-import {
-  Alert,
-  Button,
-  Card,
-  Col,
-  Form,
-  Input,
-  InputNumber,
-  List,
-  Row,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-  message,
-} from 'antd';
-import {CheckCircleOutlined, PlusOutlined, ReloadOutlined, SaveOutlined} from '@ant-design/icons';
+import {useEffect, useState} from 'react';
+import {Alert, Button, Card, Col, Form, Input, Row, Space, Tag, Typography, message} from 'antd';
+import {CheckCircleOutlined, ReloadOutlined, SaveOutlined} from '@ant-design/icons';
 import {
   getManagedSystemConfig,
   testManagedSystemConfig,
   updateManagedSystemConfig,
   verifyManagedSystemConfigToken,
 } from '../api/client';
-import {
-  checkDataSourceConnectivity,
-  getCrawlerRuntimeStatus,
-  getDataSourceStatus,
-  type CrawlerRuntimeStatus,
-  type ConnectivityCheck,
-  type DataSourceStatus,
-} from '../api/dataSources';
-import {
-  getScoringConfig,
-  resetScoringConfig,
-  updateScoringConfig,
-  type ScoringDimensionConfig,
-  type ScoringFactorConfig,
-} from '../api/scoringConfig';
-import {
-  createMemory,
-  listMemory,
-  reviewMemory,
-  type MemoryItem,
-  type MemoryStatus,
-} from '../api/memory';
-import GovernmentStatsAdminPanel from '../components/GovernmentStatsAdminPanel';
 
-type CheckState = ConnectivityCheck | {success: false; message: string; latency_ms?: number} | 'loading' | undefined;
+type ProviderName = 'deepseek' | 'amap';
+type CheckState = {success: boolean; message: string; latency_ms?: number} | 'loading' | undefined;
 
-function statusTag(configured?: boolean, text?: string) {
-  return configured ? <Tag color="green">{text || '已配置'}</Tag> : <Tag color="red">{text || '未配置'}</Tag>;
-}
-
-function providerStatusText(status: string) {
-  if (status === 'available') return '可用';
-  if (status === 'disabled') return '已停用';
-  if (status === 'not_configured') return '未配置';
-  return status;
-}
-
-function splitDataSources(value: string) {
-  return value.split(/[,，、\s]+/).map(item => item.trim()).filter(Boolean);
-}
-
-function newKey(prefix: string) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
-}
-
-function checkAlert(provider: string, state: CheckState) {
-  if (!state) return null;
-  if (state === 'loading') {
-    return <Alert style={{marginTop: 8}} type="info" showIcon message={`${provider} 连接测试中...`} />;
+function errorText(error: any, fallback: string) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(item => item?.msg || item?.message || JSON.stringify(item)).join('；');
   }
-  const ok = 'success' in state ? state.success : state.reachable;
-  return (
-    <Alert
-      style={{marginTop: 8}}
-      type={ok ? 'success' : 'error'}
-      showIcon
-      message={ok ? `${provider} 测试成功` : `${provider} 测试失败`}
-      description={`${state.message}${state.latency_ms != null ? ` · ${state.latency_ms}ms` : ''}`}
-    />
-  );
+  if (detail && typeof detail === 'object') return detail.message || JSON.stringify(detail);
+  return error?.message || fallback;
+}
+
+function configuredTag(configured: boolean) {
+  return configured
+    ? <Tag color="green" icon={<CheckCircleOutlined />}>已配置</Tag>
+    : <Tag color="orange">未配置</Tag>;
 }
 
 export default function SystemConfig() {
+  const [form] = Form.useForm();
   const [token, setToken] = useState('');
   const [tokenStatus, setTokenStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
-  const [configForm] = Form.useForm();
-  const [memoryForm] = Form.useForm();
-  const [managedConfig, setManagedConfig] = useState<any>(null);
-  const [dataSources, setDataSources] = useState<DataSourceStatus[]>([]);
-  const [crawlerRuntime, setCrawlerRuntime] = useState<CrawlerRuntimeStatus | null>(null);
-  const [checks, setChecks] = useState<Record<string, CheckState>>({});
-  const [dimensions, setDimensions] = useState<ScoringDimensionConfig[]>([]);
-  const [memories, setMemories] = useState<MemoryItem[]>([]);
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [savingDimensions, setSavingDimensions] = useState(false);
-  const [crawlerDirty, setCrawlerDirty] = useState(false);
-  const configLoadedRef = useRef(false);
+  const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [configSaveFeedback, setConfigSaveFeedback] = useState<{
-    type: 'success' | 'error' | 'info' | 'warning';
-    message: string;
-    description?: string;
-  } | null>(null);
+  const [saving, setSaving] = useState<ProviderName | null>(null);
+  const [checks, setChecks] = useState<Record<ProviderName, CheckState>>({deepseek: undefined, amap: undefined});
+  const [feedback, setFeedback] = useState<{type: 'success' | 'error' | 'warning' | 'info'; message: string; description?: string} | null>(null);
 
-  const totalWeight = useMemo(
-    () => dimensions.filter(item => item.enabled).reduce((sum, item) => sum + Number(item.weight || 0), 0),
-    [dimensions],
-  );
-  const deepseekConfigured = Boolean(managedConfig?.deepseek?.configured);
-  const amapConfigured = Boolean(managedConfig?.amap?.configured || managedConfig?.amap_js?.configured);
-  const crawlerConfigured = Boolean(managedConfig?.crawler?.configured);
-  const governmentDataEnabled = Boolean(managedConfig?.gov_data_enabled);
-
-  const loadAll = async () => {
+  const load = async () => {
     setLoading(true);
     try {
-      const [config, sources, scoring, memory, crawlerRuntimeResult] = await Promise.all([
-        getManagedSystemConfig().catch(() => null),
-        getDataSourceStatus().catch(() => ({items: []})),
-        getScoringConfig().catch(() => ({dimensions: [], total_weight: 0, normalized: false})),
-        listMemory().catch(() => ({items: [], total: 0})),
-        getCrawlerRuntimeStatus().catch(() => null),
-      ]);
-      setManagedConfig(config);
-      setDataSources(sources.items || []);
-      setDimensions(scoring.dimensions || []);
-      setMemories(memory.items || []);
-      setCrawlerRuntime(crawlerRuntimeResult);
-      configForm.setFieldsValue({
-        deepseek_base_url: config?.deepseek_base_url || 'https://api.deepseek.com',
-        deepseek_model: config?.deepseek_model || 'deepseek-chat',
-        crawler_enabled: Boolean(config?.crawler_enabled),
-        crawler_provider: config?.crawler_provider || 'crawl4ai',
-        crawler_timeout_seconds: Number(config?.crawler_timeout_seconds || 60),
-        crawler_max_pages_per_task: Number(config?.crawler_max_pages_per_task || 5),
-        crawler_max_tasks_per_project: Number(config?.crawler_max_tasks_per_project || 50),
-        crawler_rate_limit_seconds: Number(config?.crawler_rate_limit_seconds || 5),
-        crawler_allowed_domains: config?.crawler_allowed_domains || '',
-        crawler_blocked_domains: config?.crawler_blocked_domains || '',
-        crawler_search_enabled: config?.crawler_search_enabled ?? true,
-        crawler_search_provider: config?.crawler_search_provider || 'bing_html',
-        crawler_search_max_results: Number(config?.crawler_search_max_results || 5),
-        crawler_search_timeout_seconds: Number(config?.crawler_search_timeout_seconds || 10),
-        crawler_search_allowed_domains: config?.crawler_search_allowed_domains || '',
-        gov_data_enabled: config?.gov_data_enabled ?? true,
-        gov_data_sources: config?.gov_data_sources || 'national,shaanxi,xian',
-        gov_data_timeout_seconds: Number(config?.gov_data_timeout_seconds || 15),
-        gov_data_max_retries: Number(config?.gov_data_max_retries || 2),
-        gov_data_rate_limit_seconds: Number(config?.gov_data_rate_limit_seconds || 1),
+      const result = await getManagedSystemConfig();
+      setConfig(result);
+      form.setFieldsValue({
+        deepseek_base_url: result?.deepseek_base_url || 'https://api.deepseek.com',
+        deepseek_model: result?.deepseek_model || 'deepseek-chat',
       });
+    } catch (error: any) {
+      const reason = errorText(error, '配置加载失败');
+      setFeedback({type: 'error', message: '配置加载失败', description: reason});
+      message.error(reason);
     } finally {
-      configLoadedRef.current = true;
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadAll().catch(error => message.error(error.message || '配置加载失败'));
+    load();
   }, []);
 
+  const requireToken = () => {
+    if (token.trim()) return true;
+    setFeedback({
+      type: 'warning',
+      message: '需要管理员 Token',
+      description: '部署管理员首次配置时输入 ADMIN_CONFIG_TOKEN。Key 保存后全局生效，普通使用者不需要再次配置。',
+    });
+    message.warning('请先输入 ADMIN_CONFIG_TOKEN');
+    return false;
+  };
+
   const verifyToken = async () => {
-    if (!token.trim()) {
+    if (!requireToken()) {
       setTokenStatus('invalid');
-      message.warning('请先输入 ADMIN_CONFIG_TOKEN');
       return;
     }
     setTokenStatus('checking');
     try {
       await verifyManagedSystemConfigToken(token.trim());
       setTokenStatus('valid');
+      setFeedback({type: 'success', message: '管理员身份验证成功', description: '现在可以保存或测试高德和 DeepSeek 配置。'});
       message.success('管理员 Token 验证成功');
     } catch (error: any) {
+      const reason = errorText(error, '管理员 Token 验证失败');
       setTokenStatus('invalid');
-      message.error(error?.response?.data?.detail || error.message || '管理员 Token 验证失败');
+      setFeedback({type: 'error', message: '管理员身份验证失败', description: reason});
+      message.error(reason);
     }
   };
 
-  const saveConfigPatch = async (
-    patch: Record<string, string | number | boolean | undefined>,
-    options: {showEmptyMessage?: boolean} = {showEmptyMessage: true},
-  ) => {
-    if (!token.trim()) {
-      setConfigSaveFeedback({
-        type: 'warning',
-        message: '需要管理员 Token',
-        description: '只有管理员需要输入 ADMIN_CONFIG_TOKEN。Key 保存成功后会全局生效，普通使用者不需要输入 Token。',
-      });
-      message.warning('请先输入 ADMIN_CONFIG_TOKEN');
-      return false;
-    }
+  const providerFields = (provider: ProviderName) => provider === 'deepseek'
+    ? ['deepseek_api_key', 'deepseek_base_url', 'deepseek_model']
+    : ['amap_web_service_key'];
+
+  const saveProvider = async (provider: ProviderName, showNoChanges = true) => {
+    if (!requireToken()) return false;
+    const values = form.getFieldsValue(providerFields(provider));
     const payload = Object.fromEntries(
-      Object.entries(patch)
-        .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
-        .map(([key, value]) => [key, typeof value === 'boolean' ? (value ? 'true' : 'false') : value]),
+      Object.entries(values).filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''),
     ) as Record<string, string | number | boolean>;
     if (!Object.keys(payload).length) {
-      if (options.showEmptyMessage) {
-        setConfigSaveFeedback({
-          type: 'info',
-          message: '没有需要保存的配置',
-          description: '如果状态已经显示“已配置”，普通用户可以直接在工作台使用相关能力。',
-        });
-        message.info('没有需要保存的配置');
-      }
-      return true;
+      if (showNoChanges) message.info('没有需要保存的新配置');
+      return Boolean(provider === 'deepseek' ? config?.deepseek?.configured : config?.amap?.configured);
     }
-    setSavingConfig(true);
+    setSaving(provider);
     try {
       const result = await updateManagedSystemConfig(payload, token.trim());
-      setManagedConfig(result);
-      configForm.setFieldsValue({
-        deepseek_api_key: undefined,
-        amap_web_service_key: undefined,
-        amap_js_key: undefined,
-        amap_security_js_code: undefined,
-        third_party_api_key: undefined,
-      });
-      setConfigSaveFeedback({
+      setConfig(result);
+      form.setFieldValue(provider === 'deepseek' ? 'deepseek_api_key' : 'amap_web_service_key', undefined);
+      const name = provider === 'deepseek' ? 'DeepSeek' : '高德 Web Service';
+      setFeedback({
         type: 'success',
-        message: '配置已加密保存并全局生效',
-        description: `保存时间：${new Date().toLocaleString('zh-CN')}。后续普通使用者进入工作台即可使用，不需要输入管理员 Token。`,
+        message: `${name} 配置保存成功`,
+        description: 'Key 已加密保存并全局生效，页面不会回显完整 Key。',
       });
-      message.success('配置已加密保存');
+      message.success(`${name} 配置保存成功`);
       return true;
     } catch (error: any) {
-      const reason = error?.response?.data?.detail || error.message || '配置保存失败';
-      setConfigSaveFeedback({
-        type: 'error',
-        message: '配置保存失败',
-        description: reason,
-      });
+      const reason = errorText(error, '配置保存失败');
+      setFeedback({type: 'error', message: '配置保存失败', description: reason});
       message.error(reason);
       return false;
     } finally {
-      setSavingConfig(false);
+      setSaving(null);
     }
   };
 
-  const saveDeepSeekConfig = () => {
-    const values = configForm.getFieldsValue([
-      'deepseek_base_url',
-      'deepseek_model',
-      'deepseek_api_key',
-    ]);
-    return saveConfigPatch(values);
-  };
-
-  const saveAmapConfig = () => {
-    const values = configForm.getFieldsValue([
-      'amap_web_service_key',
-      'amap_js_key',
-      'amap_security_js_code',
-    ]);
-    return saveConfigPatch(values);
-  };
-
-  const saveThirdPartyConfig = () => {
-    const values = configForm.getFieldsValue(['third_party_api_key']);
-    return saveConfigPatch(values);
-  };
-
-  const saveCrawlerConfig = async () => {
-    const values = configForm.getFieldsValue([
-      'crawler_enabled',
-      'crawler_provider',
-      'crawler_timeout_seconds',
-      'crawler_max_pages_per_task',
-      'crawler_max_tasks_per_project',
-      'crawler_rate_limit_seconds',
-      'crawler_allowed_domains',
-      'crawler_blocked_domains',
-      'crawler_search_enabled',
-      'crawler_search_provider',
-      'crawler_search_max_results',
-      'crawler_search_timeout_seconds',
-      'crawler_search_allowed_domains',
-    ]);
-    const ok = await saveConfigPatch(values);
-    if (ok) setCrawlerDirty(false);
-    return ok;
-  };
-
-  const saveGovernmentDataConfig = () => {
-    const values = configForm.getFieldsValue([
-      'gov_data_enabled',
-      'gov_data_sources',
-      'gov_data_timeout_seconds',
-      'gov_data_max_retries',
-      'gov_data_rate_limit_seconds',
-    ]);
-    return saveConfigPatch(values);
-  };
-
-  const testManagedProvider = async (provider: 'deepseek' | 'amap') => {
-    if (!token.trim()) {
-      setConfigSaveFeedback({
-        type: 'warning',
-        message: '测试连接需要管理员 Token',
-        description: '测试连接会先保存当前填写的 Key，因此需要管理员 Token。普通用户不需要执行此操作。',
-      });
-      message.warning('请先输入 ADMIN_CONFIG_TOKEN');
-      return;
+  const testProvider = async (provider: ProviderName) => {
+    if (!requireToken()) return;
+    const values = form.getFieldsValue(providerFields(provider));
+    const hasPendingValue = Object.values(values).some(value => value !== undefined && value !== null && String(value).trim() !== '');
+    if (hasPendingValue) {
+      const saved = await saveProvider(provider, false);
+      if (!saved) return;
     }
-    const pendingValues = provider === 'deepseek'
-      ? configForm.getFieldsValue(['deepseek_base_url', 'deepseek_model', 'deepseek_api_key'])
-      : configForm.getFieldsValue(['amap_web_service_key', 'amap_js_key', 'amap_security_js_code']);
-    const saved = await saveConfigPatch(pendingValues, {showEmptyMessage: false});
-    if (!saved) return;
     setChecks(previous => ({...previous, [provider]: 'loading'}));
     try {
       const result = await testManagedSystemConfig(provider, token.trim());
       setChecks(previous => ({...previous, [provider]: result}));
-      message.success(result.message);
+      message.success(result.message || '连接测试成功');
     } catch (error: any) {
-      setChecks(previous => ({
-        ...previous,
-        [provider]: {
-          success: false,
-          message: error?.response?.data?.detail || error.message || '连接测试失败',
-        },
-      }));
+      const reason = errorText(error, '连接测试失败');
+      setChecks(previous => ({...previous, [provider]: {success: false, message: reason}}));
+      message.error(reason);
     }
   };
 
-  const testDataSource = async (name: string) => {
-    setChecks(previous => ({...previous, [name]: 'loading'}));
-    try {
-      const result = await checkDataSourceConnectivity(name);
-      setChecks(previous => ({...previous, [name]: result}));
-    } catch (error: any) {
-      setChecks(previous => ({
-        ...previous,
-        [name]: {success: false, message: error?.response?.data?.detail || error.message || '检测失败，请稍后重试'},
-      }));
-    }
+  const renderCheck = (provider: ProviderName, label: string) => {
+    const state = checks[provider];
+    if (!state) return null;
+    if (state === 'loading') return <Alert style={{marginTop: 12}} type="info" showIcon message={`${label} 连接测试中...`} />;
+    return (
+      <Alert
+        style={{marginTop: 12}}
+        type={state.success ? 'success' : 'error'}
+        showIcon
+        message={state.success ? `${label} 测试成功` : `${label} 测试失败`}
+        description={`${state.message}${state.latency_ms != null ? ` · ${state.latency_ms}ms` : ''}`}
+      />
+    );
   };
 
-  const updateDimension = (index: number, patch: Partial<ScoringDimensionConfig>) => {
-    setDimensions(previous => previous.map((item, itemIndex) => itemIndex === index ? {...item, ...patch} : item));
-  };
-
-  const updateFactor = (dimensionIndex: number, factorIndex: number, patch: Partial<ScoringFactorConfig>) => {
-    setDimensions(previous => previous.map((dimension, itemIndex) => {
-      if (itemIndex !== dimensionIndex) return dimension;
-      return {
-        ...dimension,
-        factors: (dimension.factors || []).map((factor, currentFactorIndex) => (
-          currentFactorIndex === factorIndex ? {...factor, ...patch} : factor
-        )),
-      };
-    }));
-  };
-
-  const addDimension = () => {
-    setDimensions(previous => [
-      ...previous,
-      {
-        key: newKey('dimension'),
-        name: '新维度',
-        description: '请填写该维度的业务含义',
-        weight: 0,
-        enabled: true,
-        data_sources: ['manual'],
-        sort_order: previous.length,
-        factors: [],
-      },
-    ]);
-  };
-
-  const removeDimension = (index: number) => {
-    setDimensions(previous => previous.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const addFactor = (dimensionIndex: number) => {
-    setDimensions(previous => previous.map((dimension, itemIndex) => {
-      if (itemIndex !== dimensionIndex) return dimension;
-      const factors = dimension.factors || [];
-      return {
-        ...dimension,
-        factors: [
-          ...factors,
-          {
-            key: newKey('factor'),
-            name: '新子维度',
-            description: '请填写该子维度的判断规则',
-            weight: 0,
-            enabled: true,
-            data_sources: dimension.data_sources || ['manual'],
-            sort_order: factors.length,
-            config: {},
-          },
-        ],
-      };
-    }));
-  };
-
-  const removeFactor = (dimensionIndex: number, factorIndex: number) => {
-    setDimensions(previous => previous.map((dimension, itemIndex) => {
-      if (itemIndex !== dimensionIndex) return dimension;
-      return {
-        ...dimension,
-        factors: (dimension.factors || []).filter((_, currentFactorIndex) => currentFactorIndex !== factorIndex),
-      };
-    }));
-  };
-
-  const saveDimensions = async () => {
-    setSavingDimensions(true);
-    try {
-      const payload = dimensions.map((item, index) => ({...item, sort_order: index}));
-      const result = await updateScoringConfig(payload);
-      setDimensions(result.dimensions);
-      message.success('评分维度和权重已保存');
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || error.message || '评分配置保存失败');
-    } finally {
-      setSavingDimensions(false);
-    }
-  };
-
-  const resetDimensions = async () => {
-    setSavingDimensions(true);
-    try {
-      const result = await resetScoringConfig();
-      setDimensions(result.dimensions);
-      message.success('已恢复默认评分维度');
-    } finally {
-      setSavingDimensions(false);
-    }
-  };
-
-  const submitMemory = async (values: any) => {
-    try {
-      await createMemory({
-        ...values,
-        tags: String(values.tags || '').split(/[,，、\s]+/).filter(Boolean),
-        status: 'pending_review',
-        confidence: Number(values.confidence ?? 0.7),
-      });
-      memoryForm.resetFields();
-      const result = await listMemory();
-      setMemories(result.items);
-      message.success('记忆已创建，默认待确认');
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || error.message || '记忆保存失败');
-    }
-  };
-
-  const changeMemoryStatus = async (memoryId: number, status: MemoryStatus) => {
-    await reviewMemory(memoryId, status);
-    const result = await listMemory();
-    setMemories(result.items);
-  };
+  const deepseekConfigured = Boolean(config?.deepseek?.configured);
+  const amapConfigured = Boolean(config?.amap?.configured);
 
   return (
-    <div className="v11-config-page">
-      <div className="v11-page-heading">
+    <div className="page">
+      <div className="page-title-row">
         <div>
-          <Typography.Title level={2}>配置</Typography.Title>
+          <Typography.Title level={2}>系统配置</Typography.Title>
           <Typography.Paragraph type="secondary">
-            集中管理 Key、模型、数据源、评分维度、权重和 memory。管理员首次部署后配置一次即可，敏感 Key 会加密保存并全局生效，普通使用者进入工作台即可使用。
+            仅配置当前选址流程需要的高德 Web Service 和 DeepSeek。管理员部署后配置一次，所有普通使用者即可使用。
           </Typography.Paragraph>
         </div>
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadAll()}>刷新</Button>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新状态</Button>
       </div>
 
-      <Card title="管理员验证">
-        <Space.Compact style={{width: '100%'}}>
+      {feedback && (
+        <Alert
+          closable
+          onClose={() => setFeedback(null)}
+          style={{marginBottom: 16}}
+          type={feedback.type}
+          showIcon
+          message={feedback.message}
+          description={feedback.description}
+        />
+      )}
+
+      <Card title="管理员验证" style={{marginBottom: 16}}>
+        <Alert
+          style={{marginBottom: 12}}
+          type="info"
+          showIcon
+          message="管理员 Token 不会保存到浏览器"
+          description="Token 只在本次页面操作中用于保护 Key。Key 保存到服务器后普通用户不需要管理员 Token。"
+        />
+        <Space.Compact style={{width: '100%', maxWidth: 760}}>
           <Input.Password
             value={token}
             onChange={event => {
               setToken(event.target.value);
               setTokenStatus('idle');
             }}
-            placeholder="请输入 ADMIN_CONFIG_TOKEN"
-            autoComplete="off"
+            placeholder="输入部署环境中的 ADMIN_CONFIG_TOKEN"
           />
-          <Button loading={tokenStatus === 'checking'} onClick={verifyToken}>验证管理员 Token</Button>
+          <Button loading={tokenStatus === 'checking'} onClick={verifyToken}>验证</Button>
         </Space.Compact>
-        {tokenStatus === 'valid' && <Alert style={{marginTop: 8}} type="success" showIcon message="管理员 Token 验证成功，可以保存配置和测试连接。" />}
-        {tokenStatus === 'invalid' && <Alert style={{marginTop: 8}} type="error" showIcon message="管理员 Token 验证失败，请检查 /etc/esports-site-selection/backend.env。" />}
-        <Typography.Paragraph type="secondary" style={{marginTop: 8}}>
-          管理员 Token 只用于保护配置写入，不需要也不建议保存到浏览器。Key 保存成功后存入服务器加密配置，普通使用者不需要知道 Token，也不需要重复配置 Key。
-        </Typography.Paragraph>
+        {tokenStatus === 'valid' && <Tag style={{marginLeft: 12}} color="green">已验证</Tag>}
+        {tokenStatus === 'invalid' && <Tag style={{marginLeft: 12}} color="red">验证失败</Tag>}
       </Card>
 
-      <Card title="Key 和模型配置">
-        <Form
-          form={configForm}
-          layout="vertical"
-          onValuesChange={(changed) => {
-            if (!configLoadedRef.current) return;
-            if (Object.keys(changed).some(key => key.startsWith('crawler_'))) {
-              setCrawlerDirty(true);
-              if (changed.crawler_search_enabled !== undefined && token.trim()) {
-                void saveCrawlerConfig();
-              }
-            }
-          }}
-        >
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Card size="small" title="DeepSeek">
-                <Space direction="vertical" style={{width: '100%'}}>
-                  <Space>{statusTag(managedConfig?.deepseek?.configured)}<span>{managedConfig?.deepseek?.masked || ''}</span></Space>
-                  <Form.Item name="deepseek_base_url" label="API 地址">
-                    <Input placeholder="https://api.deepseek.com" />
-                  </Form.Item>
-                  <Form.Item name="deepseek_model" label="模型">
-                    <Input placeholder="deepseek-chat" />
-                  </Form.Item>
-                  <Form.Item name="deepseek_api_key" label="DeepSeek API Key">
-                    <Input.Password placeholder="填写后点击保存 DeepSeek 配置" />
-                  </Form.Item>
-                  <Space>
-                    <Button
-                      type={deepseekConfigured ? 'default' : 'primary'}
-                      icon={deepseekConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
-                      loading={savingConfig}
-                      onClick={saveDeepSeekConfig}
-                    >
-                      {deepseekConfigured ? '已保存 DeepSeek 配置' : '保存 DeepSeek 配置'}
-                    </Button>
-                    <Button onClick={() => testManagedProvider('deepseek')} loading={checks.deepseek === 'loading'}>测试 DeepSeek</Button>
-                  </Space>
-                  {checkAlert('DeepSeek', checks.deepseek)}
-                </Space>
-              </Card>
-            </Col>
-            <Col xs={24} md={12}>
-              <Card size="small" title="高德地图">
-                <Space direction="vertical" style={{width: '100%'}}>
-                  <Space>Web Service：{statusTag(managedConfig?.amap?.configured)} {managedConfig?.amap?.masked || ''}</Space>
-                  <Space>JS Key：{statusTag(managedConfig?.amap_js?.configured)} {managedConfig?.amap_js?.masked || ''}</Space>
-                  <Form.Item name="amap_web_service_key" label="高德 Web Service Key">
-                    <Input.Password placeholder="后端地址解析和 POI 查询使用" />
-                  </Form.Item>
-                  <Form.Item name="amap_js_key" label="高德 JS Key">
-                    <Input.Password placeholder="前端地图展示使用" />
-                  </Form.Item>
-                  <Form.Item name="amap_security_js_code" label="高德安全密钥">
-                    <Input.Password placeholder="高德 JS API 2.0 安全密钥" />
-                  </Form.Item>
-                  <Space>
-                    <Button
-                      type={amapConfigured ? 'default' : 'primary'}
-                      icon={amapConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
-                      loading={savingConfig}
-                      onClick={saveAmapConfig}
-                    >
-                      {amapConfigured ? '已保存高德配置' : '保存高德配置'}
-                    </Button>
-                    <Button onClick={() => testManagedProvider('amap')} loading={checks.amap === 'loading'}>测试高德</Button>
-                  </Space>
-                  {checkAlert('高德', checks.amap)}
-                </Space>
-              </Card>
-            </Col>
-            <Col span={24}>
-              <Card size="small" title="后续第三方平台 Key">
-                <Form.Item name="third_party_api_key" label="第三方平台 Key">
-                  <Input.Password placeholder="预留：美团、消费数据等第三方平台" />
-                </Form.Item>
-                <Button loading={savingConfig} onClick={saveThirdPartyConfig}>保存第三方配置</Button>
-              </Card>
-            </Col>
-            <Col span={24}>
-              <Card
-                size="small"
-                title="爬虫数据源"
-                extra={crawlerConfigured ? <Tag color="green">已启用</Tag> : <Tag color="orange">默认关闭</Tag>}
-              >
-                <Alert
-                  style={{marginBottom: 12}}
-                  type="warning"
-                  showIcon
-                  message="合规限制"
-                  description="只抓取允许访问的公开页面，不绕过登录、验证码、反爬或付费墙；结果默认待人工确认。"
-                />
-                <Alert
-                  style={{marginBottom: 12}}
-                  type={crawlerRuntime?.reachable ? 'success' : 'warning'}
-                  showIcon
-                  message={crawlerRuntime?.reachable ? '独立爬虫服务运行正常' : '独立爬虫服务尚未就绪'}
-                  description={
-                    crawlerRuntime?.message
-                    || '主系统安装不会下载浏览器。请在服务器单独执行 scripts/crawler/install.sh。'
-                  }
-                />
-                {crawlerDirty && (
-                  <Alert
-                    style={{marginBottom: 12}}
-                    type="warning"
-                    showIcon
-                    message="爬虫配置有未保存的改动"
-                    description="『启用搜索发现』等改动需要点击下方『保存爬虫配置』按钮（需在『管理员验证』处输入 ADMIN_CONFIG_TOKEN）后才会保存到服务器，否则刷新页面后会恢复为关闭状态。"
-                  />
-                )}
-                <Row gutter={12}>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_enabled" label="启用爬虫" valuePropName="checked">
-                      <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_provider" label="Provider">
-                      <Input placeholder="crawl4ai" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_timeout_seconds" label="单任务超时（秒）">
-                      <InputNumber min={10} max={300} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_max_tasks_per_project" label="单项目最大任务数">
-                      <InputNumber min={1} max={200} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_max_pages_per_task" label="单任务最大页数">
-                      <InputNumber min={1} max={20} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_rate_limit_seconds" label="请求间隔（秒）">
-                      <InputNumber min={0} max={60} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_allowed_domains" label="允许域名">
-                      <Input placeholder="example.com,example.cn" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_blocked_domains" label="禁用域名">
-                      <Input placeholder="禁止访问的域名，逗号分隔" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_search_enabled" label="启用搜索发现" valuePropName="checked">
-                      <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_search_provider" label="搜索 Provider">
-                      <Input placeholder="duckduckgo_html" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_search_max_results" label="单对象搜索结果数">
-                      <InputNumber min={1} max={20} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={6}>
-                    <Form.Item name="crawler_search_timeout_seconds" label="搜索超时（秒）">
-                      <InputNumber min={3} max={60} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Form.Item name="crawler_search_allowed_domains" label="搜索允许域名">
-                      <Input placeholder="可留空；如 dianping.com,meituan.com,ke.com" />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <Space>
-                  <Button
-                    type={crawlerConfigured ? 'default' : 'primary'}
-                    icon={crawlerConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
-                    loading={savingConfig}
-                    onClick={saveCrawlerConfig}
-                  >
-                    {crawlerConfigured ? '已保存爬虫配置' : '保存爬虫配置'}
-                  </Button>
-                  <Button onClick={() => testDataSource('crawler_competitor')} loading={checks.crawler_competitor === 'loading'}>
-                    测试竞品爬虫
-                  </Button>
-                  <Button onClick={() => testDataSource('crawler_supporting')} loading={checks.crawler_supporting === 'loading'}>
-                    测试配套爬虫
-                  </Button>
-                  <Button onClick={() => testDataSource('crawler_rent')} loading={checks.crawler_rent === 'loading'}>
-                    测试租金爬虫
-                  </Button>
-                </Space>
-                {checkAlert('竞品爬虫', checks.crawler_competitor)}
-                {checkAlert('配套爬虫', checks.crawler_supporting)}
-                {checkAlert('租金爬虫', checks.crawler_rent)}
-              </Card>
-            </Col>
-            <Col span={24}>
-              <Card
-                size="small"
-                title="政府公开数据"
-                extra={governmentDataEnabled ? <Tag color="green">已启用</Tag> : <Tag color="default">已停用</Tag>}
-              >
-                <Alert
-                  style={{marginBottom: 12}}
-                  type="info"
-                  showIcon
-                  message="用于城市和区县宏观背景"
-                  description="只读取官方公开数据。城市/区县指标不会显示为项目1km人口或客流，也不会直接改变当前评分。"
-                />
-                <Row gutter={12}>
-                  <Col xs={24} md={4}>
-                    <Form.Item name="gov_data_enabled" label="启用政府数据" valuePropName="checked">
-                      <Switch checkedChildren="启用" unCheckedChildren="停用" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Form.Item name="gov_data_sources" label="数据源">
-                      <Input placeholder="national,shaanxi,xian" />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Form.Item name="gov_data_timeout_seconds" label="超时（秒）">
-                      <InputNumber min={3} max={120} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Form.Item name="gov_data_max_retries" label="最大重试">
-                      <InputNumber min={0} max={5} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Form.Item name="gov_data_rate_limit_seconds" label="请求间隔（秒）">
-                      <InputNumber min={0} max={30} style={{width: '100%'}} />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <Space>
-                  <Button
-                    type={governmentDataEnabled ? 'default' : 'primary'}
-                    icon={governmentDataEnabled ? <CheckCircleOutlined /> : <SaveOutlined />}
-                    loading={savingConfig}
-                    onClick={saveGovernmentDataConfig}
-                  >
-                    {governmentDataEnabled ? '已保存政府数据配置' : '保存政府数据配置'}
-                  </Button>
-                  <Button
-                    onClick={() => testDataSource('government_stats')}
-                    loading={checks.government_stats === 'loading'}
-                  >
-                    测试政府数据源
-                  </Button>
-                </Space>
-                {checkAlert('政府公开数据', checks.government_stats)}
-              </Card>
-            </Col>
-          </Row>
-        </Form>
-        {savingConfig && <Alert style={{marginTop: 12}} type="info" showIcon message="正在保存配置..." />}
-        {configSaveFeedback && (
-          <Alert
-            style={{marginTop: 12}}
-            type={configSaveFeedback.type}
-            showIcon
-            message={configSaveFeedback.message}
-            description={configSaveFeedback.description}
-          />
-        )}
-      </Card>
-
-      <GovernmentStatsAdminPanel adminToken={token} />
-
-      <Card title="评分维度和权重">
-        <Alert
-          type={Math.abs(totalWeight - 100) < 0.01 ? 'success' : 'warning'}
-          showIcon
-          message={`当前启用维度权重合计：${totalWeight.toFixed(2)}`}
-          description="建议合计为 100。新增维度默认不影响评分，保存后会进入后续分析上下文。"
-          style={{marginBottom: 12}}
-        />
-        {loading && <Alert style={{marginBottom: 12}} type="info" showIcon message="正在加载评分配置..." />}
-        {!loading && dimensions.length === 0 && (
-          <Alert style={{marginBottom: 12}} type="warning" showIcon message="评分配置为空，请点击恢复默认。" />
-        )}
-        <Space style={{marginBottom: 12}}>
-          <Button icon={<PlusOutlined />} onClick={addDimension}>新增维度</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={savingDimensions} onClick={saveDimensions}>保存维度配置</Button>
-          <Button onClick={resetDimensions}>恢复默认</Button>
-        </Space>
-        <List
-          dataSource={dimensions}
-          locale={{emptyText: '暂无评分维度'}}
-          renderItem={(item, index) => (
-            <List.Item>
-              <Card size="small" style={{width: '100%'}} title={<Space><span>{item.name}</span><Tag>{item.key}</Tag></Space>}>
-                <Row gutter={12} align="middle">
-                  <Col xs={24} md={4}><Input value={item.name} onChange={event => updateDimension(index, {name: event.target.value})} placeholder="维度名称" /></Col>
-                  <Col xs={24} md={3}><InputNumber min={0} value={item.weight} onChange={value => updateDimension(index, {weight: Number(value || 0)})} style={{width: '100%'}} addonAfter="权重" /></Col>
-                  <Col xs={24} md={3}><Switch checked={item.enabled} onChange={checked => updateDimension(index, {enabled: checked})} checkedChildren="启用" unCheckedChildren="停用" /></Col>
-                  <Col xs={24} md={5}><Input value={(item.data_sources || []).join(',')} onChange={event => updateDimension(index, {data_sources: splitDataSources(event.target.value)})} placeholder="依赖数据源，逗号分隔" /></Col>
-                  <Col xs={24} md={7}><Input value={item.description || ''} onChange={event => updateDimension(index, {description: event.target.value})} placeholder="说明" /></Col>
-                  <Col xs={24} md={2}><Button danger onClick={() => removeDimension(index)}>删除</Button></Col>
-                </Row>
-                <Space style={{marginTop: 12, marginBottom: 8}}>
-                  <Button size="small" icon={<PlusOutlined />} onClick={() => addFactor(index)}>新增子维度</Button>
-                  <Typography.Text type="secondary">子维度用于记录更细的判断规则，后续可逐步接入独立评分。</Typography.Text>
-                </Space>
-                <List
-                  size="small"
-                  dataSource={item.factors || []}
-                  locale={{emptyText: '暂无子维度'}}
-                  renderItem={(factor, factorIndex) => (
-                    <List.Item>
-                      <Row gutter={8} style={{width: '100%'}} align="middle">
-                        <Col xs={24} md={4}><Input value={factor.name} onChange={event => updateFactor(index, factorIndex, {name: event.target.value})} placeholder="子维度名称" /></Col>
-                        <Col xs={24} md={3}><InputNumber min={0} value={factor.weight} onChange={value => updateFactor(index, factorIndex, {weight: Number(value || 0)})} style={{width: '100%'}} addonAfter="权重" /></Col>
-                        <Col xs={24} md={3}><Switch checked={factor.enabled} onChange={checked => updateFactor(index, factorIndex, {enabled: checked})} checkedChildren="启用" unCheckedChildren="停用" /></Col>
-                        <Col xs={24} md={5}><Input value={(factor.data_sources || []).join(',')} onChange={event => updateFactor(index, factorIndex, {data_sources: splitDataSources(event.target.value)})} placeholder="依赖数据源" /></Col>
-                        <Col xs={24} md={7}><Input value={factor.description || ''} onChange={event => updateFactor(index, factorIndex, {description: event.target.value})} placeholder="说明" /></Col>
-                        <Col xs={24} md={2}><Button danger size="small" onClick={() => removeFactor(index, factorIndex)}>删除</Button></Col>
-                      </Row>
-                    </List.Item>
-                  )}
-                />
-              </Card>
-            </List.Item>
-          )}
-        />
-      </Card>
-
-      <Card title="数据源">
-        <List
-          grid={{gutter: 12, xs: 1, md: 2, xl: 3}}
-          dataSource={dataSources}
-          locale={{emptyText: '暂无数据源状态'}}
-          renderItem={item => {
-            const check = checks[item.name];
-            const checkResult = typeof check === 'object' ? check : null;
-            return (
-              <List.Item>
-                <Card size="small" title={item.display_name}>
-                  <Space direction="vertical">
-                    <Space>
-                      <Tag color={item.status === 'available' ? 'green' : item.status === 'disabled' ? 'default' : 'orange'}>
-                        {providerStatusText(item.status)}
-                      </Tag>
-                      <Tag>{(item.capabilities || []).join('、') || '基础能力'}</Tag>
-                    </Space>
-                    <Typography.Text type="secondary">{item.description}</Typography.Text>
-                    <Button size="small" disabled={!item.check_supported} loading={check === 'loading'} onClick={() => testDataSource(item.name)}>检测连接</Button>
-                    {check === 'loading' && <Typography.Text type="secondary">检测中...</Typography.Text>}
-                    {checkResult && (
-                      <Typography.Text type={'success' in checkResult ? checkResult.success ? 'success' : 'danger' : checkResult.reachable ? 'success' : 'danger'}>
-                        {checkResult.message}{checkResult.latency_ms != null ? ` · ${checkResult.latency_ms}ms` : ''}
-                      </Typography.Text>
-                    )}
-                  </Space>
-                </Card>
-              </List.Item>
-            );
-          }}
-        />
-      </Card>
-
-      <Card title="Memory 管理">
-        <Row gutter={16}>
-          <Col xs={24} md={9}>
-            <Form
-              form={memoryForm}
-              layout="vertical"
-              initialValues={{scope: 'global', memory_type: 'business_rule', source: 'manual', confidence: 0.8}}
-              onFinish={submitMemory}
-            >
-              <Form.Item name="title" label="标题" rules={[{required: true}]}><Input /></Form.Item>
-              <Form.Item name="content" label="内容" rules={[{required: true}]}><Input.TextArea rows={4} /></Form.Item>
-              <Row gutter={8}>
-                <Col span={12}><Form.Item name="scope" label="范围"><Input /></Form.Item></Col>
-                <Col span={12}><Form.Item name="memory_type" label="类型"><Input /></Form.Item></Col>
-              </Row>
-              <Form.Item name="tags" label="标签"><Input placeholder="电竞馆、租金、夜经济" /></Form.Item>
-              <Form.Item name="confidence" label="置信度"><InputNumber min={0} max={1} step={0.1} style={{width: '100%'}} /></Form.Item>
-              <Button type="primary" htmlType="submit">新增待确认记忆</Button>
-            </Form>
-          </Col>
-          <Col xs={24} md={15}>
-            <List
-              dataSource={memories}
-              locale={{emptyText: '暂无 memory'}}
-              renderItem={item => (
-                <List.Item
-                  actions={[
-                    <Button key="confirm" size="small" icon={<CheckCircleOutlined />} onClick={() => changeMemoryStatus(item.id, 'confirmed')}>确认</Button>,
-                    <Button key="disable" size="small" danger onClick={() => changeMemoryStatus(item.id, 'disabled')}>停用</Button>,
-                  ]}
+      <Form form={form} layout="vertical">
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={12}>
+            <Card title="DeepSeek" extra={configuredTag(deepseekConfigured)} loading={loading} style={{height: '100%'}}>
+              <Typography.Paragraph type="secondary">
+                当前状态：{config?.deepseek?.masked || '未保存 Key'}
+              </Typography.Paragraph>
+              <Form.Item name="deepseek_base_url" label="API 地址" rules={[{required: true, message: '请输入 API 地址'}]}>
+                <Input placeholder="https://api.deepseek.com" />
+              </Form.Item>
+              <Form.Item name="deepseek_model" label="模型" rules={[{required: true, message: '请输入模型名称'}]}>
+                <Input placeholder="deepseek-chat" />
+              </Form.Item>
+              <Form.Item name="deepseek_api_key" label="API Key">
+                <Input.Password placeholder={deepseekConfigured ? '已配置；留空表示不更换' : '请输入 DeepSeek API Key'} />
+              </Form.Item>
+              <Space wrap>
+                <Button
+                  type={deepseekConfigured ? 'default' : 'primary'}
+                  icon={deepseekConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
+                  loading={saving === 'deepseek'}
+                  onClick={() => saveProvider('deepseek')}
                 >
-                  <List.Item.Meta
-                    title={<Space><span>{item.title}</span><Tag>{item.status}</Tag><Tag>{item.memory_type}</Tag></Space>}
-                    description={<Typography.Paragraph ellipsis={{rows: 2}}>{item.content}</Typography.Paragraph>}
-                  />
-                </List.Item>
-              )}
-            />
+                  {deepseekConfigured ? '更新配置' : '保存配置'}
+                </Button>
+                <Button loading={checks.deepseek === 'loading'} onClick={() => testProvider('deepseek')}>测试 DeepSeek</Button>
+              </Space>
+              {renderCheck('deepseek', 'DeepSeek')}
+            </Card>
+          </Col>
+
+          <Col xs={24} lg={12}>
+            <Card title="高德地图 Web Service" extra={configuredTag(amapConfigured)} loading={loading} style={{height: '100%'}}>
+              <Typography.Paragraph type="secondary">
+                当前状态：{config?.amap?.masked || '未保存 Key'}
+              </Typography.Paragraph>
+              <Alert
+                style={{marginBottom: 12}}
+                type="info"
+                showIcon
+                message="只使用 Web Service Key"
+                description="用于地址解析和周边 POI 采集。当前 MVP 不要求配置 JS Key 或安全密钥。"
+              />
+              <Form.Item name="amap_web_service_key" label="Web Service Key">
+                <Input.Password placeholder={amapConfigured ? '已配置；留空表示不更换' : '请输入高德 Web Service Key'} />
+              </Form.Item>
+              <Space wrap>
+                <Button
+                  type={amapConfigured ? 'default' : 'primary'}
+                  icon={amapConfigured ? <CheckCircleOutlined /> : <SaveOutlined />}
+                  loading={saving === 'amap'}
+                  onClick={() => saveProvider('amap')}
+                >
+                  {amapConfigured ? '更新配置' : '保存配置'}
+                </Button>
+                <Button loading={checks.amap === 'loading'} onClick={() => testProvider('amap')}>测试高德</Button>
+              </Space>
+              {renderCheck('amap', '高德')}
+            </Card>
           </Col>
         </Row>
-      </Card>
+      </Form>
     </div>
   );
 }

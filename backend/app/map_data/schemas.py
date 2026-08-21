@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,10 @@ class AmapCollectResponse(BaseModel):
     success: bool
     project_id: str
     collected: CollectedCounts = Field(default_factory=CollectedCounts)
+    collection_status: Literal[
+        "success", "success_zero", "partial", "failed", "truncated", "needs_confirmation"
+    ] = "success"
+    collected_at: datetime | None = None
     message: str | None = None
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 

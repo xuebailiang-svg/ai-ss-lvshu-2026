@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-ManualInputType = Literal["competitor", "rent", "population", "supplement"]
+ManualInputType = Literal["competitor", "rent", "population", "supplement", "property"]
 
 
 class ManualInputRequest(BaseModel):

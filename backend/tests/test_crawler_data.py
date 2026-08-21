@@ -366,7 +366,7 @@ def test_crawler_rent_search_creates_pending_rent_record(client, monkeypatch):
         assert rows[0].raw_data["crawler_detail"]["source_url"] == "https://example.com/discovered/1"
 
 
-def test_crawler_quality_is_returned_from_data_quality(client, monkeypatch):
+def test_crawler_quality_is_excluded_from_mvp_data_quality(client, monkeypatch):
     project_id = _create_project(client)
     monkeypatch.setenv("CRAWLER_ENABLED", "true")
     monkeypatch.setenv("CRAWLER_ALLOWED_DOMAINS", "example.com")
@@ -412,10 +412,9 @@ def test_crawler_quality_is_returned_from_data_quality(client, monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    assert "crawler_quality" in body
-    assert body["crawler_quality"]["competitor_crawler_count"] == 1
-    assert body["crawler_quality"]["rent_crawler_count"] == 0
-    assert body["crawler_quality"]["pending_review_count"] == 1
+    assert "readiness" in body
+    assert "crawler_quality" not in body
+    assert all("爬虫" not in warning for warning in body["warnings"])
 
 
 def test_crawler_unknown_project_returns_404(client):
@@ -606,10 +605,9 @@ def test_manual_url_task_runs_in_independent_session(client, monkeypatch):
         assert any(item["field"] == "hour_price" and item["source_url"] == "https://example.com/manual/shop" for item in evidence)
 
     response = client.get(f"/api/projects/{project_id}/competitors")
-    suggestion = response.json()["items"][0]["crawler_suggestion"]
-    assert suggestion["review_status"] == "pending_review"
-    assert suggestion["source_domain"] == "example.com"
-    assert suggestion["field_evidence"]
+    assert response.status_code == 200
+    # MVP 普通业务接口不再暴露冻结的爬虫建议；证据仅保留在内部 raw_data。
+    assert "crawler_suggestion" not in response.json()["items"][0]
 
 
 def test_manual_url_supporting_task_creates_pending_food_record(client, monkeypatch):

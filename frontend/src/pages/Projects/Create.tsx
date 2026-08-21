@@ -1,31 +1,47 @@
-import {Button, Card, Form, Input, InputNumber, Typography, message} from 'antd';
+import {useState} from 'react';
+import {Button, Card, Form, Input, InputNumber, Space, Typography, message} from 'antd';
+import {ArrowLeftOutlined} from '@ant-design/icons';
 import {useNavigate} from 'react-router-dom';
-import {createProject, type ProjectCreatePayload} from '../../api/projects';
+import {createProject, geocodeProject, type ProjectCreatePayload} from '../../api/projects';
 
 export default function ProjectCreatePage() {
   const [form] = Form.useForm<ProjectCreatePayload>();
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
   const submit = async (values: ProjectCreatePayload) => {
+    setSubmitting(true);
     try {
       const result = await createProject({
         ...values,
         business_type: values.business_type || '电竞馆',
         radius_meters: values.radius_meters || 1000,
       });
-      message.success('项目创建成功');
+      const geocode = await geocodeProject(result.project_id);
+      if (geocode?.status === 'needs_confirmation') {
+        message.warning('项目已创建，请在工作台确认地址候选项后再采集数据');
+      } else if (geocode?.success === false) {
+        message.warning(`项目已创建，地址解析暂未完成：${geocode?.message || '请稍后重试'}`);
+      } else {
+        message.success('项目创建成功，地址已定位');
+      }
       navigate(`/projects/${result.project_id}`);
     } catch (error: any) {
       message.error(error?.response?.data?.detail || error.message || '创建项目失败');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
     <div className="page">
-      <Typography.Title level={2}>创建选址项目</Typography.Title>
-      <Typography.Paragraph type="secondary">
-        填写候选地址和基础投资信息，提交后进入项目工作台。
-      </Typography.Paragraph>
+      <div className="page-title-row">
+        <div>
+          <Typography.Title level={2}>创建选址项目</Typography.Title>
+          <Typography.Paragraph type="secondary">填写候选地址和基础投资信息，提交后进入项目工作台。</Typography.Paragraph>
+        </div>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/projects')}>返回项目列表</Button>
+      </div>
 
       <Card title="项目基础信息">
         <Form
@@ -61,9 +77,12 @@ export default function ProjectCreatePage() {
             </Form.Item>
           </div>
 
-          <Button type="primary" htmlType="submit" size="large">
-            创建项目并进入工作台
-          </Button>
+          <Space className="project-form-actions" wrap>
+            <Button onClick={() => navigate('/projects')}>取消</Button>
+            <Button type="primary" htmlType="submit" size="large" loading={submitting}>
+              创建项目并进入工作台
+            </Button>
+          </Space>
         </Form>
       </Card>
     </div>

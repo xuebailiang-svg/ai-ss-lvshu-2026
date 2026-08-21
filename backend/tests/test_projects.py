@@ -138,10 +138,11 @@ def test_data_quality_returns_missing_fields(client):
     body = response.json()
     assert body["project_id"] == project_id
     assert body["quality_score"] < 100
-    assert "竞品价格" in body["missing"]
-    assert "竞品上座率" in body["missing"]
-    assert "真实租金" in body["missing"]
-    assert body["warnings"]
+    assert body["readiness"]["status"] == "blocked"
+    assert "高德基础采集" in body["missing"]
+    assert "核心竞品经营信息" in body["missing"]
+    assert "候选物业核心条件" in body["missing"]
+    assert body["readiness"]["can_generate_report"] is False
 
 
 def test_delete_project_is_soft_delete(client):

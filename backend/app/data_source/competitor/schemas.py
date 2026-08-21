@@ -41,7 +41,11 @@ class CompetitorListItem(BaseModel):
     annual_sales: float | None = None
     recharge_info: str | None = None
     remark: str | None = None
-    crawler_suggestion: dict | None = None
+    occupancy_observed_at: str | None = None
+    occupancy_period: str | None = None
+    survey_method: str | None = None
+    sales_source: str | None = None
+    manual_meta: dict = Field(default_factory=dict)
 
 
 class CompetitorListResponse(BaseModel):
@@ -68,6 +72,11 @@ class CompetitorDetailUpdate(BaseModel):
     annual_sales: float | None = Field(default=None, ge=0)
     recharge_info: str | None = None
     remark: str | None = None
+    occupancy_observed_at: str | None = None
+    occupancy_period: str | None = None
+    survey_method: str | None = None
+    sales_source: str | None = None
+    unknown_fields: list[str] = Field(default_factory=list)
 
     @field_validator("occupancy_rate", mode="before")
     @classmethod
