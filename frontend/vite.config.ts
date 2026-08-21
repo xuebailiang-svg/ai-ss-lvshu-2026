@@ -22,6 +22,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
-    pool: 'threads',
+    // The threads pool can hang before collecting tests on Windows.  A single
+    // fork is slower but deterministic locally and in release checks.
+    pool: 'forks',
+    maxWorkers: 1,
+    minWorkers: 1,
   },
 });

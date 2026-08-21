@@ -1,274 +1,77 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {
-  Alert,
-  Button,
-  Card,
-  Col,
-  Divider,
-  Form,
-  Input,
-  InputNumber,
-  Row,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Typography,
-  message,
+  Alert, Button, Card, Col, Descriptions, Form, Input, InputNumber, Modal, Row,
+  Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message,
 } from 'antd';
-import {ArrowLeftOutlined, DeleteOutlined, LinkOutlined, PlusOutlined, SaveOutlined} from '@ant-design/icons';
+import {ArrowLeftOutlined, CheckOutlined, CloseOutlined, EditOutlined, SaveOutlined} from '@ant-design/icons';
 import {useNavigate, useParams, useSearchParams} from 'react-router-dom';
 import {submitManualInput} from '../../api/data';
-import {getProjectDataQuality, getProjectDataset, listProjectCompetitors, type ProjectCompetitor} from '../../api/projects';
+import {
+  getProjectCompetitor,
+  getProjectDataset,
+  getProjectRentDetail,
+  getProjectSupportingDetail,
+  listProjectCompetitors,
+  listProjectRent,
+  listProjectSupporting,
+  reviewProjectCompetitor,
+  reviewProjectRent,
+  reviewProjectSupporting,
+  updateProjectCompetitor,
+  updateProjectRentDetail,
+  updateProjectSupportingDetail,
+  type ProjectCompetitor,
+  type ProjectRentDetail,
+  type ProjectRentItem,
+  type ProjectSupportingDetail,
+  type ProjectSupportingItem,
+} from '../../api/projects';
 
 const {TextArea} = Input;
-
-const EMPTY_VALUES = {
-  competitors: [{}],
-  rents: [{}],
-  populations: [{}],
-  supports: [{}],
+const STATUS_VIEW: Record<string, {text: string; color: string}> = {
+  pending_review: {text: '待核实', color: 'orange'},
+  confirmed: {text: '已确认', color: 'green'},
+  rejected: {text: '已排除', color: 'default'},
 };
 
-type DatasetPoi = {
-  id: number;
-  name: string;
-  category?: string | null;
-  sub_category?: string | null;
-  address?: string | null;
-  distance_meters?: number | null;
-  phone?: string | null;
-  business_hours?: string | null;
-  source?: string | null;
-};
+const YES_NO_UNKNOWN = [
+  {value: true, label: '是'},
+  {value: false, label: '否'},
+];
 
-const POI_GROUP_ORDER = ['competitor', 'food', 'entertainment', 'transport', 'education', 'residential', 'commercial', 'sensitive', 'other'];
-const POI_GROUP_LABELS: Record<string, string> = {
-  competitor: '竞品',
-  food: '餐饮',
-  entertainment: '娱乐',
-  transport: '交通',
-  education: '教育',
-  residential: '住宅',
-  commercial: '商业',
-  sensitive: '敏感场所',
-  other: '其他',
-};
-const POI_GROUP_COLORS: Record<string, string> = {
-  competitor: 'orange',
-  food: 'cyan',
-  entertainment: 'blue',
-  transport: 'geekblue',
-  education: 'purple',
-  residential: 'green',
-  commercial: 'magenta',
-  sensitive: 'red',
-  other: 'default',
-};
+const COMPETITOR_UNKNOWN_OPTIONS = [
+  'area_sqm', 'machine_count', 'cpu', 'gpu', 'monitor', 'hour_price', 'member_price',
+  'business_hours', 'opening_date', 'occupancy_rate', 'recharge_info',
+].map(value => ({value, label: ({
+  area_sqm: '面积', machine_count: '机器数量', cpu: 'CPU', gpu: '显卡', monitor: '显示器',
+  hour_price: '小时价', member_price: '会员价', business_hours: '营业时间', opening_date: '开业时间',
+  occupancy_rate: '现场上座率', recharge_info: '充值活动',
+} as Record<string, string>)[value]}));
 
-const FOCUS_GUIDE: Record<string, {title: string; description: string; fields: string[]}> = {
-  competitor: {
-    title: '本次重点：补充竞品经营信息',
-    description: '优先核实哪些店是真正竞品，并补充价格、配置、机器数量、上座率和营业时间。',
-    fields: ['竞品名称', '距离', '面积', '机器数量', 'CPU/GPU', '价格', '营业时间', '上座率'],
-  },
-  rent: {
-    title: '本次重点：补充租金成本信息',
-    description: '优先补齐候选物业或周边商铺的真实租金样本，后续才能判断成本压力。',
-    fields: ['月租金', '面积', '物业费', '转让费', '租金来源', '位置说明'],
-  },
-  support: {
-    title: '本次重点：补充夜间消费和配套',
-    description: '优先确认餐饮、便利店、娱乐设施是否真实夜间营业，不能默认便利店就是 24 小时。',
-    fields: ['夜市', '24小时便利店', '餐饮营业时间', '娱乐设施', '夜间人流', '备注'],
-  },
-  population: {
-    title: '本次重点：补充客群人口信息',
-    description: '优先记录大学、高职、技校、公寓、年轻住宅和夜间年轻人流情况。',
-    fields: ['大学', '技校', '公寓', '住宅情况', '年轻人口情况'],
-  },
-  property: {
-    title: '本次重点：补充物业落地条件',
-    description: '优先核实面积、供电、网络、消防、停车、门头和其他开店落地风险。',
-    fields: ['可用面积', '供电', '网络', '消防', '停车', '门头', '备注'],
-  },
-  general: {
-    title: '人工补充建议',
-    description: '请根据现场调研结果补充高德和 AI 无法直接确认的数据，不确定的信息可以留空。',
-    fields: ['竞品经营', '租金成本', '客群人口', '夜间配套'],
-  },
-};
+function StatusTag({status}: {status?: string}) {
+  const view = STATUS_VIEW[status || ''] || {text: status || '未知', color: 'default'};
+  return <Tag color={view.color}>{view.text}</Tag>;
+}
 
-function NumberField({name, label, suffix}: {name: string; label: string; suffix?: string}) {
+function AuditText({meta}: {meta?: {verified_at?: string | null; history_count?: number; unknown_fields?: string[]}}) {
+  if (!meta?.verified_at) return <Typography.Text type="secondary">尚未人工核实</Typography.Text>;
   return (
-    <Form.Item name={name} label={label}>
-      <InputNumber min={0} style={{width: '100%'}} addonAfter={suffix} />
-    </Form.Item>
+    <Typography.Text type="secondary">
+      最近核实：{new Date(meta.verified_at).toLocaleString()} · 修改 {meta.history_count || 0} 次
+      {(meta.unknown_fields?.length || 0) > 0 ? ` · ${meta.unknown_fields?.length} 项明确未知` : ''}
+    </Typography.Text>
   );
 }
 
-function cleanPayload(data: Record<string, any>) {
-  return Object.fromEntries(
-    Object.entries(data || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
-  );
-}
-
-function hasMeaningfulValue(data: Record<string, any>) {
-  return Object.keys(cleanPayload(data)).length > 0;
-}
-
-function competitorPayload(row: Record<string, any>) {
-  const payload = cleanPayload({
-    name: row.name,
-    distance_meters: row.distance_meters,
-    area_sqm: row.area_sqm,
-    machine_count: row.machine_count,
-    cpu: row.cpu,
-    gpu: row.gpu,
-    hour_price: row.hour_price,
-    business_hours: row.business_hours,
-    opening_date: row.opening_date,
-    occupancy_rate: row.occupancy_rate,
-    monthly_sales: row.monthly_revenue,
-  });
-  return payload;
-}
-
-function competitorToFormRow(item: ProjectCompetitor) {
-  return cleanPayload({
-    competitor_id: item.id,
-    name: item.name,
-    distance_meters: item.distance_meters,
-    area_sqm: item.area_sqm,
-    machine_count: item.machine_count,
-    cpu: item.cpu,
-    gpu: item.gpu,
-    hour_price: item.hour_price,
-    business_hours: item.business_hours,
-    opening_date: item.opening_date,
-    occupancy_rate: item.occupancy_rate,
-    monthly_revenue: item.monthly_sales,
-    crawler_suggestion: item.crawler_suggestion,
-  });
-}
-
-const CRAWLER_FIELD_LABELS: Record<string, string> = {
-  business_hours: '营业时间', hour_price: '小时价格', member_price: '会员价', machine_count: '机器数量',
-  area_sqm: '面积', occupancy_rate: '上座率', rating: '评分', night_operation: '夜间营业',
-  monthly_rent: '月租金', rent_per_sqm: '租金单价', property_fee: '物业费', transfer_fee: '转让费',
-};
-
-function CrawlerSuggestionPanel({suggestion}: {suggestion?: ProjectCompetitor['crawler_suggestion']}) {
-  if (!suggestion) return null;
+function ReadonlySource({name, address, distance, source}: {name?: string; address?: string | null; distance?: number | null; source?: string}) {
   return (
-    <Alert
-      type="warning"
-      showIcon
-      style={{marginBottom: 12}}
-      message="爬虫已提供待确认线索"
-      description={(
-        <Space direction="vertical" size={6} style={{width: '100%'}}>
-          <Typography.Text>{suggestion.notice}</Typography.Text>
-          <Space size={[6, 6]} wrap>
-            {Object.entries(suggestion.fields || {}).map(([field, value]) => (
-              <Tag key={field} color="gold">{CRAWLER_FIELD_LABELS[field] || field}：{String(value)}</Tag>
-            ))}
-          </Space>
-          {suggestion.source_url && (
-            <Typography.Link href={suggestion.source_url} target="_blank" rel="noreferrer">
-              <LinkOutlined /> 查看来源网页（{suggestion.source_domain || '公开网页'}）
-            </Typography.Link>
-          )}
-          {(suggestion.field_evidence || []).slice(0, 3).map((item, index) => (
-            <Typography.Text key={`${item.field}-${index}`} type="secondary">
-              {CRAWLER_FIELD_LABELS[item.field] || item.field}证据：{item.excerpt || '已提取到字段，但页面片段需人工打开来源核对'}
-            </Typography.Text>
-          ))}
-        </Space>
-      )}
-    />
-  );
-}
-
-function rentPayload(row: Record<string, any>) {
-  return cleanPayload({
-    monthly_rent: row.monthly_rent,
-    property_fee: row.property_fee,
-    area_sqm: row.area_sqm,
-    transfer_fee: row.transfer_fee,
-  });
-}
-
-function populationPayload(row: Record<string, any>) {
-  const description = [
-    row.universities ? `周边大学：${row.universities}` : '',
-    row.vocational_schools ? `技校/高职：${row.vocational_schools}` : '',
-    row.residential ? `住宅情况：${row.residential}` : '',
-    row.apartments ? `公寓情况：${row.apartments}` : '',
-    row.young_population ? `年轻人口情况：${row.young_population}` : '',
-  ].filter(Boolean).join('\n');
-  return cleanPayload({
-    target_customer_description: description,
-    young_population_indicator: row.young_population,
-  });
-}
-
-function supportPayload(row: Record<string, any>) {
-  const value = [
-    row.night_market ? `夜市：${row.night_market}` : '',
-    row.convenience_store_24h ? `24小时便利店：${row.convenience_store_24h}` : '',
-    row.entertainment ? `娱乐设施：${row.entertainment}` : '',
-    row.remark ? `备注：${row.remark}` : '',
-  ].filter(Boolean).join('\n');
-  if (!value) return {};
-  return cleanPayload({
-    target_type: 'support',
-    field_name: 'manual_support_note',
-    value,
-    remark: value,
-  });
-}
-
-function ListSection({
-  name,
-  title,
-  description,
-  addText,
-  children,
-}: {
-  name: string;
-  title: string;
-  description: string;
-  addText: string;
-  children: (fieldName: number) => React.ReactNode;
-}) {
-  return (
-    <Card title={title} extra={<Typography.Text type="secondary">可填写多条</Typography.Text>}>
-      <Typography.Paragraph type="secondary">{description}</Typography.Paragraph>
-      <Form.List name={name}>
-        {(fields, {add, remove}) => (
-          <Space direction="vertical" size={16} style={{width: '100%'}}>
-            {fields.map((field, index) => (
-              <Card
-                key={field.key}
-                size="small"
-                title={`${title} ${index + 1}`}
-                className="supplement-entry-card"
-                extra={(
-                  <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)}>
-                    删除
-                  </Button>
-                )}
-              >
-                <Row gutter={12}>{children(field.name)}</Row>
-              </Card>
-            ))}
-            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({})}>
-              {addText}
-            </Button>
-          </Space>
-        )}
-      </Form.List>
+    <Card size="small" title="高德基础信息（只读）" style={{marginBottom: 16}}>
+      <Descriptions size="small" column={2}>
+        <Descriptions.Item label="名称">{name || '-'}</Descriptions.Item>
+        <Descriptions.Item label="距离">{distance == null ? '-' : `${distance} 米`}</Descriptions.Item>
+        <Descriptions.Item label="地址" span={2}>{address || '-'}</Descriptions.Item>
+        <Descriptions.Item label="数据来源"><Tag>{source === 'amap' ? '高德' : source || '-'}</Tag></Descriptions.Item>
+      </Descriptions>
     </Card>
   );
 }
@@ -277,348 +80,232 @@ export default function ProjectSupplementPage() {
   const {projectId = ''} = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [form] = Form.useForm();
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [prefillLoading, setPrefillLoading] = useState(false);
-  const [prefillCount, setPrefillCount] = useState(0);
-  const [submitResult, setSubmitResult] = useState<{imported: number; failed: number; qualityScore?: number; errors: string[]} | null>(null);
-  const [poiGroups, setPoiGroups] = useState<Record<string, DatasetPoi[]>>({});
-  const [poiLoading, setPoiLoading] = useState(false);
-  const storageKey = `project-supplement:${projectId}`;
-  const focus = searchParams.get('focus') || 'general';
-  const focusGuide = FOCUS_GUIDE[focus] || FOCUS_GUIDE.general;
+  const [activeTab, setActiveTab] = useState(searchParams.get('focus') === 'support' ? 'supporting' : searchParams.get('focus') === 'rent' || searchParams.get('focus') === 'property' ? 'property' : 'competitor');
+  const [search, setSearch] = useState('');
+  const [pendingOnly, setPendingOnly] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [competitors, setCompetitors] = useState<ProjectCompetitor[]>([]);
+  const [supporting, setSupporting] = useState<ProjectSupportingItem[]>([]);
+  const [rents, setRents] = useState<ProjectRentItem[]>([]);
+  const [savingId, setSavingId] = useState<string>('');
+  const [competitorModal, setCompetitorModal] = useState<ProjectCompetitor | null>(null);
+  const [supportingModal, setSupportingModal] = useState<ProjectSupportingDetail | null>(null);
+  const [rentModal, setRentModal] = useState<ProjectRentDetail | null>(null);
+  const [competitorForm] = Form.useForm();
+  const [supportingForm] = Form.useForm();
+  const [rentForm] = Form.useForm();
+  const [propertyForm] = Form.useForm();
+  const [propertySaving, setPropertySaving] = useState(false);
 
-  useEffect(() => {
-    setPoiLoading(true);
-    getProjectDataset(projectId)
-      .then((data: {pois?: DatasetPoi[]}) => {
-        const pois: DatasetPoi[] = Array.isArray(data?.pois) ? data.pois : [];
-        const groups: Record<string, DatasetPoi[]> = {};
-        for (const poi of pois) {
-          const key = poi.category || 'other';
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(poi);
-        }
-        setPoiGroups(groups);
-      })
-      .catch(() => undefined)
-      .finally(() => setPoiLoading(false));
-  }, [projectId]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(storageKey);
-    if (!stored) {
-      setPrefillLoading(true);
-      listProjectCompetitors(projectId)
-        .then(result => {
-          const rows = (result.items || []).slice(0, 20).map(competitorToFormRow);
-          if (!rows.length) return;
-          form.setFieldsValue({competitors: rows});
-          setPrefillCount(rows.length);
-        })
-        .catch(() => undefined)
-        .finally(() => setPrefillLoading(false));
-      return;
-    }
+  const loadAll = async () => {
+    setLoading(true);
     try {
-      form.setFieldsValue(JSON.parse(stored));
-      setSaved(true);
-    } catch {
-      localStorage.removeItem(storageKey);
-    }
-  }, [form, storageKey]);
-
-  const saveDraft = async (values: typeof EMPTY_VALUES) => {
-    localStorage.setItem(storageKey, JSON.stringify(values));
-    setSaved(true);
-    setSaving(true);
-    const errors: string[] = [];
-    let imported = 0;
-
-    const submit = async (
-      type: 'competitor' | 'rent' | 'population' | 'supplement',
-      data: Record<string, any>,
-      targetId?: string | number,
-    ) => {
-      if (!hasMeaningfulValue(data)) return;
-      try {
-        await submitManualInput(projectId, {type, target_id: targetId != null ? String(targetId) : undefined, data});
-        imported += 1;
-      } catch (error: any) {
-        errors.push(error?.response?.data?.detail || error.message || `${type} 保存失败`);
-      }
-    };
-
-    try {
-      for (const row of values.competitors || []) {
-        const competitorRow = row as Record<string, any>;
-        await submit('competitor', competitorPayload(competitorRow), competitorRow.competitor_id);
-      }
-      for (const row of values.rents || []) await submit('rent', rentPayload(row));
-      for (const row of values.populations || []) await submit('population', populationPayload(row));
-      for (const row of values.supports || []) await submit('supplement', supportPayload(row));
-
-      let qualityScore: number | undefined;
-      try {
-        const quality = await getProjectDataQuality(projectId);
-        qualityScore = Number(quality?.quality_score);
-      } catch (error: any) {
-        errors.push(error?.response?.data?.detail || error.message || '数据完整度刷新失败');
-      }
-
-      setSubmitResult({imported, failed: errors.length, qualityScore, errors});
-      if (imported > 0 && errors.length === 0) {
-        message.success('人工补充已保存到服务器，并已刷新数据核验');
-      } else if (imported > 0) {
-        message.warning('部分人工补充已保存，部分内容需要检查');
-      } else {
-        message.info('已保存本地草稿，没有可提交到服务器的数据');
-      }
+      const [competitorResult, supportingResult, rentResult, dataset] = await Promise.all([
+        listProjectCompetitors(projectId), listProjectSupporting(projectId), listProjectRent(projectId), getProjectDataset(projectId),
+      ]);
+      setCompetitors(competitorResult.items || []);
+      setSupporting(supportingResult.items || []);
+      setRents(rentResult.items || []);
+      const property = (dataset?.supplements || []).find((item: any) => item.target_type === 'candidate_property' && item.field_name === 'manual_detail');
+      if (property?.value) propertyForm.setFieldsValue(property.value);
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '人工核实数据加载失败');
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const poiColumns = [
-    {title: '名称', dataIndex: 'name', key: 'name', render: (value: string) => value || '-'},
-    {
-      title: '距离',
-      dataIndex: 'distance_meters',
-      key: 'distance_meters',
-      width: 90,
-      render: (value?: number | null) => (value != null ? `${value} 米` : '-'),
-    },
-    {
-      title: '营业时间',
-      dataIndex: 'business_hours',
-      key: 'business_hours',
-      width: 170,
-      render: (value?: string | null) => (
-        value
-          ? <Tag color={/24|00:00|00:00-23:59/i.test(value) ? 'green' : 'blue'}>{value}</Tag>
-          : <Typography.Text type="secondary">高德未提供，待核实</Typography.Text>
-      ),
-    },
-    {title: '电话', dataIndex: 'phone', key: 'phone', width: 130, render: (value?: string | null) => value || '-'},
-    {title: '地址', dataIndex: 'address', key: 'address', ellipsis: true, render: (value?: string | null) => value || '-'},
+  useEffect(() => { void loadAll(); }, [projectId]);
+
+  const filterItems = <T extends {name?: string; address?: string | null; status?: string}>(items: T[]) => items.filter(item => {
+    if (pendingOnly && item.status !== 'pending_review') return false;
+    const keyword = search.trim().toLowerCase();
+    return !keyword || `${item.name || ''} ${item.address || ''}`.toLowerCase().includes(keyword);
+  });
+
+  const filteredCompetitors = useMemo(() => filterItems(competitors), [competitors, pendingOnly, search]);
+  const filteredSupporting = useMemo(() => filterItems(supporting), [supporting, pendingOnly, search]);
+
+  const reviewCompetitor = async (item: ProjectCompetitor, status: 'confirmed' | 'rejected') => {
+    setSavingId(`competitor:${item.id}`);
+    try {
+      const updated = await reviewProjectCompetitor(projectId, item.id, status);
+      setCompetitors(rows => rows.map(row => row.id === item.id ? updated : row));
+      message.success(status === 'confirmed' ? '已确认是真实竞品' : '已排除该疑似竞品');
+    } catch { message.error('竞品核实状态保存失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const openCompetitor = async (item: ProjectCompetitor) => {
+    setSavingId(`competitor-load:${item.id}`);
+    try {
+      const detail = await getProjectCompetitor(projectId, item.id);
+      setCompetitorModal(detail);
+      competitorForm.setFieldsValue({
+        ...detail,
+        occupancy_rate: detail.occupancy_rate == null ? undefined : detail.occupancy_rate * 100,
+        unknown_fields: detail.manual_meta?.unknown_fields || [],
+      });
+    } catch { message.error('竞品详情加载失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const saveCompetitor = async () => {
+    if (!competitorModal) return;
+    try {
+      const values = await competitorForm.validateFields();
+      setSavingId(`competitor:${competitorModal.id}`);
+      const updated = await updateProjectCompetitor(projectId, competitorModal.id, {
+        ...values,
+        occupancy_rate: values.occupancy_rate == null ? null : Number(values.occupancy_rate) / 100,
+      });
+      setCompetitors(rows => rows.map(row => row.id === updated.id ? updated : row));
+      setCompetitorModal(null);
+      message.success('竞品人工核实信息已保存');
+    } catch (error: any) { if (!error?.errorFields) message.error('竞品详情保存失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const reviewSupportingItem = async (item: ProjectSupportingItem, status: 'confirmed' | 'rejected') => {
+    setSavingId(item.id);
+    try {
+      const updated = await reviewProjectSupporting(projectId, item.id, status);
+      setSupporting(rows => rows.map(row => row.id === item.id ? updated : row));
+      message.success(status === 'confirmed' ? '配套商户已确认' : '配套商户已排除');
+    } catch { message.error('配套核实状态保存失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const openSupporting = async (item: ProjectSupportingItem) => {
+    if (item.status !== 'confirmed') {
+      message.info('请先确认该商户真实有效，再补充营业详情');
+      return;
+    }
+    setSavingId(`supporting-load:${item.id}`);
+    try {
+      const detail = await getProjectSupportingDetail(projectId, item.id);
+      setSupportingModal(detail);
+      supportingForm.setFieldsValue({...detail.manual_detail, unknown_fields: detail.manual_meta?.unknown_fields || []});
+    } catch { message.error('配套详情加载失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const saveSupporting = async () => {
+    if (!supportingModal) return;
+    try {
+      const values = await supportingForm.validateFields();
+      setSavingId(supportingModal.id);
+      const updated = await updateProjectSupportingDetail(projectId, supportingModal.id, values);
+      setSupporting(rows => rows.map(row => row.id === updated.id ? updated : row));
+      setSupportingModal(null);
+      message.success('配套营业信息已保存');
+    } catch (error: any) { if (!error?.errorFields) message.error('配套详情保存失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const openRent = async (item: ProjectRentItem) => {
+    setSavingId(`rent-load:${item.id}`);
+    try {
+      const detail = await getProjectRentDetail(projectId, item.id);
+      setRentModal(detail);
+      rentForm.setFieldsValue({
+        ...detail,
+        ...detail.manual_detail,
+        unknown_fields: detail.manual_meta?.unknown_fields || [],
+      });
+    } catch { message.error('租金详情加载失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const saveRent = async () => {
+    if (!rentModal) return;
+    try {
+      const values = await rentForm.validateFields();
+      setSavingId(`rent:${rentModal.id}`);
+      const updated = await updateProjectRentDetail(projectId, rentModal.id, values);
+      setRents(rows => rows.map(row => row.id === updated.id ? updated : row));
+      setRentModal(null);
+      message.success('租金与物业详情已保存');
+    } catch (error: any) { if (!error?.errorFields) message.error('租金详情保存失败'); }
+    finally { setSavingId(''); }
+  };
+
+  const saveProperty = async () => {
+    try {
+      const values = await propertyForm.validateFields();
+      setPropertySaving(true);
+      await submitManualInput(projectId, {type: 'property', target_id: 'primary', data: values});
+      message.success('候选物业信息已保存');
+    } catch (error: any) {
+      if (!error?.errorFields) message.error(error?.response?.data?.detail || '候选物业保存失败');
+    } finally { setPropertySaving(false); }
+  };
+
+  const competitorColumns = [
+    {title: '疑似竞品', key: 'name', render: (_: unknown, item: ProjectCompetitor) => <Space direction="vertical" size={2}><Typography.Text strong>{item.name}</Typography.Text><Typography.Text type="secondary">{item.address || '高德未提供地址'}</Typography.Text></Space>},
+    {title: '距离', dataIndex: 'distance_meters', width: 100, sorter: (a: ProjectCompetitor, b: ProjectCompetitor) => (a.distance_meters || 999999) - (b.distance_meters || 999999), defaultSortOrder: 'ascend' as const, render: (value: number | null) => value == null ? '-' : `${value} 米`},
+    {title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <StatusTag status={value} />},
+    {title: '人工核实', key: 'audit', width: 230, render: (_: unknown, item: ProjectCompetitor) => <AuditText meta={item.manual_meta} />},
+    {title: '操作', key: 'action', width: 300, render: (_: unknown, item: ProjectCompetitor) => <Space wrap><Button size="small" type="primary" icon={<CheckOutlined />} loading={savingId === `competitor:${item.id}`} onClick={() => reviewCompetitor(item, 'confirmed')}>确认竞品</Button><Button size="small" icon={<CloseOutlined />} onClick={() => reviewCompetitor(item, 'rejected')}>不是竞品</Button><Button size="small" icon={<EditOutlined />} onClick={() => openCompetitor(item)}>核实详情</Button></Space>},
   ];
 
-  const poiTotal = Object.values(poiGroups).reduce((sum, list) => sum + list.length, 0);
+  const supportingColumns = [
+    {title: '商户', key: 'name', render: (_: unknown, item: ProjectSupportingItem) => <Space direction="vertical" size={2}><Typography.Text strong>{item.name}</Typography.Text><Typography.Text type="secondary">{item.address || '高德未提供地址'}</Typography.Text></Space>},
+    {title: '分类', dataIndex: 'category', width: 120, render: (value: string) => ({food: '餐饮', entertainment: '娱乐', night_business: '夜间商业候选'} as Record<string, string>)[value] || value},
+    {title: '距离', dataIndex: 'distance_meters', width: 100, render: (value: number | null) => value == null ? '-' : `${value} 米`},
+    {title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <StatusTag status={value} />},
+    {title: '操作', key: 'action', width: 290, render: (_: unknown, item: ProjectSupportingItem) => <Space wrap><Button size="small" type="primary" onClick={() => reviewSupportingItem(item, 'confirmed')}>确认有效</Button><Button size="small" onClick={() => reviewSupportingItem(item, 'rejected')}>排除</Button><Button size="small" disabled={item.status !== 'confirmed'} onClick={() => openSupporting(item)}>补充营业信息</Button></Space>},
+  ];
+
+  const listToolbar = (
+    <Space wrap style={{marginBottom: 12}}>
+      <Input.Search allowClear placeholder="按名称或地址搜索" style={{width: 280}} onSearch={setSearch} onChange={event => setSearch(event.target.value)} />
+      <Space><Switch checked={pendingOnly} onChange={setPendingOnly} /><Typography.Text>只看待核实</Typography.Text></Space>
+      <Button onClick={() => void loadAll()}>刷新</Button>
+    </Space>
+  );
+
+  if (loading) return <div className="page"><Spin tip="正在读取高德候选和人工核实数据..." /></div>;
 
   return (
     <div className="page supplement-page">
       <div className="page-title-row">
         <div>
-          <Typography.Title level={2}>人工补充数据</Typography.Title>
-          <Typography.Paragraph type="secondary">
-            补充高德和 AI 无法直接确认的经营、成本和客群信息。提交后会写入服务器，参与后续数据核验、评分和报告。
-          </Typography.Paragraph>
+          <Typography.Title level={2}>人工核实与补充</Typography.Title>
+          <Typography.Paragraph type="secondary">围绕高德已发现对象核实真实性并补齐关键经营信息；不知道的字段可以明确标记，不要求一次补完全部对象。</Typography.Paragraph>
         </div>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/?projectId=${encodeURIComponent(projectId)}`)}>
-          返回项目工作台
-        </Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}`)}>返回项目工作台</Button>
       </div>
-
-      <Alert
-        type={saved ? 'success' : 'info'}
-        showIcon
-        style={{marginBottom: 16}}
-        message={saved ? '已恢复本项目的人工补充草稿' : '请按实际调研结果填写，不确定的数据可以留空'}
-        description="提交时会先保留本地草稿，再把有效内容保存到服务器；保存成功后会自动刷新数据完整度。"
-      />
-
-      {prefillLoading && (
-        <Alert
-          type="info"
-          showIcon
-          style={{marginBottom: 16}}
-          message="正在读取已采集的竞品数据..."
-        />
-      )}
-
-      {prefillCount > 0 && !saved && (
-        <Alert
-          type="success"
-          showIcon
-          style={{marginBottom: 16}}
-          message={`已带入 ${prefillCount} 条已采集竞品`}
-          description="已自动填入竞品名称和距离。请在对应行补充价格、配置、上座率、营业时间等人工调研信息。"
-        />
-      )}
-
-      {submitResult && (
-        <Alert
-          type={submitResult.failed > 0 ? 'warning' : 'success'}
-          showIcon
-          style={{marginBottom: 16}}
-          message={`服务器保存结果：成功 ${submitResult.imported} 条，失败 ${submitResult.failed} 条`}
-          description={(
-            <Space direction="vertical" size={4}>
-              {Number.isFinite(submitResult.qualityScore) && (
-                <Typography.Text>当前数据完整度：{submitResult.qualityScore}%</Typography.Text>
-              )}
-              {submitResult.errors.map((item, index) => <Typography.Text key={`${item}-${index}`} type="danger">{item}</Typography.Text>)}
-            </Space>
-          )}
-        />
-      )}
-
-      <Alert
-        type="warning"
-        showIcon
-        style={{marginBottom: 16}}
-        message={focusGuide.title}
-        description={(
-          <Space direction="vertical" size={8}>
-            <Typography.Text>{focusGuide.description}</Typography.Text>
-            <Space size={[6, 6]} wrap>
-              {focusGuide.fields.map(item => <Typography.Text key={item} code>{item}</Typography.Text>)}
-            </Space>
-          </Space>
-        )}
-      />
-
-      <Card
-        size="small"
-        title={(
-          <Space>
-            已采集 POI 列表（高德）
-            <Tag color="blue">共 {poiTotal} 条</Tag>
-          </Space>
-        )}
-        style={{marginBottom: 16}}
-      >
-        <Typography.Paragraph type="secondary">
-          以下为高德自动采集并分类好的周边 POI。请结合现场调研核对名称、距离和营业时间，再在下方表单填写价格、配置、租金等人工数据；高德有营业时间的会自动带入。
-        </Typography.Paragraph>
-        {poiLoading && <Alert type="info" showIcon style={{marginBottom: 12}} message="正在读取已采集 POI 列表..." />}
-        {!poiLoading && poiTotal === 0 && (
-          <Alert type="info" showIcon message="当前项目还没有采集到高德 POI，请先在 Step 3 点击“采集高德 POI”。" />
-        )}
-        <Divider style={{margin: '8px 0'}} />
-        {Object.entries(poiGroups)
-          .filter(([, list]) => list.length > 0)
-          .sort(([a], [b]) => {
-            const indexA = POI_GROUP_ORDER.indexOf(a);
-            const indexB = POI_GROUP_ORDER.indexOf(b);
-            return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
-          })
-          .map(([group, list]) => (
-            <div key={group} style={{marginBottom: 12}}>
-              <Space style={{marginBottom: 8}}>
-                <Tag color={POI_GROUP_COLORS[group] || 'default'}>{POI_GROUP_LABELS[group] || group}</Tag>
-                <Typography.Text type="secondary">{list.length} 条</Typography.Text>
-              </Space>
-              <Table
-                size="small"
-                rowKey="id"
-                columns={poiColumns}
-                dataSource={list}
-                pagination={list.length > 10 ? {pageSize: 10, showSizeChanger: false} : false}
-              />
-            </div>
-          ))}
+      <Alert type="info" showIcon style={{marginBottom: 16}} message="数据真实性边界" description="高德名称、地址和距离只读保留；人工核实值单独记录来源、时间和修改历史，不会被后续高德采集覆盖。" />
+      <Row gutter={[12, 12]} className="supplement-summary">
+        <Col xs={12} md={6}><Card size="small"><Typography.Text type="secondary">疑似竞品</Typography.Text><Typography.Title level={3}>{competitors.length}</Typography.Title><Tag color="orange">{competitors.filter(item => item.status === 'pending_review').length} 待核实</Tag></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Typography.Text type="secondary">周边配套</Typography.Text><Typography.Title level={3}>{supporting.length}</Typography.Title><Tag color="orange">{supporting.filter(item => item.status === 'pending_review').length} 待核实</Tag></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Typography.Text type="secondary">租金记录</Typography.Text><Typography.Title level={3}>{rents.length}</Typography.Title><Tag color="green">{rents.filter(item => item.status === 'confirmed').length} 已确认</Tag></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Typography.Text type="secondary">处理建议</Typography.Text><Typography.Paragraph>先确认对象真实性，再补充关键经营字段。</Typography.Paragraph></Card></Col>
+      </Row>
+      <Card>
+        <Tabs activeKey={activeTab} onChange={key => { setActiveTab(key); setSearch(''); setPendingOnly(key !== 'property'); }} items={[
+          {key: 'competitor', label: `竞品核实（${competitors.filter(item => item.status === 'pending_review').length} 待处理）`, children: <>{listToolbar}<Table rowKey="id" size="small" scroll={{x: 980}} columns={competitorColumns} dataSource={filteredCompetitors} pagination={{pageSize: 10}} locale={{emptyText: competitors.length ? '当前筛选条件下没有记录' : '请先采集并整理疑似竞品'}} /></>},
+          {key: 'supporting', label: `配套核实（${supporting.filter(item => item.status === 'pending_review').length} 待处理）`, children: <>{listToolbar}<Table rowKey="id" size="small" scroll={{x: 900}} columns={supportingColumns} dataSource={filteredSupporting} pagination={{pageSize: 10}} locale={{emptyText: supporting.length ? '当前筛选条件下没有记录' : '请先采集并整理周边配套'}} /></>},
+          {key: 'property', label: '候选物业', children: <PropertyForm form={propertyForm} saving={propertySaving} onSave={saveProperty} rents={rents} onOpenRent={openRent} onReviewRent={async (item, status) => { const updated = await reviewProjectRent(projectId, item.id, status); setRents(rows => rows.map(row => row.id === item.id ? updated : row)); message.success('租金状态已保存'); }} />},
+        ]} />
       </Card>
 
-      <Form form={form} layout="vertical" initialValues={EMPTY_VALUES} onFinish={saveDraft}>
-        <Space direction="vertical" size={16} style={{width: '100%'}}>
-          <ListSection
-            name="competitors"
-            title="竞品信息补充"
-            description="记录现场调研或电话核实的竞品经营信息。"
-            addText="新增一条竞品信息"
-          >
-            {fieldName => (
-              <>
-                <Col span={24}>
-                  <Form.Item noStyle shouldUpdate>
-                    {({getFieldValue}) => (
-                      <CrawlerSuggestionPanel suggestion={getFieldValue(['competitors', fieldName, 'crawler_suggestion'])} />
-                    )}
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'name']} label="竞品名称"><Input placeholder="例如：XX电竞馆" /></Form.Item></Col>
-                <Form.Item name={[fieldName, 'competitor_id']} hidden><Input /></Form.Item>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'distance_meters'] as any} label="距离" suffix="米" /></Col>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'area_sqm'] as any} label="面积" suffix="㎡" /></Col>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'machine_count'] as any} label="机器数量" suffix="台" /></Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'cpu']} label="CPU"><Input placeholder="例如：i5-13400F" /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'gpu']} label="显卡"><Input placeholder="例如：RTX 4060" /></Form.Item></Col>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'hour_price'] as any} label="价格" suffix="元/小时" /></Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'business_hours']} label="营业时间"><Input placeholder="例如：24小时" /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'opening_date']} label="开业时间"><Input placeholder="例如：2023年5月" /></Form.Item></Col>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'occupancy_rate'] as any} label="上座率" suffix="%" /></Col>
-                <Col xs={24} md={8}><NumberField name={[fieldName, 'monthly_revenue'] as any} label="月营业额" suffix="元" /></Col>
-              </>
-            )}
-          </ListSection>
+      <Modal title="竞品人工核实" width={820} style={{maxWidth: 'calc(100vw - 24px)'}} open={Boolean(competitorModal)} onCancel={() => setCompetitorModal(null)} onOk={saveCompetitor} okText="保存核实信息" confirmLoading={savingId.startsWith('competitor:')}>
+        {competitorModal && <><ReadonlySource {...competitorModal} /><Form form={competitorForm} layout="vertical"><Typography.Title level={5}>规模与硬件</Typography.Title><Row gutter={12}><Col xs={24} md={8}><Form.Item name="area_sqm" label="营业面积（㎡）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="machine_count" label="机器数量（台）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="opening_date" label="开业时间"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="cpu" label="CPU"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="gpu" label="显卡"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="monitor" label="显示器"><Input /></Form.Item></Col></Row><Typography.Title level={5}>价格与经营</Typography.Title><Row gutter={12}><Col xs={24} md={8}><Form.Item name="hour_price" label="小时价（元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="member_price" label="会员价（元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="business_hours" label="营业时间修正"><Input placeholder="如 10:00-02:00" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="occupancy_rate" label="现场上座率（%）"><InputNumber min={0} max={100} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="occupancy_observed_at" label="观察时间"><Input placeholder="2026-08-12 20:00" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="occupancy_period" label="观察时段"><Select allowClear options={[{value: 'weekday_day', label: '工作日白天'}, {value: 'weekday_night', label: '工作日晚间'}, {value: 'weekend_day', label: '周末白天'}, {value: 'weekend_night', label: '周末晚间'}]} /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="survey_method" label="核实方式"><Select allowClear options={[{value: 'onsite', label: '现场观察'}, {value: 'phone', label: '电话询问'}, {value: 'public_info', label: '公开信息'}]} /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="recharge_info" label="充值活动"><Input /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="monthly_sales" label="月营业额（可选，仅可靠来源）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="sales_source" label="营业额来源"><Input placeholder="未填写来源时不应作为可靠事实" /></Form.Item></Col><Col span={24}><Form.Item name="unknown_fields" label="明确不知道的字段"><Select mode="multiple" allowClear options={COMPETITOR_UNKNOWN_OPTIONS} placeholder="选择后系统会记录为“人工明确未知”" /></Form.Item></Col><Col span={24}><Form.Item name="remark" label="调研备注"><TextArea rows={3} /></Form.Item></Col></Row></Form></>}
+      </Modal>
 
-          <ListSection
-            name="rents"
-            title="租金信息补充"
-            description="记录候选物业的实际报价和一次性成本。"
-            addText="新增一条租金信息"
-          >
-            {fieldName => (
-              <>
-                <Col xs={24} md={6}><NumberField name={[fieldName, 'monthly_rent'] as any} label="月租金" suffix="元" /></Col>
-                <Col xs={24} md={6}><NumberField name={[fieldName, 'property_fee'] as any} label="物业费" suffix="元/月" /></Col>
-                <Col xs={24} md={6}><NumberField name={[fieldName, 'area_sqm'] as any} label="面积" suffix="㎡" /></Col>
-                <Col xs={24} md={6}><NumberField name={[fieldName, 'transfer_fee'] as any} label="转让费" suffix="元" /></Col>
-              </>
-            )}
-          </ListSection>
+      <Modal title="配套营业信息核实" width={700} style={{maxWidth: 'calc(100vw - 24px)'}} open={Boolean(supportingModal)} onCancel={() => setSupportingModal(null)} onOk={saveSupporting} okText="保存核实信息" confirmLoading={Boolean(supportingModal && savingId === supportingModal.id)}>
+        {supportingModal && <><ReadonlySource {...supportingModal} /><Form form={supportingForm} layout="vertical"><Row gutter={12}><Col xs={24} md={12}><Form.Item name="business_hours" label="人工核实营业时间"><Input /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="opening_date" label="开业时间"><Input /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="night_operation" label="是否夜间营业"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col>{supportingModal.category === 'night_business' && <Col xs={24} md={12}><Form.Item name="is_24_hours" label="是否24小时营业"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col>}<Col span={24}><Form.Item name="unknown_fields" label="明确不知道"><Select mode="multiple" options={[{value: 'business_hours', label: '营业时间'}, {value: 'night_operation', label: '夜间营业状态'}, {value: 'is_24_hours', label: '24小时状态'}]} /></Form.Item></Col><Col span={24}><Form.Item name="remark" label="现场备注"><TextArea rows={3} /></Form.Item></Col></Row></Form></>}
+      </Modal>
 
-          <ListSection
-            name="populations"
-            title="人口信息补充"
-            description="记录现场观察到的学校、住宅和年轻客群情况。"
-            addText="新增一条人口信息"
-          >
-            {fieldName => (
-              <>
-                <Col xs={24} md={12}><Form.Item name={[fieldName, 'universities']} label="周边大学"><Input placeholder="名称、数量或距离" /></Form.Item></Col>
-                <Col xs={24} md={12}><Form.Item name={[fieldName, 'vocational_schools']} label="技校"><Input placeholder="名称、数量或距离" /></Form.Item></Col>
-                <Col xs={24} md={12}><Form.Item name={[fieldName, 'residential']} label="住宅情况"><Input placeholder="小区类型、入住情况等" /></Form.Item></Col>
-                <Col xs={24} md={12}><Form.Item name={[fieldName, 'apartments']} label="公寓情况"><Input placeholder="公寓数量、入住情况等" /></Form.Item></Col>
-                <Col span={24}><Form.Item name={[fieldName, 'young_population']} label="年轻人口情况"><TextArea rows={2} placeholder="描述年轻客群、学生和夜间人流情况" /></Form.Item></Col>
-              </>
-            )}
-          </ListSection>
-
-          <ListSection
-            name="supports"
-            title="配套补充"
-            description="记录夜间消费和周边配套的现场核实结果。"
-            addText="新增一条配套信息"
-          >
-            {fieldName => (
-              <>
-                <Col xs={24} md={8}>
-                  <Form.Item name={[fieldName, 'night_market']} label="夜市">
-                    <Select placeholder="请选择" options={[{value: 'yes', label: '有'}, {value: 'no', label: '无'}, {value: 'unknown', label: '待核实'}]} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={8}>
-                  <Form.Item name={[fieldName, 'convenience_store_24h']} label="24小时便利店">
-                    <Input placeholder="数量、名称或距离" />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={8}><Form.Item name={[fieldName, 'entertainment']} label="娱乐设施"><Input placeholder="KTV、酒吧、台球等" /></Form.Item></Col>
-                <Col span={24}><Form.Item name={[fieldName, 'remark']} label="备注"><TextArea rows={3} placeholder="补充营业时间、夜间人流或其他现场观察" /></Form.Item></Col>
-              </>
-            )}
-          </ListSection>
-
-          <Card className="supplement-submit-bar">
-            <Space>
-              <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving}>保存到服务器并刷新核验</Button>
-              <Typography.Text type="secondary">保存成功后可返回工作台，继续进行 AI 数据核验、评分和报告。</Typography.Text>
-            </Space>
-          </Card>
-        </Space>
-      </Form>
+      <Modal title="租金与物业信息" width={760} style={{maxWidth: 'calc(100vw - 24px)'}} open={Boolean(rentModal)} onCancel={() => setRentModal(null)} onOk={saveRent} okText="保存" confirmLoading={Boolean(rentModal && savingId === `rent:${rentModal.id}`)}>
+        {rentModal && <Form form={rentForm} layout="vertical"><Row gutter={12}><Col span={24}><Form.Item name="address" label="物业地址"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="area_sqm" label="面积（㎡）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="monthly_rent" label="月租金（元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="property_fee" label="物业费（元/月）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="transfer_fee" label="转让费（元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="floor" label="楼层"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="property_type" label="物业用途"><Input placeholder="商业/办公等" /></Form.Item></Col><Col span={24}><Form.Item name="source_url" label="报价来源"><Input /></Form.Item></Col><Col span={24}><Form.Item name="unknown_fields" label="明确不知道"><Select mode="multiple" options={[{value: 'monthly_rent', label: '月租金'}, {value: 'property_fee', label: '物业费'}, {value: 'transfer_fee', label: '转让费'}, {value: 'property_type', label: '物业用途'}]} /></Form.Item></Col><Col span={24}><Form.Item name="rent_remark" label="备注"><TextArea rows={3} /></Form.Item></Col></Row></Form>}
+      </Modal>
     </div>
   );
+}
+
+function PropertyForm({form, saving, onSave, rents, onOpenRent, onReviewRent}: {form: any; saving: boolean; onSave: () => void; rents: ProjectRentItem[]; onOpenRent: (item: ProjectRentItem) => void; onReviewRent: (item: ProjectRentItem, status: 'confirmed' | 'rejected') => Promise<void>}) {
+  return <Space direction="vertical" size={16} style={{width: '100%'}}><Alert type="info" showIcon message="候选物业独立调查表" description="这里只记录投资者实际考察的候选物业，不把周边商铺租金自动当作当前物业报价。" /><Form form={form} layout="vertical"><Row gutter={12}><Col span={24}><Form.Item name="address" label="候选物业地址"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="area_sqm" label="可用面积（㎡）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="monthly_rent" label="月租金（元）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="floor" label="楼层"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="property_type" label="物业用途"><Input /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="power_capacity_kw" label="供电容量（kW）"><InputNumber min={0} style={{width: '100%'}} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="network_carriers" label="可用运营商"><Input placeholder="电信、联通等" /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="use_allowed" label="允许电竞馆业态"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="power_sufficient" label="供电满足"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="fire_confirmed" label="消防条件确认"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="dual_line_supported" label="支持双线路"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="night_entrance" label="夜间独立入口"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col xs={24} md={6}><Form.Item name="independent_entrance" label="独立门头入口"><Select allowClear options={YES_NO_UNKNOWN} /></Form.Item></Col><Col span={24}><Form.Item name="unknown_fields" label="明确不知道"><Select mode="multiple" options={[{value: 'use_allowed', label: '业态许可'}, {value: 'power_capacity_kw', label: '供电容量'}, {value: 'fire_confirmed', label: '消防条件'}, {value: 'dual_line_supported', label: '双线路'}, {value: 'night_entrance', label: '夜间入口'}]} /></Form.Item></Col><Col span={24}><Form.Item name="notes" label="物业备注"><TextArea rows={3} /></Form.Item></Col></Row><Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>保存候选物业</Button></Form><Card size="small" title={`周边租金/报价记录（${rents.length}）`}><Table size="small" rowKey="id" dataSource={rents} pagination={false} scroll={{x: 720}} columns={[{title: '地址', dataIndex: 'address', render: value => value || '待补充'}, {title: '面积', dataIndex: 'area_sqm', render: value => value == null ? '-' : `${value}㎡`}, {title: '月租金', dataIndex: 'monthly_rent', render: value => value == null ? '-' : `¥${value}`}, {title: '状态', dataIndex: 'status', render: value => <StatusTag status={value} />}, {title: '操作', render: (_: unknown, item: ProjectRentItem) => <Space><Button size="small" onClick={() => onOpenRent(item)}>补充</Button><Button size="small" type="primary" onClick={() => void onReviewRent(item, 'confirmed')}>确认</Button><Button size="small" onClick={() => void onReviewRent(item, 'rejected')}>排除</Button></Space>}]}/></Card></Space>;
 }

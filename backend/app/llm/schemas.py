@@ -31,6 +31,8 @@ class AIReportResponse(BaseModel):
     model: str | None = None
     created_at: Any | None = None
     message: str | None = None
+    snapshot_version: str | None = None
+    validation_status: str | None = None
 
 
 class AIReviewResponse(BaseModel):
@@ -48,3 +50,55 @@ class DeepSeekResult(BaseModel):
     duration_ms: int
     input_length: int
     output_length: int
+
+
+class AIQuestionOption(BaseModel):
+    label: str
+    value: str
+
+
+class AIQuestion(BaseModel):
+    question_id: str
+    field_key: str
+    target_type: str
+    target_id: str
+    title: str
+    help_text: str | None = None
+    answer_type: str
+    unit: str | None = None
+    options: list[AIQuestionOption] = Field(default_factory=list)
+    round: int
+
+
+class AIQuestionsRequest(BaseModel):
+    continue_round: bool = False
+
+
+class AIQuestionsResponse(BaseModel):
+    success: bool = True
+    status: str
+    round: int
+    questions: list[AIQuestion] = Field(default_factory=list)
+    asked_count: int = 0
+    remaining_candidate_count: int = 0
+    message: str
+
+
+class AIQuestionAnswer(BaseModel):
+    question_id: str
+    value: str | float | int | bool | None = None
+    unknown: bool = False
+    skip: bool = False
+
+
+class AIQuestionAnswersRequest(BaseModel):
+    answers: list[AIQuestionAnswer] = Field(min_length=1, max_length=3)
+
+
+class AIQuestionAnswersResponse(BaseModel):
+    success: bool = True
+    saved_count: int
+    unknown_count: int
+    skipped_count: int
+    can_continue: bool
+    message: str

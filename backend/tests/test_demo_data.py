@@ -67,8 +67,7 @@ def test_generate_demo_data_marks_quality_and_ai_input_as_simulation(client):
     quality_response = client.get(f"/api/projects/{project_id}/data-quality")
     assert quality_response.status_code == 200
     quality = quality_response.json()
-    assert quality["simulation_data_summary"]["has_simulation_data"] is True
-    assert any("演示模拟数据" in warning for warning in quality["warnings"])
+    assert "simulation_data_summary" not in quality
 
     client.post(f"/api/projects/{project_id}/score")
     with SessionLocal() as db:

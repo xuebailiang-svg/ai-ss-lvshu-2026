@@ -142,6 +142,26 @@ def test_collect_supporting_unknown_project_returns_404(client):
     assert response.status_code == 404
 
 
+def test_supporting_manual_audit_tracks_unknown_fields(client, monkeypatch):
+    project_id, item = confirmed_supporting_item(client, monkeypatch, "food")
+    response = client.put(
+        f"/api/projects/{project_id}/supporting/{item['id']}",
+        json={
+            "business_hours": "18:00-02:00",
+            "night_operation": True,
+            "remark": "现场核实",
+            "unknown_fields": ["opening_date"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manual_detail"]["business_hours"] == "18:00-02:00"
+    assert body["manual_meta"]["field_sources"]["business_hours"] == "manual"
+    assert body["manual_meta"]["field_sources"]["opening_date"] == "manual_unknown"
+    assert body["manual_meta"]["history_count"] >= 3
+
+
 def collect_supporting_for_review(client, monkeypatch) -> tuple[str, dict[str, Any]]:
     async def fake_collect_pois(self, **kwargs):
         category_keywords = kwargs.get("category_keywords") or {}

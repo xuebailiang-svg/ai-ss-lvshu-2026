@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.data_source.base import DataSourceRequest, ProviderCallStatus
-from app.data_source.crawler.evidence import crawler_suggestion_from_raw
 from app.data_source.registry import DataSourceRegistry, build_default_registry
+from app.manual_input.audit import apply_manual_changes, manual_meta_public
 from app.models import SiteProjectRecord, UnifiedCompetitorRecord
 from app.projects.service import get_project
 
@@ -48,7 +48,11 @@ def competitor_to_public(row: UnifiedCompetitorRecord) -> dict[str, Any]:
         "annual_sales": row.annual_sales,
         "recharge_info": manual_detail.get("recharge_info"),
         "remark": manual_detail.get("remark"),
-        "crawler_suggestion": crawler_suggestion_from_raw(raw, row.status),
+        "occupancy_observed_at": manual_detail.get("occupancy_observed_at"),
+        "occupancy_period": manual_detail.get("occupancy_period"),
+        "survey_method": manual_detail.get("survey_method"),
+        "sales_source": manual_detail.get("sales_source"),
+        "manual_meta": manual_meta_public(raw),
     }
 
 
@@ -79,7 +83,17 @@ def review_project_competitor(
     )
     if not row:
         raise CompetitorNotFoundError("Competitor not found")
+    old_status = row.status
     row.status = status
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="competitor",
+        target_id=row.id,
+        raw_data=row.raw_data,
+        old_values={"status": old_status},
+        changes={"status": status},
+    )
     db.commit()
     db.refresh(row)
     return competitor_to_public(row)
@@ -116,6 +130,8 @@ def update_project_competitor_detail(
     if not row:
         raise CompetitorNotFoundError("Competitor not found")
 
+    unknown_value = changes.pop("unknown_fields", None)
+    unknown_fields = list(unknown_value or []) if unknown_value is not None else None
     column_fields = {
         "area_sqm",
         "machine_count",
@@ -129,18 +145,37 @@ def update_project_competitor_detail(
         "monthly_sales",
         "annual_sales",
     }
+    old_values: dict[str, Any] = {}
+    audit_changes: dict[str, Any] = {}
     for field_name in column_fields:
         if field_name in changes:
+            old_values[field_name] = getattr(row, field_name)
             setattr(row, field_name, changes[field_name])
+            audit_changes[field_name] = changes[field_name]
 
     raw_data = dict(row.raw_data or {})
     existing_manual_detail = raw_data.get("manual_detail")
     manual_detail = dict(existing_manual_detail) if isinstance(existing_manual_detail, dict) else {}
-    for field_name in ("business_hours", "recharge_info", "remark"):
+    manual_fields = {
+        "business_hours", "recharge_info", "remark", "occupancy_observed_at",
+        "occupancy_period", "survey_method", "sales_source",
+    }
+    for field_name in manual_fields:
         if field_name in changes:
+            old_values[field_name] = manual_detail.get(field_name)
             manual_detail[field_name] = changes[field_name]
+            audit_changes[field_name] = changes[field_name]
     raw_data["manual_detail"] = manual_detail
-    row.raw_data = raw_data
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="competitor",
+        target_id=row.id,
+        raw_data=raw_data,
+        old_values=old_values,
+        changes=audit_changes,
+        unknown_fields=unknown_fields,
+    )
     db.commit()
     db.refresh(row)
     return competitor_to_public(row)

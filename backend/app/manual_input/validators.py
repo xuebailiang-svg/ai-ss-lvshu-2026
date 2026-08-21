@@ -44,6 +44,12 @@ POPULATION_FIELDS = {
     "target_customer_description",
 }
 
+PROPERTY_FIELDS = {
+    "address", "area_sqm", "monthly_rent", "floor", "property_type", "use_allowed",
+    "power_capacity_kw", "power_sufficient", "fire_confirmed", "network_carriers",
+    "dual_line_supported", "night_entrance", "independent_entrance", "notes", "unknown_fields",
+}
+
 
 def flatten_manual_data(data: dict[str, Any]) -> dict[str, Any]:
     flattened = dict(data or {})
@@ -74,6 +80,8 @@ def allowed_fields(data_type: str) -> set[str]:
         return POPULATION_FIELDS
     if data_type == "supplement":
         return {"target_type", "target_id", "field_name", "value", "remark"}
+    if data_type == "property":
+        return PROPERTY_FIELDS
     return set()
 
 

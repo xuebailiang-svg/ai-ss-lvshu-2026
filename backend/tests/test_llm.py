@@ -4,8 +4,37 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.llm.schemas import DeepSeekResult
 from app.llm.service import build_ai_input
-from app.llm.prompts import AI_DATA_REVIEW_PROMPT, SITE_SELECTION_REPORT_PROMPT
-from app.models import AICallLogRecord, AIReportRecord
+from app.llm.prompts import AI_DATA_REVIEW_PROMPT, FINAL_PROJECT_REPORT_PROMPT, SITE_SELECTION_REPORT_PROMPT
+from app.llm.snapshot import build_final_project_snapshot
+from app.models import AICallLogRecord, AIReportRecord, SupplementRecord, UnifiedCompetitorRecord
+
+
+VALID_REPORT = """# 电竞馆选址分析报告
+
+## 一、项目概况
+报告只使用当前项目快照。
+
+## 二、核心结论
+谨慎。
+
+## 三、交通环境
+仅描述高德地点候选，不推测客流。
+
+## 四、竞争环境
+疑似竞品与人工确认事实分开描述。
+
+## 五、周边商业配套
+仅描述已提供数据。
+
+## 六、物业与租金
+当前项目数据中没有的字段无法判断。
+
+## 七、数据缺失与风险
+保留未知项和数据边界。
+
+## 八、最终建议
+签约前继续现场核实。
+"""
 
 
 def create_project(client):
@@ -153,16 +182,13 @@ def test_mock_deepseek_returns_report(client, monkeypatch):
     get_settings.cache_clear()
 
     def fake_generate_report(self, analysis_input, prompt=None):
-        assert analysis_input["score_result"]["total_score"] >= 0
-        assert analysis_input["competitor_analysis"]["competitor_count"] == 1
-        assert analysis_input["competitor_analysis"]["average_hour_price"] == 15
-        assert analysis_input["supporting_analysis"]["food_count"] == 1
-        assert analysis_input["supporting_analysis"]["night_food_count"] == 1
-        assert analysis_input["supporting_analysis"]["entertainment_count"] == 1
-        assert analysis_input["rent_analysis"]["confirmed_rent_count"] == 3
-        assert analysis_input["rent"] == {}
+        assert prompt == FINAL_PROJECT_REPORT_PROMPT
+        snapshot = analysis_input["final_project_snapshot"]
+        assert "score_result" not in snapshot
+        assert "city_insight" not in snapshot
+        assert snapshot["competitors"]["confirmed_count"]["value"] == 1
         return DeepSeekResult(
-            content="# 电竞馆选址分析报告\n\n## 一、综合结论\n推荐。",
+            content=VALID_REPORT,
             model="deepseek-chat",
             duration_ms=12,
             input_length=100,
@@ -227,7 +253,7 @@ def test_ai_input_conversion_has_fixed_sections(client):
     assert data["score_result"]["total_score"] >= 0
 
 
-def test_ai_report_without_competitors_is_generated_safely(client, monkeypatch):
+def test_ai_report_without_technical_prerequisites_returns_data_insufficient_report(client, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     get_settings.cache_clear()
 
@@ -255,7 +281,9 @@ def test_ai_report_without_competitors_is_generated_safely(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["success"] is True
-    assert "竞争环境分析" in response.json()["content"]
+    assert response.json()["model"] == "system-readiness"
+    assert "数据不足" in response.json()["content"]
+    assert "## 八、最终建议" in response.json()["content"]
 
 
 def test_ai_input_keeps_missing_competitor_operating_data_empty(client):
@@ -426,7 +454,7 @@ def test_ai_report_is_saved_with_call_log(client, monkeypatch):
 
     def fake_generate_report(self, analysis_input, prompt=None):
         return DeepSeekResult(
-            content="# 电竞馆选址分析报告\n\n## 一、综合结论\n谨慎推荐。",
+            content=VALID_REPORT,
             model="deepseek-chat",
             duration_ms=20,
             input_length=123,
@@ -444,8 +472,10 @@ def test_ai_report_is_saved_with_call_log(client, monkeypatch):
         logs = db.query(AICallLogRecord).filter(AICallLogRecord.report_id == report_id).all()
     assert report is not None
     assert report.project_id == project_id
-    assert report.input_snapshot["project"]["project_id"] == project_id
-    assert report.score_snapshot["total_score"] >= 0
+    snapshot = report.input_snapshot["final_project_snapshot"]
+    assert snapshot["project"]["project_id"] == project_id
+    assert report.score_snapshot == {}
+    assert "score_result" not in snapshot
     assert len(logs) == 1
     assert logs[0].input_length == 123
     assert logs[0].output_length == 45
@@ -454,3 +484,133 @@ def test_ai_report_is_saved_with_call_log(client, monkeypatch):
 def test_ai_report_project_not_found(client):
     response = client.post("/api/projects/not-exists/ai-report")
     assert response.status_code == 404
+
+
+def test_final_snapshot_only_contains_amap_user_calculated_and_unknown(client):
+    project_id = seed_project_for_ai(client)
+    with SessionLocal() as db:
+        snapshot = build_final_project_snapshot(db, project_id)
+
+    serialized = str(snapshot)
+    assert "AMAP_PROVIDED" in serialized
+    assert "USER_PROVIDED" in serialized
+    assert "CALCULATED" in serialized
+    for forbidden in ("score_result", "city_insight", "memory_context", "crawler_evidence", "simulation_data", "raw_data", "confidence"):
+        assert forbidden not in serialized
+
+
+def test_report_with_untraceable_number_is_retried_and_not_published(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    get_settings.cache_clear()
+    calls = 0
+
+    def fake_generate_report(self, analysis_input, prompt=None):
+        nonlocal calls
+        calls += 1
+        return DeepSeekResult(
+            content=VALID_REPORT.replace("谨慎。", "预计营业额 987654 元。"),
+            model="deepseek-chat",
+            duration_ms=1,
+            input_length=10,
+            output_length=10,
+        )
+
+    monkeypatch.setattr("app.llm.client.DeepSeekClient.generate_report", fake_generate_report)
+    project_id = seed_project_for_ai(client)
+
+    response = client.post(f"/api/projects/{project_id}/ai-report")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert calls == 2
+    with SessionLocal() as db:
+        assert db.query(AIReportRecord).filter_by(project_id=project_id).count() == 0
+        assert db.query(AICallLogRecord).filter_by(project_id=project_id, status="validation_failed").count() == 2
+
+
+def test_report_retries_once_then_publishes_valid_version(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    get_settings.cache_clear()
+    outputs = [VALID_REPORT.replace("谨慎。", "未知数字 7654321。"), VALID_REPORT]
+
+    def fake_generate_report(self, analysis_input, prompt=None):
+        return DeepSeekResult(
+            content=outputs.pop(0), model="deepseek-chat", duration_ms=1, input_length=10, output_length=10
+        )
+
+    monkeypatch.setattr("app.llm.client.DeepSeekClient.generate_report", fake_generate_report)
+    project_id = seed_project_for_ai(client)
+
+    response = client.post(f"/api/projects/{project_id}/ai-report")
+
+    assert response.json()["success"] is True
+    assert response.json()["validation_status"] == "passed"
+    with SessionLocal() as db:
+        logs = db.query(AICallLogRecord).filter_by(project_id=project_id).order_by(AICallLogRecord.id).all()
+        assert [row.status for row in logs] == ["validation_failed", "success"]
+
+
+def test_final_snapshot_excludes_crawler_and_preserves_unknown(client):
+    project_id = create_project(client)
+    with SessionLocal() as db:
+        db.add(
+            UnifiedCompetitorRecord(
+                project_id=project_id,
+                name="爬虫竞品不得进入正式快照",
+                source="crawler",
+                status="confirmed",
+                hour_price=88,
+                raw_data={},
+            )
+        )
+        db.add(
+            SupplementRecord(
+                project_id=project_id,
+                target_type="candidate_property",
+                target_id="primary",
+                field_name="manual_detail",
+                value={"address": "人工候选物业"},
+                source="user_provided",
+                confidence=1,
+                status="confirmed",
+                raw_data={"_manual_meta": {"unknown_fields": ["monthly_rent"], "field_sources": {"address": "manual"}}},
+            )
+        )
+        db.commit()
+        snapshot = build_final_project_snapshot(db, project_id)
+
+    assert "爬虫竞品不得进入正式快照" not in str(snapshot)
+    assert snapshot["candidate_property"]["address"] == {"value": "人工候选物业", "source": "USER_PROVIDED"}
+    assert snapshot["candidate_property"]["monthly_rent"] == {"value": None, "source": "UNKNOWN"}
+
+
+def test_each_report_generation_creates_a_new_immutable_snapshot_version(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.llm.client.DeepSeekClient.generate_report",
+        lambda self, data, prompt=None: DeepSeekResult(
+            content=VALID_REPORT, model="deepseek-chat", duration_ms=1, input_length=1, output_length=1
+        ),
+    )
+    project_id = seed_project_for_ai(client)
+
+    first = client.post(f"/api/projects/{project_id}/ai-report").json()
+    second = client.post(f"/api/projects/{project_id}/ai-report").json()
+
+    assert first["report_id"] != second["report_id"]
+    with SessionLocal() as db:
+        reports = db.query(AIReportRecord).filter_by(project_id=project_id).order_by(AIReportRecord.id).all()
+        assert len(reports) == 2
+        assert all(row.input_snapshot["final_project_snapshot"]["snapshot_version"] == "final-project-snapshot-v1" for row in reports)
+
+
+def test_final_report_prompt_has_fixed_truthfulness_contract():
+    for heading in (
+        "## 一、项目概况", "## 二、核心结论", "## 三、交通环境", "## 四、竞争环境",
+        "## 五、周边商业配套", "## 六、物业与租金", "## 七、数据缺失与风险", "## 八、最终建议",
+    ):
+        assert heading in FINAL_PROJECT_REPORT_PROMPT
+    assert "final_project_snapshot" in FINAL_PROJECT_REPORT_PROMPT
+    assert "每个数字必须原样存在于快照" in FINAL_PROJECT_REPORT_PROMPT
+    assert "不得推测人口、真实客流、消费能力" in FINAL_PROJECT_REPORT_PROMPT

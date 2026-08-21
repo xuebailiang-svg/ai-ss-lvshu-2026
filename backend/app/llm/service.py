@@ -9,8 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.llm.client import DeepSeekClient, DeepSeekConfigError
-from app.llm.prompts import AI_DATA_REVIEW_PROMPT
+from app.llm.prompts import AI_DATA_REVIEW_PROMPT, FINAL_PROJECT_REPORT_PROMPT
+from app.llm.report_validation import ReportTruthfulnessError, validate_report_content
 from app.llm.schemas import AIAnalysisInput
+from app.llm.snapshot import SnapshotProjectNotFoundError, build_final_project_snapshot
 from app.models import AICallLogRecord, AIReportRecord, SiteScoreRecord
 from app.demo_data.service import simulation_data_summary
 from app.memory.service import relevant_memory_context
@@ -241,16 +243,88 @@ def generate_ai_report(
     except DeepSeekConfigError:
         return {"success": False, "message": "DeepSeek API Key未配置"}
 
-    analysis_input = build_ai_input(db, project_id)
-    input_dict = _json_safe(analysis_input.model_dump(mode="python"))
-    started = time.perf_counter()
-    report_id: int | None = None
     try:
-        result = deepseek.generate_report(input_dict)
+        snapshot = build_final_project_snapshot(db, project_id)
+    except SnapshotProjectNotFoundError:
+        raise ProjectNotFoundError("Project not found") from None
+    readiness = snapshot.get("data_readiness") or {}
+    input_dict = {"final_project_snapshot": _json_safe(snapshot)}
+    if readiness.get("status") == "blocked":
+        content = _data_insufficient_report(snapshot)
         report = AIReportRecord(
             project_id=project_id,
             input_snapshot=input_dict,
-            score_snapshot=input_dict.get("score_result", {}),
+            score_snapshot={},
+            report_content=content,
+            model_name="system-readiness",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(report)
+        db.commit()
+        db.refresh(report)
+        return {
+            "success": True,
+            "report_id": str(report.id),
+            "content": report.report_content,
+            "model": report.model_name,
+            "created_at": report.created_at,
+            "message": "技术前置条件不足，已生成数据不足报告",
+            "snapshot_version": snapshot.get("snapshot_version"),
+            "validation_status": "system_generated",
+        }
+
+    started = time.perf_counter()
+    report_id: int | None = None
+    try:
+        result = deepseek.generate_report(input_dict, prompt=FINAL_PROJECT_REPORT_PROMPT)
+        try:
+            validate_report_content(result.content, snapshot)
+        except ReportTruthfulnessError as first_error:
+            _write_call_log(
+                db,
+                project_id=project_id,
+                report_id=None,
+                model_name=result.model,
+                input_length=result.input_length,
+                output_length=result.output_length,
+                duration_ms=result.duration_ms,
+                status="validation_failed",
+                error_message=str(first_error),
+            )
+            db.commit()
+            retry_input = {
+                **input_dict,
+                "validation_feedback": {
+                    "message": "上一版报告未通过真实性校验，请重新生成并严格遵守固定章节和数字白名单。",
+                    "errors": first_error.errors,
+                },
+            }
+            result = deepseek.generate_report(retry_input, prompt=FINAL_PROJECT_REPORT_PROMPT)
+            try:
+                validate_report_content(result.content, snapshot)
+            except ReportTruthfulnessError as final_error:
+                _write_call_log(
+                    db,
+                    project_id=project_id,
+                    report_id=None,
+                    model_name=result.model,
+                    input_length=result.input_length,
+                    output_length=result.output_length,
+                    duration_ms=result.duration_ms,
+                    status="validation_failed",
+                    error_message=str(final_error),
+                )
+                db.commit()
+                return {
+                    "success": False,
+                    "message": "AI 报告两次未通过真实性校验，未发布。请补充数据后重试。",
+                    "snapshot_version": snapshot.get("snapshot_version"),
+                    "validation_status": "failed",
+                }
+        report = AIReportRecord(
+            project_id=project_id,
+            input_snapshot=input_dict,
+            score_snapshot={},
             report_content=result.content,
             model_name=result.model,
             created_at=datetime.now(timezone.utc),
@@ -276,6 +350,8 @@ def generate_ai_report(
             "content": report.report_content,
             "model": report.model_name,
             "created_at": report.created_at,
+            "snapshot_version": snapshot.get("snapshot_version"),
+            "validation_status": "passed",
         }
     except Exception as exc:
         db.rollback()
@@ -292,6 +368,32 @@ def generate_ai_report(
         )
         db.commit()
         raise
+
+
+def _data_insufficient_report(snapshot: dict[str, Any]) -> str:
+    project = snapshot.get("project") or {}
+    location = project.get("location") or {}
+    address = ((location.get("address") or {}).get("value") if isinstance(location.get("address"), dict) else None) or "地址待确认"
+    radius = ((location.get("radius_meters") or {}).get("value") if isinstance(location.get("radius_meters"), dict) else None)
+    scope = f"{radius} 米" if radius is not None else "范围待确认"
+    groups = (snapshot.get("data_readiness") or {}).get("groups") or {}
+    items = [item for values in groups.values() for item in values if item.get("status") in {"blocked", "missing", "acknowledged_unknown"}]
+    missing_lines = "\n".join(f"- {item.get('label')}：{item.get('summary')}" for item in items) or "- 当前没有更多可核实信息。"
+    return (
+        "# 电竞馆选址分析报告\n\n"
+        "## 一、项目概况\n\n"
+        f"- 项目地址：{address}\n- 分析范围：{scope}\n- 数据来源：用户输入与高德采集事实。\n\n"
+        "## 二、核心结论\n\n"
+        "**数据不足。** 当前技术前置条件尚未完成，系统未调用大模型，也未根据缺失数据进行推测。\n\n"
+        "## 三、交通环境\n\n当前缺少可用于报告的完整高德交通查询结果，无法判断。\n\n"
+        "## 四、竞争环境\n\n当前项目数据不足以确认竞争环境，无法判断。\n\n"
+        "## 五、周边商业配套\n\n当前项目数据不足以确认周边商业配套，无法判断。\n\n"
+        "## 六、物业与租金\n\n只接受用户实际填写的物业与租金事实；当前缺失项不会被推测。\n\n"
+        f"## 七、数据缺失与风险\n\n{missing_lines}\n\n"
+        "## 八、最终建议\n\n"
+        "### 基于已有事实可以确定\n\n- 当前只能确定项目基础信息，不能形成投资推荐。\n\n"
+        "### 签约前仍需现场核实\n\n- 先完成地址定位和高德 POI 采集，再补充候选物业与核心竞品事实。\n"
+    )
 
 
 def _write_call_log(

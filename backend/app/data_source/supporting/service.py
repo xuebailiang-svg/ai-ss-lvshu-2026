@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.data_source.base import DataSourceRequest, ProviderCallStatus
-from app.data_source.crawler.evidence import crawler_suggestion_from_raw
 from app.data_source.registry import DataSourceRegistry, build_default_registry
+from app.manual_input.audit import apply_manual_changes, manual_meta_public
 from app.models import EntertainmentRecord, FoodBusinessRecord, SiteProjectRecord
 from app.projects.service import get_project
 
@@ -63,7 +63,7 @@ def _supporting_to_public(row: Any, record_type: str) -> dict[str, Any]:
             value is not None and (not isinstance(value, str) or value.strip())
             for value in _manual_detail(row).values()
         ),
-        "crawler_suggestion": crawler_suggestion_from_raw(row.raw_data, row.status),
+        "manual_meta": manual_meta_public(row.raw_data),
     }
 
 
@@ -122,7 +122,17 @@ def review_project_supporting(
     if not get_project(db, project_id):
         raise SupportingProjectNotFoundError("Project not found")
     row, record_type = _resolve_supporting_item(db, project_id, public_id)
+    old_status = row.status
     row.status = status
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="supporting",
+        target_id=public_id,
+        raw_data=row.raw_data,
+        old_values={"status": old_status},
+        changes={"status": status},
+    )
     db.commit()
     db.refresh(row)
     return _supporting_to_public(row, record_type)
@@ -147,6 +157,8 @@ def update_project_supporting_detail(
     if row.status != "confirmed":
         raise SupportingItemNotConfirmedError("Only confirmed supporting items can be updated")
 
+    unknown_value = changes.pop("unknown_fields", None)
+    unknown_fields = list(unknown_value or []) if unknown_value is not None else None
     category = _food_category(row) if record_type == "food" else "entertainment"
     common_fields = {"business_hours", "opening_date", "remark", "night_operation"}
     category_fields = {
@@ -167,11 +179,24 @@ def update_project_supporting_detail(
 
     raw = dict(row.raw_data or {})
     manual_detail = _manual_detail(row)
+    old_values: dict[str, Any] = {}
+    audit_changes: dict[str, Any] = {}
     for field_name in allowed_fields:
         if field_name in changes:
+            old_values[field_name] = manual_detail.get(field_name)
             manual_detail[field_name] = changes[field_name]
+            audit_changes[field_name] = changes[field_name]
     raw["manual_detail"] = manual_detail
-    row.raw_data = raw
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="supporting",
+        target_id=public_id,
+        raw_data=raw,
+        old_values=old_values,
+        changes=audit_changes,
+        unknown_fields=unknown_fields,
+    )
     db.commit()
     db.refresh(row)
     return {**_supporting_to_public(row, record_type), "manual_detail": _manual_detail(row)}

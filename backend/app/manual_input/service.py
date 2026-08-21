@@ -16,6 +16,7 @@ from app.models import (
     UnifiedCompetitorRecord,
 )
 from app.projects.service import get_project, latest_for_project, row_to_dict
+from app.manual_input.audit import apply_manual_changes
 
 
 class ProjectNotFoundError(RuntimeError):
@@ -122,6 +123,9 @@ def save_manual_input(
     elif data_type == "supplement":
         updated = _save_supplement(db, project_id, target_id, payload)
         message = "通用备注补充成功"
+    elif data_type == "property":
+        updated = _save_property(db, project_id, payload)
+        message = "候选物业信息保存成功"
     else:
         raise ManualInputValidationError(f"unsupported manual input type: {data_type}")
 
@@ -138,7 +142,8 @@ def _save_competitor(db: Session, project_id: str, target_id: str | None, payloa
                 UnifiedCompetitorRecord.id == int(target_id),
             )
         )
-    if competitor is None:
+    created = competitor is None
+    if created:
         competitor = UnifiedCompetitorRecord(
             project_id=project_id,
             name=str(payload.get("name") or "人工补充竞品"),
@@ -150,25 +155,35 @@ def _save_competitor(db: Session, project_id: str, target_id: str | None, payloa
         db.add(competitor)
         db.flush()
 
+    unknown_value = payload.pop("unknown_fields", None)
+    unknown_fields = list(unknown_value or []) if unknown_value is not None else None
     raw_data = dict(competitor.raw_data or {})
-    raw_data.update({"manual_input": payload})
+    existing_manual_detail = raw_data.get("manual_detail")
+    manual_detail = dict(existing_manual_detail) if isinstance(existing_manual_detail, dict) else {}
     table_fields = set(UnifiedCompetitorRecord.__table__.columns.keys())
+    old_values: dict[str, Any] = {}
+    audit_changes: dict[str, Any] = {}
     for field, value in payload.items():
-        old_value = getattr(competitor, field, None) if field in table_fields else raw_data.get(field)
+        old_value = getattr(competitor, field, None) if field in table_fields else manual_detail.get(field)
+        old_values[field] = old_value
         if field in table_fields:
             setattr(competitor, field, value)
         else:
-            raw_data[field] = value
-        _record_history(
-            db,
-            project_id=project_id,
-            target_type="competitor",
-            target_id=str(competitor.id),
-            field_name=field,
-            old_value=old_value,
-            new_value=value,
-        )
-    competitor.source = "manual"
+            manual_detail[field] = value
+        audit_changes[field] = value
+    raw_data["manual_detail"] = manual_detail
+    raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="competitor",
+        target_id=str(competitor.id),
+        raw_data=raw_data,
+        old_values=old_values,
+        changes=audit_changes,
+        unknown_fields=unknown_fields,
+    )
+    if created:
+        competitor.source = "manual"
     competitor.confidence = max(float(competitor.confidence or 0), 0.8)
     competitor.status = "confirmed"
     competitor.timestamp = datetime.now(timezone.utc)
@@ -254,5 +269,48 @@ def _save_supplement(db: Session, project_id: str, target_id: str | None, payloa
         field_name=row.field_name,
         old_value=None,
         new_value=row.value,
+    )
+    return row_to_dict(row)
+
+
+def _save_property(db: Session, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    row = db.scalar(
+        select(SupplementRecord).where(
+            SupplementRecord.project_id == project_id,
+            SupplementRecord.target_type == "candidate_property",
+            SupplementRecord.field_name == "manual_detail",
+        ).order_by(SupplementRecord.id.desc())
+    )
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = SupplementRecord(
+            project_id=project_id,
+            target_type="candidate_property",
+            target_id="primary",
+            field_name="manual_detail",
+            value={},
+            source="manual",
+            confidence=0.8,
+            status="confirmed",
+            raw_data={},
+            timestamp=now,
+            created_time=now,
+        )
+        db.add(row)
+        db.flush()
+    old_value = dict(row.value) if isinstance(row.value, dict) else {}
+    unknown_value = payload.pop("unknown_fields", None)
+    unknown_fields = list(unknown_value or []) if unknown_value is not None else None
+    row.value = {**old_value, **payload}
+    row.timestamp = now
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="candidate_property",
+        target_id="primary",
+        raw_data=row.raw_data,
+        old_values=old_value,
+        changes=payload,
+        unknown_fields=unknown_fields,
     )
     return row_to_dict(row)

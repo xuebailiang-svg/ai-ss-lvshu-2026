@@ -258,6 +258,38 @@ sudo ./uninstall.sh --purge-all
 - 已经由 Alembic 管理的数据库。
 
 表、字段和索引已经存在时会安全跳过，不需要手工执行 `alembic stamp`，也不要清空数据库。
+
+安装脚本会在 `alembic upgrade head` 前执行一次严格的历史 revision 兼容检查。目前只允许
+把已知旧标识 `0014_backfill_amap_business_hours` 转换为规范标识 `0014_amap_hours`，用于兼容
+曾经生成过该旧版本号的环境。兼容检查不会创建业务表、不会自动 `stamp`，也不会猜测或修改
+任何未知版本。服务器不应再手工使用 `sed` 修改 migration 文件。
+
+后端锁定依赖支持 Python 3.10–3.13，不支持 Python 3.14。Ubuntu 22.04 默认 Python 3.10
+符合要求。
+
+> 产品范围提示：收敛版 MVP 不再把独立爬虫作为普通用户能力。现有爬虫部署说明仅供旧环境
+> 维护，在后续清理阶段前暂时保留；新部署无需安装爬虫即可完成高德、人工补充和 AI 报告主流程。
+
+## 收敛版 MVP 部署后验收
+
+主系统完成安装或升级后，先执行不改变业务数据的自动检查：
+
+```bash
+cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
+bash scripts/acceptance-mvp.sh
+```
+
+脚本检查后端、Nginx、前端路由、配置脱敏、数据源状态和 Alembic 单一 head。完成真实项目后再执行：
+
+```bash
+bash scripts/acceptance-mvp.sh --project-id proj_xxx
+```
+
+第二条命令会额外核对项目统计与统一数据集 POI 数量、POI 标识唯一性，以及数据准备度固定四类契约。
+它不会重新采集数据或生成 AI 报告。
+
+自动检查通过不等于真实业务验收完成。还必须按 [ACCEPTANCE_AMAP_MANUAL_AI_MVP.md](ACCEPTANCE_AMAP_MANUAL_AI_MVP.md)
+在浏览器完成地址确认、高德真实采集、人工核实、有限 AI 提问、报告数字追溯及 HTML/PDF 视觉检查。
 # 主系统与独立爬虫
 
 主系统的 `install.sh` 只安装 FastAPI、前端、PostgreSQL 配置和 Nginx，不再安装

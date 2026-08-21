@@ -21,8 +21,11 @@ export const getProjectDataset = (projectId: string) => api.get(`/projects/${pro
 export const getProjectDataQuality = (projectId: string) => api.get(`/projects/${projectId}/data-quality`).then(response => response.data);
 export const getProjectMissingData = (projectId: string) => api.get(`/projects/${projectId}/missing-data`).then(response => response.data);
 export const collectProjectAmap = (projectId: string) => api.post(`/projects/${projectId}/collect/amap`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
-export const geocodeProject = (projectId: string, force = false) => api.post(`/projects/${projectId}/geocode`, undefined, {
-  params: force ? {force: true} : undefined,
+export const geocodeProject = (projectId: string, force = false, candidateIndex?: number) => api.post(`/projects/${projectId}/geocode`, undefined, {
+  params: {
+    ...(force ? {force: true} : {}),
+    ...(candidateIndex === undefined ? {} : {candidate_index: candidateIndex}),
+  },
   timeout: LONG_REQUEST_TIMEOUT_MS,
 }).then(response => response.data);
 export const collectProjectCompetitors = (projectId: string) => api.post(`/projects/${projectId}/collect/competitors`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
@@ -102,6 +105,44 @@ export const getProjectCityInsight = (projectId: string) => api
   .get<CityInsight>(`/projects/${projectId}/city-insight`)
   .then(response => response.data);
 export const generateProjectAiReview = (projectId: string) => api.post(`/projects/${projectId}/ai-review`, undefined, {timeout: LONG_REQUEST_TIMEOUT_MS}).then(response => response.data);
+
+export type AIQuestion = {
+  question_id: string;
+  field_key: string;
+  target_type: 'competitor' | 'property';
+  target_id: string;
+  title: string;
+  help_text?: string | null;
+  answer_type: 'text' | 'number' | 'money' | 'integer' | 'percentage' | 'boolean' | 'select';
+  unit?: string | null;
+  options: Array<{label: string; value: string}>;
+  round: number;
+};
+
+export type AIQuestionsResult = {
+  success: boolean;
+  status: 'questions_ready' | 'round_complete' | 'limit_reached' | 'complete' | 'skipped';
+  round: number;
+  questions: AIQuestion[];
+  asked_count: number;
+  remaining_candidate_count: number;
+  message: string;
+};
+
+export type AIQuestionAnswerPayload = {
+  question_id: string;
+  value?: string | number | boolean | null;
+  unknown?: boolean;
+  skip?: boolean;
+};
+
+export const generateProjectAiQuestions = (projectId: string, continueRound = false) => api
+  .post<AIQuestionsResult>(`/projects/${projectId}/ai-questions`, {continue_round: continueRound}, {timeout: LONG_REQUEST_TIMEOUT_MS})
+  .then(response => response.data);
+
+export const saveProjectAiQuestionAnswers = (projectId: string, answers: AIQuestionAnswerPayload[]) => api
+  .post(`/projects/${projectId}/ai-questions/answers`, {answers})
+  .then(response => response.data);
 export const generateDemoData = (
   projectId: string,
   include: Array<'competitor' | 'supporting' | 'rent'> = ['competitor', 'supporting', 'rent'],
@@ -223,7 +264,7 @@ export type ProjectSupportingItem = {
   source: string;
   status: ProjectSupportingStatus;
   detail_completed: boolean;
-  crawler_suggestion?: CrawlerSuggestion | null;
+  manual_meta?: ManualAuditMeta;
 };
 
 export type ProjectSupportingManualDetail = {
@@ -235,6 +276,7 @@ export type ProjectSupportingManualDetail = {
   night_operation?: boolean | null;
   is_24_hours?: boolean | null;
   night_flow_remark?: string | null;
+  unknown_fields?: string[];
 };
 
 export type ProjectSupportingDetail = ProjectSupportingItem & {
@@ -302,7 +344,11 @@ export type ProjectCompetitor = {
   annual_sales?: number | null;
   recharge_info?: string | null;
   remark?: string | null;
-  crawler_suggestion?: CrawlerSuggestion | null;
+  occupancy_observed_at?: string | null;
+  occupancy_period?: string | null;
+  survey_method?: string | null;
+  sales_source?: string | null;
+  manual_meta?: ManualAuditMeta;
 };
 
 export type ProjectCompetitorDetailUpdate = Pick<
@@ -321,7 +367,18 @@ export type ProjectCompetitorDetailUpdate = Pick<
   | 'annual_sales'
   | 'recharge_info'
   | 'remark'
->;
+  | 'occupancy_observed_at'
+  | 'occupancy_period'
+  | 'survey_method'
+  | 'sales_source'
+> & {unknown_fields?: string[]};
+
+export type ManualAuditMeta = {
+  field_sources?: Record<string, 'manual' | 'manual_unknown'>;
+  unknown_fields?: string[];
+  verified_at?: string | null;
+  history_count?: number;
+};
 
 export const listProjectCompetitors = (projectId: string) => api
   .get<{items: ProjectCompetitor[]; total: number}>(`/projects/${projectId}/competitors`)
@@ -367,18 +424,31 @@ export type ProjectRentItem = {
   timestamp?: string | null;
   missing_fields: string[];
   detail_completed: boolean;
-  crawler_suggestion?: CrawlerSuggestion | null;
+  manual_meta?: ManualAuditMeta;
 };
 
 export type ProjectRentStatus = 'pending_review' | 'confirmed' | 'rejected';
 
 export type ProjectRentManualDetail = {
+  address?: string | null;
+  area_sqm?: number | null;
+  monthly_rent?: number | null;
+  property_fee?: number | null;
+  transfer_fee?: number | null;
   property_type?: string | null;
   floor?: string | null;
   location_remark?: string | null;
   source_url?: string | null;
   publish_date?: string | null;
   rent_remark?: string | null;
+  power_capacity_kw?: number | null;
+  power_sufficient?: boolean | null;
+  use_allowed?: boolean | null;
+  fire_confirmed?: boolean | null;
+  network_carriers?: string | null;
+  dual_line_supported?: boolean | null;
+  night_entrance?: boolean | null;
+  unknown_fields?: string[];
 };
 
 export type ProjectRentDetail = ProjectRentItem & {

@@ -7,6 +7,26 @@ from app.llm.schemas import DeepSeekResult
 from app.models import ChatSessionRecord
 
 
+VALID_REPORT = """# 电竞馆选址分析报告
+## 一、项目概况
+当前项目快照。
+## 二、核心结论
+数据不足。
+## 三、交通环境
+无法判断。
+## 四、竞争环境
+无法判断。
+## 五、周边商业配套
+无法判断。
+## 六、物业与租金
+无法判断。
+## 七、数据缺失与风险
+保留未知。
+## 八、最终建议
+继续核实。
+"""
+
+
 def create_project(client):
     response = client.post(
         "/api/projects",
@@ -104,7 +124,7 @@ def test_chat_history_saved(client, monkeypatch):
 def test_project_context_loads_dataset_score_report_and_history(client, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.llm.client.DeepSeekClient.generate_report", lambda self, data, prompt=None: DeepSeekResult(content="# 电竞馆选址分析报告", model="deepseek-chat", duration_ms=1, input_length=1, output_length=1))
+    monkeypatch.setattr("app.llm.client.DeepSeekClient.generate_report", lambda self, data, prompt=None: DeepSeekResult(content=VALID_REPORT, model="deepseek-chat", duration_ms=1, input_length=1, output_length=1))
     project_id = seed_chat_project(client)
     client.post(f"/api/projects/{project_id}/ai-report")
     session_id = client.post(f"/api/projects/{project_id}/chat/session").json()["session_id"]

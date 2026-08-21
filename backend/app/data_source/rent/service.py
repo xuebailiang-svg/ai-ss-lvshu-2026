@@ -7,12 +7,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.data_source.crawler.evidence import crawler_suggestion_from_raw
-
 from app.data_source.base import DataSourceRequest
 from app.data_source.registry import DataSourceRegistry, build_default_registry
 from app.models import RentDataRecord
 from app.projects.service import get_project
+from app.manual_input.audit import apply_manual_changes, manual_meta_public
 
 
 class RentProjectNotFoundError(RuntimeError):
@@ -223,7 +222,7 @@ def _rent_item(row: RentDataRecord) -> dict[str, Any]:
         "timestamp": row.timestamp,
         "missing_fields": missing_fields,
         "detail_completed": bool(manual_detail.get("property_type") and manual_detail.get("source_url")),
-        "crawler_suggestion": crawler_suggestion_from_raw(raw_data, row.status),
+        "manual_meta": manual_meta_public(raw_data),
     }
 
 
@@ -265,7 +264,17 @@ def _get_rent_record(db: Session, project_id: str, rent_id: int) -> RentDataReco
 
 def review_project_rent(db: Session, project_id: str, rent_id: int, status: str) -> dict[str, Any]:
     row = _get_rent_record(db, project_id, rent_id)
+    old_status = row.status
     row.status = status
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="rent",
+        target_id=row.id,
+        raw_data=row.raw_data,
+        old_values={"status": old_status},
+        changes={"status": status},
+    )
     db.commit()
     db.refresh(row)
     return _rent_item(row)
@@ -285,12 +294,37 @@ def update_project_rent_detail(
     updates: dict[str, Any],
 ) -> dict[str, Any]:
     row = _get_rent_record(db, project_id, rent_id)
+    unknown_value = updates.pop("unknown_fields", None)
+    unknown_fields = list(unknown_value or []) if unknown_value is not None else None
     raw_data = dict(row.raw_data or {})
     manual_detail = dict(raw_data.get("manual_detail") or {})
+    old_values: dict[str, Any] = {}
+    audit_changes: dict[str, Any] = {}
+    column_mapping = {"address": "location_type", "area_sqm": "area_sqm", "monthly_rent": "monthly_rent"}
+    for field_name, column_name in column_mapping.items():
+        if field_name in updates:
+            old_values[field_name] = getattr(row, column_name)
+            setattr(row, column_name, updates.pop(field_name))
+            audit_changes[field_name] = getattr(row, column_name)
     for field_name, value in updates.items():
+        old_values[field_name] = manual_detail.get(field_name, raw_data.get(field_name))
         manual_detail[field_name] = value.strip() if isinstance(value, str) and value.strip() else value
+        audit_changes[field_name] = manual_detail[field_name]
+        if field_name in {"property_fee", "transfer_fee"}:
+            raw_data[field_name] = value
     raw_data["manual_detail"] = manual_detail
-    row.raw_data = raw_data
+    if row.area_sqm and row.monthly_rent:
+        row.rent_per_sqm = row.monthly_rent / row.area_sqm
+    row.raw_data = apply_manual_changes(
+        db,
+        project_id=project_id,
+        target_type="rent",
+        target_id=row.id,
+        raw_data=raw_data,
+        old_values=old_values,
+        changes=audit_changes,
+        unknown_fields=unknown_fields,
+    )
     db.commit()
     db.refresh(row)
     return {**_rent_item(row), "manual_detail": manual_detail}

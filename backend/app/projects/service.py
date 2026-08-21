@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.data_model import normalize_data
+from app.data_quality.service import build_readiness
 from app.demo_data.service import simulation_data_summary
 from app.models import (
     CrawlTaskRecord,
@@ -548,118 +549,41 @@ def crawler_data_quality(db: Session, project_id: str) -> dict[str, Any]:
 
 
 def data_quality(db: Session, project_id: str) -> dict[str, Any]:
-    missing: list[str] = []
-    warnings: list[str] = []
-    competitors = db.scalars(
-        select(UnifiedCompetitorRecord).where(
-            UnifiedCompetitorRecord.project_id == project_id,
-            UnifiedCompetitorRecord.status.in_(EFFECTIVE_COMPETITOR_STATUSES),
-        )
-    ).all()
-    detail_quality, detail_penalty = competitor_detail_quality(list(competitors))
-    supporting_food_rows = list(
-        db.scalars(select(FoodBusinessRecord).where(FoodBusinessRecord.project_id == project_id)).all()
+    project = get_project(db, project_id)
+    if not project:
+        return {
+            "project_id": project_id,
+            "quality_score": 0,
+            "missing": ["项目不存在"],
+            "warnings": [],
+            "readiness": {"status": "blocked", "can_generate_report": False},
+        }
+    readiness = build_readiness(db, project)
+    competitors = list(
+        db.scalars(
+            select(UnifiedCompetitorRecord).where(
+                UnifiedCompetitorRecord.project_id == project_id,
+                UnifiedCompetitorRecord.status.in_(EFFECTIVE_COMPETITOR_STATUSES),
+            )
+        ).all()
     )
-    supporting_entertainment_rows = list(
+    supporting_food = list(db.scalars(select(FoodBusinessRecord).where(FoodBusinessRecord.project_id == project_id)).all())
+    supporting_entertainment = list(
         db.scalars(select(EntertainmentRecord).where(EntertainmentRecord.project_id == project_id)).all()
     )
-    supporting_quality, supporting_penalty = supporting_detail_quality(
-        supporting_food_rows,
-        supporting_entertainment_rows,
-    )
-    rent_rows = list(
-        db.scalars(select(RentDataRecord).where(RentDataRecord.project_id == project_id)).all()
-    )
-    rent_quality, rent_penalty = rent_data_quality(rent_rows)
-    crawler_quality = crawler_data_quality(db, project_id)
-    project = get_project(db, project_id)
-    regional_rows: list[RegionalStatisticRecord] = []
-    if project:
-        scope_names = [name for name in (project.city, project.district, "陕西省", "全国") if name]
-        regional_rows = list(
-            db.scalars(
-                select(RegionalStatisticRecord).where(
-                    RegionalStatisticRecord.scope_name.in_(scope_names),
-                )
-            ).all()
-        )
-    confirmed_regional = [row for row in regional_rows if row.status == "confirmed"]
-    pending_regional = [row for row in regional_rows if row.status == "pending_review"]
-    regional_metric_codes = {row.metric_code for row in confirmed_regional}
-    regional_context_quality = {
-        "confirmed_metric_count": len(confirmed_regional),
-        "pending_review_count": len(pending_regional),
-        "latest_period": max((row.stat_period for row in confirmed_regional), default=None),
-        "missing_metrics": [
-            {"metric_code": code, "label": label}
-            for code, label in {
-                "resident_population": "常住人口",
-                "gdp": "地区生产总值",
-                "retail_sales_total": "社会消费品零售总额",
-                "disposable_income_per_capita": "居民人均可支配收入",
-            }.items()
-            if code not in regional_metric_codes
-        ],
-        "scope_warning": "政府城市和区县统计仅作为宏观背景，不代表项目分析半径内的真实人口或客流。",
-    }
-    simulation_summary = simulation_data_summary(db, project_id)
-    pois = count_rows(db, UnifiedPOIRecord, project_id)
-    food = count_rows(db, FoodBusinessRecord, project_id) or count_pois_by_category(db, project_id, "food")
-    entertainment = count_rows(db, EntertainmentRecord, project_id) or count_pois_by_category(db, project_id, "entertainment")
-
-    if not competitors:
-        missing.append("竞品数据")
-    else:
-        if not any(row.hour_price is not None or row.member_price is not None for row in competitors):
-            missing.append("竞品价格")
-        if not any(row.occupancy_rate is not None for row in competitors):
-            missing.append("竞品上座率")
-        if not any(row.machine_count is not None or row.cpu or row.gpu or row.monitor for row in competitors):
-            missing.append("竞品机器配置")
-        if not any(row.monthly_sales is not None or row.annual_sales is not None for row in competitors):
-            missing.append("竞品营业额")
-            warnings.append("当前竞品数据只能用于基础距离分析")
-    if detail_quality["incomplete_competitors"]:
-        warnings.append("已确认竞品仍缺少经营信息，建议补充后再生成报告")
-    if supporting_quality["incomplete"]:
-        warnings.append("已确认周边配套仍缺少营业详情，建议继续人工核实")
-    if rent_quality["total_confirmed"] == 0:
-        missing.append("真实租金")
-    elif any(item.get("core_missing_fields") for item in rent_quality["incomplete_items"]):
-        missing.append("租金核心字段")
-        warnings.append("已确认租金缺少地址、面积或月租金，成本数据依据仍不完整")
-    if any(item.get("missing_fields") for item in rent_quality["incomplete_items"]):
-        warnings.append("已确认租金仍有建议补充信息，请核实物业类型、来源、发布日期和楼层")
-    warnings.extend(crawler_quality.get("warnings", []))
-    if simulation_summary.get("has_simulation_data"):
-        warnings.append("当前包含演示模拟数据，正式业务测试前需要替换为人工核实数据")
-    if pois == 0:
-        missing.append("周边 POI")
-    if food == 0:
-        missing.append("餐饮和夜间消费数据")
-    if entertainment == 0:
-        missing.append("娱乐配套数据")
-
-    rent_missing_marker = 1 if "租金核心字段" in missing else 0
-    quality_score = max(
-        0,
-        round(
-            100
-            - (len(missing) - rent_missing_marker) * 12
-            - detail_penalty
-            - supporting_penalty
-            - rent_penalty
-        ),
-    )
+    rents = list(db.scalars(select(RentDataRecord).where(RentDataRecord.project_id == project_id)).all())
+    competitor_details, _ = competitor_detail_quality(competitors)
+    supporting_details, _ = supporting_detail_quality(supporting_food, supporting_entertainment)
+    rent_details, _ = rent_data_quality(rents)
     return {
         "project_id": project_id,
-        "quality_score": quality_score,
-        "missing": missing,
-        "warnings": warnings,
-        "competitor_detail_quality": detail_quality,
-        "supporting_detail_quality": supporting_quality,
-        "rent_quality": rent_quality,
-        "crawler_quality": crawler_quality,
-        "regional_context_quality": regional_context_quality,
-        "simulation_data_summary": simulation_summary,
+        # 兼容旧前端；该值现在等于透明准备度，不再是复杂扣分或推荐概率。
+        "quality_score": readiness["completion_percent"],
+        "missing": readiness["missing"],
+        "warnings": readiness["warnings"],
+        "readiness": readiness,
+        # 业务明细保留供人工补充定位使用；不参与准备度的隐式扣分。
+        "competitor_detail_quality": competitor_details,
+        "supporting_detail_quality": supporting_details,
+        "rent_quality": rent_details,
     }

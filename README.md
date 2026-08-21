@@ -33,6 +33,24 @@ sudo ./uninstall.sh
 
 详细说明见 [docs/INSTALL.md](docs/INSTALL.md)。
 
+### 收敛版 MVP 发布验收
+
+部署成功后先执行只读验收脚本：
+
+```bash
+cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
+bash scripts/acceptance-mvp.sh
+```
+
+在页面完成一个真实项目后，把项目 ID 传给脚本核对页面统计、统一数据集和数据准备度：
+
+```bash
+bash scripts/acceptance-mvp.sh --project-id proj_xxx
+```
+
+脚本不会创建项目、调用高德采集、调用 DeepSeek 或打印任何 Key。完整六步人工验收、报告数字追溯和发布签字模板见
+[docs/ACCEPTANCE_AMAP_MANUAL_AI_MVP.md](docs/ACCEPTANCE_AMAP_MANUAL_AI_MVP.md)。
+
 ### 独立爬虫部署
 
 先完成主系统部署，再按需要安装爬虫：
@@ -696,7 +714,7 @@ bash scripts/bootstrap-ubuntu-direct.sh
 
 脚本检查或安装：
 
-- Python 3.10+、`venv`、`pip`；
+- Python 3.10–3.13、`venv`、`pip`；
 - Node.js 20+ 和 npm；
 - Nginx；
 - PostgreSQL；
@@ -719,7 +737,7 @@ systemctl is-active nginx
 必须满足：
 
 ```text
-Python >= 3.10
+Python >= 3.10 且 < 3.14
 Node.js >= 20
 PostgreSQL = active
 Nginx = active

@@ -265,7 +265,45 @@ curl -X POST http://127.0.0.1:8000/api/agent/site-selection/run \
 
 注意：生产环境不建议开启 `ENABLE_DEBUG_API`。
 
-## 8. 部署后验收
+## 8. 收敛版 MVP 部署后验收
+
+部署或升级后执行：
+
+```bash
+cd /opt/esports-site-selection/app/ai-ss-lvshu-2026-main
+bash scripts/health-check.sh
+bash scripts/acceptance-mvp.sh
+```
+
+在浏览器创建并完成一个真实选址项目后执行：
+
+```bash
+bash scripts/acceptance-mvp.sh --project-id proj_xxx
+```
+
+验收顺序固定为：
+
+1. 输入地址和范围，并确认地址候选。
+2. 获取高德 POI，核对分类、去重、范围外排除和截断提示。
+3. 人工确认竞品、配套和候选物业，刷新验证数据仍存在。
+4. 检查技术前置、关键未知、建议补充和可选信息。
+5. 回答有限的重要问题，无法获取的信息明确标记为未知。
+6. 生成报告，逐项追溯数字，导出 HTML 并打印 PDF。
+
+自动脚本不调用高德采集和 DeepSeek，避免重复请求、费用和生产数据变更。完整记录模板见
+`docs/ACCEPTANCE_AMAP_MANUAL_AI_MVP.md`。
+
+发布阻断条件：
+
+- 页面、日志或报告泄露完整 Key、Token、密码或 `DATABASE_URL`；
+- 人工核实字段被高德重采集覆盖；
+- 报告包含最终快照之外的新数字；
+- 六步中任一步无法完成且没有明确错误提示；
+- Alembic 不在唯一 head。
+
+## 9. 旧版 Agent 环境维护（不属于当前 MVP 验收）
+
+以下内容仅供尚未清理的旧 Agent 模块排障。收敛版 MVP 发布验收不要运行 Agent 作为成功条件。
 
 1. 检查服务：
 

@@ -325,7 +325,7 @@ def test_government_macro_context_does_not_change_project_quality_score(client):
     after = client.get(f"/api/projects/{project_id}/data-quality").json()
 
     assert before["quality_score"] == after["quality_score"]
-    assert after["regional_context_quality"]["confirmed_metric_count"] == 2
+    assert "regional_context_quality" not in after
 
 
 def test_government_provider_mock_adapter_returns_unified_data(monkeypatch):

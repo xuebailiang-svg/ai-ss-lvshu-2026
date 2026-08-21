@@ -39,7 +39,7 @@ class SupportingListItem(BaseModel):
     source: str
     status: SupportingStatus
     detail_completed: bool = False
-    crawler_suggestion: dict | None = None
+    manual_meta: dict = Field(default_factory=dict)
 
 
 class SupportingCategoryStats(BaseModel):
@@ -86,3 +86,4 @@ class SupportingDetailUpdate(BaseModel):
     night_operation: bool | None = None
     is_24_hours: bool | None = None
     night_flow_remark: str | None = None
+    unknown_fields: list[str] = Field(default_factory=list)
